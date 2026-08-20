@@ -1,4 +1,4 @@
-import { renderMarkdown } from "./markdown.js?v=11";
+import { renderMarkdown } from "./markdown.js?v=12";
 
 const TOKEN_KEY = "codex-remote.token";
 const PROJECT_KEY = "codex-remote.project";
@@ -52,6 +52,9 @@ const elements = {
   composer: byId("composer"),
   slashMenu: slashMenuElement(),
   messageInput: byId("message-input"),
+  rewindShortcut: byId("rewind-shortcut"),
+  usageShortcut: byId("usage-shortcut"),
+  fullAccessShortcut: byId("full-access-shortcut"),
   commandMenuButton: byId("command-menu-button"),
   taskButton: byId("task-button"),
 };
@@ -81,6 +84,7 @@ const state = {
   running: false,
   commandBusy: false,
   controlsTask: false,
+  fullAccessEnabled: false,
   rewindText: null,
   requestNumber: 0,
   pendingRequests: new Map(),
@@ -224,6 +228,18 @@ elements.commandMenuButton.addEventListener("click", () => {
   elements.messageInput.focus();
 });
 
+elements.rewindShortcut.addEventListener("click", () => {
+  void slashCommands.runShortcut("rewind");
+});
+
+elements.usageShortcut.addEventListener("click", () => {
+  void slashCommands.runShortcut("usage", "rate-limits");
+});
+
+elements.fullAccessShortcut.addEventListener("click", () => {
+  void toggleFullAccess();
+});
+
 elements.messageInput.addEventListener("input", () => {
   resizeComposer();
   slashCommands.handleInput();
@@ -234,7 +250,7 @@ elements.messageInput.addEventListener("keydown", (event) => {
   if (slashCommands.handleKeydown(event)) return;
   if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
-    elements.composer.requestSubmit();
+    if (!state.running) elements.composer.requestSubmit();
   }
 });
 
@@ -528,6 +544,7 @@ function applyOpenedSession(opened) {
   state.sessionTitle = opened.session.title || "新会话";
   state.running = Boolean(opened.activeTaskId);
   state.controlsTask = Boolean(opened.controlsActiveTask);
+  state.fullAccessEnabled = opened.fullAccessEnabled === true;
   stateSet(SESSION_KEY, state.sessionId);
   upsertSession(opened.session);
   renderSessionList();
@@ -803,6 +820,7 @@ function resetCurrentSession() {
   state.sessionTitle = "";
   state.running = false;
   state.controlsTask = false;
+  state.fullAccessEnabled = false;
   removeStored(SESSION_KEY);
   updateConversationTitle();
   renderSessionList();
@@ -961,10 +979,13 @@ async function sendMessage() {
     state.controlsTask = false;
     setCurrentSessionState("idle");
     hideThinking();
-    const restorable = !elements.messageInput.value.trim();
-    showNotice(restorable ? `${errorMessage(error)}消息已经放回输入框。` : errorMessage(error));
+    const draft = elements.messageInput.value;
+    const restorable = !draft.trim();
+    showNotice(restorable
+      ? `${errorMessage(error)}消息已经放回输入框。`
+      : `${errorMessage(error)}未发送的消息和当前草稿都已保留在输入框。`);
     updateControls();
-    if (restorable) restoreComposerText(text);
+    restoreComposerText(restorable ? text : `${text}\n\n${draft}`);
   }
 }
 
@@ -977,6 +998,27 @@ async function stopTask() {
   } catch (error) {
     showNotice(errorMessage(error));
   } finally {
+    updateControls();
+  }
+}
+
+async function toggleFullAccess() {
+  if (
+    !state.sessionId || !state.authenticated || state.running || state.commandBusy
+  ) return;
+  if (!state.fullAccessEnabled && !window.confirm(
+    "Full access 会让 Codex 不受项目沙箱限制地操作 VPS。确定只为当前会话打开吗？",
+  )) return;
+
+  state.commandBusy = true;
+  updateControls();
+  try {
+    const result = await request("permissions.full-access.toggle");
+    addCommandResult(result);
+  } catch (error) {
+    showNotice(errorMessage(error));
+  } finally {
+    state.commandBusy = false;
     updateControls();
   }
 }
@@ -1261,7 +1303,9 @@ function addCommandResult(result) {
       Array.isArray(result.tasks) ? result.tasks : [],
       result.hasOlder === true,
     );
-    if (rewindText !== null) restoreComposerText(rewindText);
+    if (rewindText !== null && !elements.messageInput.value.trim()) {
+      restoreComposerText(rewindText);
+    }
   } else if (result.kind === "task") {
     state.rewindText = null;
   }
@@ -1291,6 +1335,10 @@ function addCommandResult(result) {
     if (session) session.title = result.sessionName;
     renderSessionList();
     updateConversationTitle();
+  }
+  if (typeof result.fullAccessEnabled === "boolean") {
+    state.fullAccessEnabled = result.fullAccessEnabled;
+    updateControls();
   }
   if (result.kind === "task" && !state.running) {
     state.running = true;
@@ -1377,15 +1425,22 @@ function updateControls() {
       checkbox.disabled = navigationBusy || busy || itemIsActive;
     }
   }
-  elements.messageInput.disabled = !connected || !hasSession || busy;
+  elements.messageInput.disabled = !connected || !hasSession;
   elements.messageInput.placeholder = !hasSession
     ? "先选择或新建会话"
     : state.running
-    ? "请等待当前任务结束"
+    ? "可以先写，当前回复结束后再发送"
     : state.commandBusy
-    ? "正在执行命令"
+    ? "快捷操作执行中，可以继续写"
     : "在浏览器里写好，再发送给 Codex";
   elements.commandMenuButton.disabled = !connected || !hasSession || busy || hasText;
+  elements.rewindShortcut.disabled = !connected || !hasSession || busy;
+  elements.usageShortcut.disabled = !connected || !hasSession || state.commandBusy;
+  elements.fullAccessShortcut.disabled = !connected || !hasSession || busy;
+  elements.fullAccessShortcut.setAttribute("aria-pressed", String(state.fullAccessEnabled));
+  elements.fullAccessShortcut.title = state.fullAccessEnabled
+    ? "关闭 Full access，恢复当前会话的默认权限"
+    : "仅为当前会话打开 Full access";
   elements.taskButton.textContent = state.running ? "停止" : "发送";
   elements.taskButton.classList.toggle("primary", !state.running);
   elements.taskButton.classList.toggle("danger", state.running);
@@ -1578,6 +1633,9 @@ function unavailableSlashCommands() {
     },
     async submit() {
       return false;
+    },
+    async runShortcut(name) {
+      showNotice(`快捷命令 /${name} 当前不可用。`);
     },
   };
 }

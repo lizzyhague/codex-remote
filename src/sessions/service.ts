@@ -31,6 +31,11 @@ const MAX_TRASH_READS_PER_REQUEST = 200;
 const VISIBLE_SOURCE_KINDS = ["cli", "vscode", "appServer"] as const;
 export const TRASH_RETENTION_SECONDS = 30 * 24 * 60 * 60;
 
+export const CODEX_REMOTE_DEVELOPER_INSTRUCTIONS = [
+  "This conversation is running through a custom client built on Codex App Server. The active session depends on the codex-remote backend and its Tailscale network path. When modifying the codex-remote project itself, treat the codex-remote backend serving this session and its network path as part of the live execution environment. Plan restarts, shutdowns, deployments, and network changes in an orderly sequence so the current work can finish and the client can reconnect cleanly—for example, use a delayed restart when appropriate.",
+  "If any step involving the codex-remote project must be performed by the user outside the active session, provide a complete runbook before disrupting the connection. Include every shell command in execution order, identify the host and working directory for each command, state exactly when to connect over SSH, include verification checkpoints, and explain how to reconnect and continue afterward. Do not defer essential instructions until after the session may become unavailable.",
+].join("\n\n");
+
 export interface AppServerRequester {
   request<Result = unknown>(method: string, params: unknown): Promise<Result>;
 }
@@ -185,6 +190,7 @@ export class CodexSessionService {
       cwd: project.path,
       ephemeral: false,
       serviceName: "codex_remote",
+      developerInstructions: CODEX_REMOTE_DEVELOPER_INSTRUCTIONS,
     };
     const response = await this.#transport.request<ThreadStartResponse>(
       "thread/start",
@@ -218,6 +224,7 @@ export class CodexSessionService {
     const resumeParams: ThreadResumeParams = {
       threadId,
       cwd: project.path,
+      developerInstructions: CODEX_REMOTE_DEVELOPER_INSTRUCTIONS,
     };
     const response = await this.#transport.request<ThreadResumeResponse>(
       "thread/resume",

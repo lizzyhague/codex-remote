@@ -9,6 +9,7 @@ import { CommandRunner } from "./runner.ts";
 class FakeTransport implements AppServerTransport {
   readonly requests: Array<{ method: string; params: unknown }> = [];
   readonly #listeners = new Set<AppServerMessageListener>();
+  fullAccessAllowed = false;
 
   async request<Result>(method: string, params: unknown): Promise<Result> {
     this.requests.push({ method, params });
@@ -33,7 +34,11 @@ class FakeTransport implements AppServerTransport {
         data: [
           { id: ":read-only", description: "只读", allowed: true },
           { id: ":workspace", description: "项目内自动工作", allowed: true },
-          { id: ":full-access", description: "完全访问", allowed: false },
+          {
+            id: ":full-access",
+            description: "完全访问",
+            allowed: this.fullAccessAllowed,
+          },
         ],
         nextCursor: null,
       } as Result;
@@ -159,7 +164,9 @@ test("runs all nine commands through app-server methods", async () => {
   const modelResult = await runner.setModel("gpt-test", "high");
   assert.equal(modelResult.title, "模型已切换");
   assert.equal(modelResult.lines.at(-1), "思考强度：high");
-  assert.equal((await runner.setPermissions(":read-only")).title, "权限已更新");
+  const permissionsResult = await runner.setPermissions(":read-only");
+  assert.equal(permissionsResult.title, "权限已更新");
+  assert.equal(permissionsResult.fullAccessEnabled, false);
   assert.equal((await runner.togglePlan()).title, "已进入计划模式");
   assert.equal((await runner.rename("测试会话")).sessionName, "测试会话");
 
@@ -179,10 +186,10 @@ test("runs all nine commands through app-server methods", async () => {
   assert.equal((await runner.usage("weekly")).title, "每周用量");
   assert.equal((await runner.usage("cumulative")).title, "累计用量");
   const rateLimits = await runner.usage("rate-limits");
-  assert.equal(rateLimits.title, "当前限额");
+  assert.equal(rateLimits.title, "当前剩余额度");
   assert.deepEqual(rateLimits.lines, [{
     kind: "timestamp",
-    before: "Codex（7 天）：25%，",
+    before: "Codex（7 天）：剩余 75%，",
     timestamp: 1_800_000_000,
     after: " 重置",
   }]);
@@ -210,6 +217,34 @@ test("runs all nine commands through app-server methods", async () => {
       params: { threadId: "thread-1", model: "gpt-test", effort: "high" },
     },
   );
+  runner.dispose();
+});
+
+test("toggles Full access for only the current thread and restores defaults", async () => {
+  const transport = new FakeTransport();
+  transport.fullAccessAllowed = true;
+  const runner = createRunner(transport);
+
+  const enabled = await runner.toggleFullAccess();
+  assert.equal(enabled.fullAccessEnabled, true);
+  assert.equal(runner.fullAccessEnabled(), true);
+  const disabled = await runner.toggleFullAccess();
+  assert.equal(disabled.fullAccessEnabled, false);
+  assert.equal(runner.fullAccessEnabled(), false);
+
+  const updates = transport.requests.filter((request) =>
+    request.method === "thread/settings/update"
+  );
+  assert.deepEqual(updates, [
+    {
+      method: "thread/settings/update",
+      params: { threadId: "thread-1", permissions: ":full-access" },
+    },
+    {
+      method: "thread/settings/update",
+      params: { threadId: "thread-1", permissions: null },
+    },
+  ]);
   runner.dispose();
 });
 

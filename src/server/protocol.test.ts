@@ -79,6 +79,13 @@ test("parses the small stable browser protocol", () => {
     option: null,
     argument: null,
   });
+  assert.deepEqual(parseBrowserRequest(JSON.stringify({
+    type: "permissions.full-access.toggle",
+    requestId: "permissions-toggle-1",
+  })), {
+    type: "permissions.full-access.toggle",
+    requestId: "permissions-toggle-1",
+  });
 });
 
 test("rejects arbitrary paths and unknown operations", () => {

@@ -804,11 +804,33 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
+.composer-action-scroll {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.composer-shortcut {
+  flex: none;
+  min-height: 2rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+}
+
+.full-access-shortcut[aria-pressed="true"] {
+  border-color: #ef4444;
+  background: rgb(127 29 29 / 34%);
+  color: #fecaca;
+}
+
 .composer-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 0.55rem;
+  min-width: 0;
   margin-top: 0.55rem;
 }
 
@@ -819,6 +841,7 @@ button:focus-visible {
 }
 
 .command-menu-button {
+  flex: none;
   min-width: 42px;
   padding-inline: 0.75rem;
   font-size: 1.05rem;
@@ -826,7 +849,9 @@ button:focus-visible {
 }
 
 .task-button {
-  min-width: 5rem;
+  flex: none;
+  min-width: 4.25rem;
+  padding-inline: 0.75rem;
 }
 
 @media (max-width: 800px) {
@@ -918,8 +943,20 @@ button:focus-visible {
     display: none;
   }
 
-  .command-menu-button {
-    margin-right: auto;
+  .composer-action-scroll {
+    flex: 1 1 auto;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+
+  .composer-action-scroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  .task-button {
+    min-width: 3.75rem;
+    padding-inline: 0.6rem;
   }
 }
 

@@ -94,8 +94,14 @@ class FakeAppServer implements AppServerTransport, ApprovalTransport {
     }
     if (method === "permissionProfile/list") {
       return {
-        data: [{ id: ":full-access", description: "", allowed: true }],
+        data: [
+          { id: ":workspace", description: "", allowed: true },
+          { id: ":full-access", description: "", allowed: true },
+        ],
       } as Result;
+    }
+    if (method === "thread/settings/update") {
+      return {} as Result;
     }
     throw new Error(`测试未实现请求：${method}`);
   }
@@ -657,6 +663,48 @@ test("refuses session settings changes from a device that is only watching", asy
 
   await controller.disconnect();
   await watcher.disconnect();
+  approvals.dispose();
+});
+
+test("toggles Full access per thread and restores its default permissions", async () => {
+  const { approvals, services } = setup();
+  const socket = new FakeSocket();
+  const connection = new BrowserConnection("phone", socket, "test-secret", services);
+  await authenticate(connection);
+  await openSession(connection);
+
+  const opened = socket.messages.at(-1)?.data as JsonObject;
+  assert.equal(opened.fullAccessEnabled, false);
+
+  connection.receiveText(request(
+    "permissions.full-access.toggle",
+    "full-access-on",
+  ));
+  await connection.whenIdle();
+  assert.equal((socket.messages.at(-1)?.data as JsonObject).fullAccessEnabled, true);
+
+  connection.receiveText(request(
+    "permissions.full-access.toggle",
+    "full-access-off",
+  ));
+  await connection.whenIdle();
+  assert.equal((socket.messages.at(-1)?.data as JsonObject).fullAccessEnabled, false);
+
+  const updates = (services.turnTransport as FakeAppServer).requests.filter((item) =>
+    item.method === "thread/settings/update"
+  );
+  assert.deepEqual(updates, [
+    {
+      method: "thread/settings/update",
+      params: { threadId: "session-1", permissions: ":full-access" },
+    },
+    {
+      method: "thread/settings/update",
+      params: { threadId: "session-1", permissions: null },
+    },
+  ]);
+
+  await connection.disconnect();
   approvals.dispose();
 });
 

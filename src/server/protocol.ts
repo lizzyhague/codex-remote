@@ -59,6 +59,7 @@ export type BrowserRequest =
     option: string | null;
     argument: string | null;
   }
+  | { type: "permissions.full-access.toggle"; requestId: string }
   | { type: "message.send"; requestId: string; text: string }
   | { type: "task.stop"; requestId: string }
   | {
@@ -184,6 +185,8 @@ export function parseBrowserRequest(source: string): BrowserRequest {
         option: readOptionalString(value.option, "命令选项", requestId, 256),
         argument: readOptionalString(value.argument, "命令参数", requestId, 2_048),
       };
+    case "permissions.full-access.toggle":
+      return { type: "permissions.full-access.toggle", requestId };
     case "message.send":
       return {
         type: "message.send",

@@ -50,11 +50,13 @@ thread ID、项目 ID、删除时间和恢复目标，不包含标题、turn 或
 
 斜杠菜单是可选增强：`slash-menu.js` 单独注册菜单类，`app.js` 在它不可用时使用空实现，核心登录和会话选择仍能工作。当前浏览器请求等待 15 秒后会关闭连接并重连，避免一个没有响应的请求永久禁用页面控件。
 
-HTTP 服务只提供 `src/server/http-server.ts` 中 `STATIC_FILES` 明确列出的文件。新增 `public/` 资源时，必须同时增加静态路由和相应测试，否则浏览器会收到 404。PWA 外壳资源使用查询参数版本，Service Worker 也使用独立缓存名；当前版本是 `v10`。修改外壳文件时要同步更新两处版本，防止旧 HTML 和新脚本混用。
+HTTP 服务只提供 `src/server/http-server.ts` 中 `STATIC_FILES` 明确列出的文件。新增 `public/` 资源时，必须同时增加静态路由和相应测试，否则浏览器会收到 404。PWA 外壳资源使用查询参数版本，Service Worker 也使用独立缓存名；当前版本是 `v13`。修改外壳文件时要同步更新两处版本，防止旧 HTML 和新脚本混用。
 
 ### Codex App Server
 
 后端通过子进程的 stdin/stdout 使用 JSONL。App Server 从未绑定公网端口，也不接受浏览器直连。
+
+新建和恢复 thread 时，后端通过 `developerInstructions` 追加 Codex Remote 的运行环境说明。它告诉模型当前会话由 Codex Remote 后端及其 Tailscale 路径承载；只有在修改 `codex-remote` 项目自身时，才需要把重启、部署和网络变更纳入执行顺序。若连接中断前必须由用户在会话外操作，模型应预先给出完整命令、主机与目录、SSH 登录时点、验证点和恢复步骤。这些说明只随 Codex Remote 的 thread 请求发送，不修改 Codex 全局配置。
 
 ## 安全边界
 
@@ -151,7 +153,11 @@ Codex App Server 的 `thread/archive` 和 `thread/unarchive` 表示普通归档�
 - `/review`：检查工作区尚未提交的改动；
 - `/rewind`：从当前会话的对话上下文移除最近一轮；
 - `/status`：显示当前会话的模型、模式、权限和上下文用量；
-- `/usage`：只读查看账户限额、每日、每周或累计 Token 用量。
+- `/usage`：只读查看账户剩余额度、每日、每周或累计 Token 用量。
+
+输入框下方的同一操作栏提供 `/`、`rewind`、`usage` 和 `full access` 四个快捷入口。手机窄屏上，这四项位于可横向滚动的区域；发送按钮固定在右侧，不随快捷入口滚动。电脑版继续显示键盘发送提示。`rewind` 和 `usage` 分别直接复用 `/rewind` 和 `/usage` 的当前剩余额度视图；`full access` 是当前 thread 的开关，打开时选择 App Server 返回且允许的完全访问 profile，关闭时用 `permissions: null` 清除会话覆盖并恢复部署主机上的默认权限。切换到其他 thread 不会把这个状态带过去。
+
+AI 回复期间输入框保持可编辑，用户可以预先写下一条消息；发送动作仍不可用，原有停止任务按钮继续控制当前回复。回复结束后草稿保持不变并可以发送。
 
 `/model`、`/permissions` 和 `/plan` 通过 `thread/settings/update` 改当前已加载 thread 的后续设置，不写 Codex 全局配置文件。这三个命令在当前会话有任务运行时会被后端拒绝：它们会立刻影响正在跑的任务，而观察端设备本来就不该有任务控制权，否则它可以在别人的任务跑到一半时把沙箱放开到“完全访问”。Codex CLI 0.147.0 将会话设置、权限 profile 和协作模式接口标为实验 App Server 能力，因此客户端初始化声明 `experimentalApi: true`；这只开启 stdio 客户端协议能力，不会让 App Server 监听网络。
 

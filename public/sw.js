@@ -1,14 +1,14 @@
-const CACHE_NAME = "codex-remote-shell-v11";
+const CACHE_NAME = "codex-remote-shell-v13";
 const APP_SHELL = [
   "/",
   "/index.html",
-  "/styles.css?v=11",
-  "/boot.js?v=11",
-  "/app.js?v=11",
-  "/markdown.js?v=11",
-  "/slash-menu.js?v=11",
-  "/manifest.webmanifest?v=11",
-  "/icon.svg?v=11",
+  "/styles.css?v=13",
+  "/boot.js?v=12",
+  "/app.js?v=12",
+  "/markdown.js?v=12",
+  "/slash-menu.js?v=12",
+  "/manifest.webmanifest?v=12",
+  "/icon.svg?v=12",
 ];
 
 self.addEventListener("install", (event) => {

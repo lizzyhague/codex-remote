@@ -253,6 +253,9 @@ export class BrowserConnection {
         return this.#requireCommandRunner().options(request.command);
       case "command.run":
         return this.#runCommand(request);
+      case "permissions.full-access.toggle":
+        this.#assertCanChangeSettings();
+        return this.#requireCommandRunner().toggleFullAccess();
       case "message.send":
         return this.#sendMessage(request.text);
       case "task.stop":
@@ -320,11 +323,12 @@ export class BrowserConnection {
       opened.activeTurnId,
     );
     this.#turnSession = turnSession;
-    this.#commandRunner = new CommandRunner(
+    const commandRunner = new CommandRunner(
       this.#services.turnTransport,
       opened.session.id,
       opened.runtime,
     );
+    this.#commandRunner = commandRunner;
     this.#unsubscribeTurnEvents = turnSession.onEvent((event) => {
       this.#handleStreamEvent(event);
     });
@@ -351,6 +355,7 @@ export class BrowserConnection {
     return {
       ...toBrowserOpenedSession(opened, visibleTurns, this.#olderTurns.length > 0),
       controlsActiveTask,
+      fullAccessEnabled: commandRunner.fullAccessEnabled(),
     };
   }
 

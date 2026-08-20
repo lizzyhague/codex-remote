@@ -98,6 +98,16 @@ export class SlashCommandMenu {
     return true;
   }
 
+  async runShortcut(name, option = null) {
+    const command = this._commands.find((candidate) => candidate.name === name);
+    if (!command) {
+      this._onError(new Error(`快捷命令 /${name} 当前不可用。`));
+      return;
+    }
+    if (command.action === "confirm" && !confirmCommand(command)) return;
+    await this._execute(command, option, null, false);
+  }
+
   _renderCommands(commands) {
     const fragment = document.createDocumentFragment();
     const heading = document.createElement("div");
@@ -202,10 +212,10 @@ export class SlashCommandMenu {
     this._show(fragment, buttons);
   }
 
-  async _execute(command, option, argument) {
+  async _execute(command, option, argument, clearInput = true) {
     await this._withBusy(async () => {
       this.close();
-      this._setInput("");
+      if (clearInput) this._setInput("");
       const result = await this._request("command.run", {
         command: command.name,
         option,

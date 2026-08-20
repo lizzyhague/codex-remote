@@ -6,6 +6,7 @@ import test, { type TestContext } from "node:test";
 
 import { ProjectCatalog } from "../projects/catalog.ts";
 import {
+  CODEX_REMOTE_DEVELOPER_INSTRUCTIONS,
   CodexSessionService,
   TRASH_RETENTION_SECONDS,
   type AppServerRequester,
@@ -111,6 +112,7 @@ test("starts a persistent session with a catalog-resolved cwd", async (context) 
       cwd: project,
       ephemeral: false,
       serviceName: "codex_remote",
+      developerInstructions: CODEX_REMOTE_DEVELOPER_INSTRUCTIONS,
     },
   });
 });
@@ -142,6 +144,7 @@ test("checks ownership before resuming and returns stored turns", async (context
       params: {
         threadId: "thread-old",
         cwd: project,
+        developerInstructions: CODEX_REMOTE_DEVELOPER_INSTRUCTIONS,
       },
     },
   ]);

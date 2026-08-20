@@ -23,6 +23,7 @@ export type CommandMessage = {
   title: string;
   lines: CommandMessageLine[];
   sessionName?: string;
+  fullAccessEnabled?: boolean;
 };
 
 export type CommandMessageLine = string | {
@@ -46,6 +47,8 @@ export class CommandRunner {
   readonly #unsubscribe: () => void;
   #runtime: RuntimeState;
   #tokenUsage: JsonObject | null = null;
+  #fullAccessEnabled: boolean;
+  #settingsRevision = 0;
 
   constructor(
     transport: AppServerTransport,
@@ -55,6 +58,7 @@ export class CommandRunner {
     this.#transport = transport;
     this.#threadId = threadId;
     this.#runtime = { ...runtime, collaborationMode: "default" };
+    this.#fullAccessEnabled = runtimeUsesFullAccess(runtime);
     this.#unsubscribe = transport.onNotification((message) => {
       this.#handleNotification(message);
     });
@@ -109,7 +113,7 @@ export class CommandRunner {
       return {
         title: "查看哪一种用量",
         items: [
-          { id: "rate-limits", label: "当前限额", description: "查看已用百分比和重置时间。" },
+          { id: "rate-limits", label: "当前剩余", description: "查看剩余百分比和重置时间。" },
           { id: "daily", label: "每日用量", description: "查看最近 7 个有记录的日期。" },
           { id: "weekly", label: "每周用量", description: "把最近 28 天按 7 天汇总。" },
           { id: "cumulative", label: "累计用量", description: "查看账户累计 Token 等摘要。" },
@@ -156,10 +160,57 @@ export class CommandRunner {
     }
     await this.#updateSettings({ permissions: profile.id });
     this.#runtime.activePermissionProfile = { id: profile.id, extends: null };
+    this.#fullAccessEnabled = isFullAccessProfile(profile.id);
     return {
       kind: "message",
       title: "权限已更新",
       lines: [permissionLabel(profile.id), profile.description || permissionDescription(profile.id)],
+      fullAccessEnabled: this.#fullAccessEnabled,
+    };
+  }
+
+  fullAccessEnabled(): boolean {
+    return this.#fullAccessEnabled;
+  }
+
+  async toggleFullAccess(): Promise<CommandMessage> {
+    if (this.#fullAccessEnabled) {
+      const settingsRevision = this.#settingsRevision;
+      await this.#updateSettings({ permissions: null });
+      if (this.#settingsRevision === settingsRevision) {
+        this.#runtime.activePermissionProfile = null;
+        this.#fullAccessEnabled = false;
+      }
+      if (this.#fullAccessEnabled) {
+        return {
+          kind: "message",
+          title: "已恢复默认权限",
+          lines: ["权限覆盖已清除；当前部署的默认权限本身是 Full access。"],
+          fullAccessEnabled: true,
+        };
+      }
+      return {
+        kind: "message",
+        title: "Full access 已关闭",
+        lines: ["当前会话已恢复默认权限。"],
+        fullAccessEnabled: false,
+      };
+    }
+
+    const profile = (await this.#listPermissionProfiles()).find((candidate) =>
+      candidate.allowed && isFullAccessProfile(candidate.id)
+    );
+    if (!profile) {
+      throw new Error("当前 Codex 没有提供可用的 Full access 权限。");
+    }
+    await this.#updateSettings({ permissions: profile.id });
+    this.#runtime.activePermissionProfile = { id: profile.id, extends: null };
+    this.#fullAccessEnabled = true;
+    return {
+      kind: "message",
+      title: "Full access 已打开",
+      lines: [profile.description || permissionDescription(profile.id)],
+      fullAccessEnabled: true,
     };
   }
 
@@ -354,7 +405,12 @@ export class CommandRunner {
         const used = readFiniteNumber(window.usedPercent);
         const duration = readFiniteNumber(window.windowDurationMins);
         const resetsAt = readFiniteNumber(window.resetsAt);
-        const usage = `${name}${duration === null ? "" : `（${formatDuration(duration)}）`}：${used === null ? "未知" : `${Math.round(used)}%`}`;
+        const remaining = used === null
+          ? null
+          : Math.max(0, Math.min(100, 100 - used));
+        const usage = `${name}${duration === null ? "" : `（${formatDuration(duration)}）`}：${
+          remaining === null ? "剩余未知" : `剩余 ${Math.round(remaining)}%`
+        }`;
         lines.push(resetsAt === null
           ? usage
           : {
@@ -367,7 +423,7 @@ export class CommandRunner {
     }
     return {
       kind: "message",
-      title: "当前限额",
+      title: "当前剩余额度",
       lines: lines.length ? lines : ["当前账户没有返回可显示的限额窗口。"],
     };
   }
@@ -471,6 +527,7 @@ export class CommandRunner {
     if (message.method !== "thread/settings/updated") return;
     const settings = asObject(params.threadSettings);
     if (!settings) return;
+    this.#settingsRevision += 1;
     if (typeof settings.model === "string") this.#runtime.model = settings.model;
     if (typeof settings.effort === "string" || settings.effort === null) {
       this.#runtime.reasoningEffort = settings.effort;
@@ -485,6 +542,7 @@ export class CommandRunner {
     this.#runtime.activePermissionProfile = profile && typeof profile.id === "string"
       ? { id: profile.id, extends: typeof profile.extends === "string" ? profile.extends : null }
       : null;
+    this.#fullAccessEnabled = runtimeUsesFullAccess(this.#runtime);
     const collaboration = asObject(settings.collaborationMode);
     if (collaboration?.mode === "plan" || collaboration?.mode === "default") {
       this.#runtime.collaborationMode = collaboration.mode;
@@ -540,6 +598,19 @@ function permissionDescription(id: string): string {
 function isFullAccessProfile(id: string): boolean {
   const normalized = id.toLowerCase();
   return normalized.includes("full") || normalized.includes("danger");
+}
+
+function runtimeUsesFullAccess(runtime: SessionRuntime): boolean {
+  if (runtime.activePermissionProfile) {
+    return isFullAccessProfile(runtime.activePermissionProfile.id);
+  }
+  const sandbox = asObject(runtime.sandboxPolicy);
+  const type = typeof sandbox?.type === "string"
+    ? sandbox.type
+    : typeof runtime.sandboxPolicy === "string"
+    ? runtime.sandboxPolicy
+    : "";
+  return isFullAccessProfile(type);
 }
 
 function describeLegacyPermissions(approval: unknown, sandbox: unknown): string {
