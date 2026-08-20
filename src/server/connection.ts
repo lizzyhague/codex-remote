@@ -42,6 +42,11 @@ export interface BrowserSocket {
   close(code?: number, reason?: string): void;
 }
 
+export type BrowserDisconnectResult = {
+  /** 这个连接是否曾让 app-server 加载过可写 thread。 */
+  usedThreadWriter: boolean;
+};
+
 export interface ProjectsApi {
   list(): Promise<ProjectSummary[]>;
 }
@@ -96,7 +101,8 @@ export class BrowserConnection {
   #authenticated = false;
   #disconnected = false;
   #queue: Promise<void> = Promise.resolve();
-  #disconnectPromise: Promise<void> | null = null;
+  #disconnectPromise: Promise<BrowserDisconnectResult> | null = null;
+  #usedThreadWriter = false;
   #projectId: string | null = null;
   #turnSession: CodexTurnSession | null = null;
   #commandRunner: CommandRunner | null = null;
@@ -150,7 +156,7 @@ export class BrowserConnection {
     return this.#queue;
   }
 
-  disconnect(): Promise<void> {
+  disconnect(): Promise<BrowserDisconnectResult> {
     if (this.#disconnectPromise) {
       return this.#disconnectPromise;
     }
@@ -306,6 +312,7 @@ export class BrowserConnection {
   #openSession(projectId: string, opened: OpenedSession): unknown {
     this.#assertCanSwitchSession();
     this.#disposeTurnSession();
+    this.#usedThreadWriter = true;
     this.#projectId = projectId;
     const turnSession = new CodexTurnSession(
       this.#services.turnTransport,
@@ -674,7 +681,7 @@ export class BrowserConnection {
     });
   }
 
-  async #handleDisconnect(): Promise<void> {
+  async #handleDisconnect(): Promise<BrowserDisconnectResult> {
     this.#unsubscribeApprovals();
     this.#unsubscribeSessionChanges();
     await this.#queue;
@@ -699,6 +706,7 @@ export class BrowserConnection {
     }
 
     this.#disposeTurnSession();
+    return { usedThreadWriter: this.#usedThreadWriter };
   }
 
   #waitForCompletion(taskId: string, timeoutMs: number): Promise<void> {

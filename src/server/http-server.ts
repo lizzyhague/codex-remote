@@ -31,6 +31,8 @@ export type RemoteServerAddress = {
 export type RemoteWebSocketServerOptions = {
   token: string;
   services: BrowserConnectionServices;
+  /** 最后一个使用过 thread writer 的浏览器完成断线清理后调用。 */
+  onWritersIdle?: () => Promise<void>;
   authTimeoutMs?: number;
   heartbeatIntervalMs?: number;
   /** 额外允许的浏览器 Origin。与 Host 同源的请求始终允许。 */
@@ -66,6 +68,7 @@ const STATIC_FILES: Record<string, { file: string; contentType: string }> = {
 export class RemoteWebSocketServer {
   readonly #token: string;
   readonly #services: BrowserConnectionServices;
+  readonly #onWritersIdle: (() => Promise<void>) | null;
   readonly #authTimeoutMs: number;
   readonly #heartbeatIntervalMs: number;
   readonly #allowedOrigins: ReadonlySet<string>;
@@ -73,6 +76,9 @@ export class RemoteWebSocketServer {
   readonly #http: Server;
   readonly #webSockets: WebSocketServer;
   readonly #connections = new Map<WebSocket, BrowserConnection>();
+  #disconnecting = 0;
+  #writerReleaseNeeded = false;
+  #idleTransition: Promise<void> = Promise.resolve();
   #listening = false;
 
   constructor(options: RemoteWebSocketServerOptions) {
@@ -81,6 +87,7 @@ export class RemoteWebSocketServer {
     }
     this.#token = options.token;
     this.#services = options.services;
+    this.#onWritersIdle = options.onWritersIdle ?? null;
     this.#authTimeoutMs = options.authTimeoutMs ?? 10_000;
     this.#heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     this.#allowedOrigins = new Set(options.allowedOrigins ?? []);
@@ -299,7 +306,42 @@ export class RemoteWebSocketServer {
       clearTimeout(authTimer);
       clearInterval(heartbeatTimer);
       this.#connections.delete(webSocket);
-      void connection.disconnect();
+      this.#disconnecting += 1;
+      void connection.disconnect().then((result) => {
+        this.#writerReleaseNeeded ||= result.usedThreadWriter;
+      }).catch((error: unknown) => {
+        console.error(
+          `浏览器断线清理失败：${error instanceof Error ? error.message : String(error)}`,
+        );
+      }).finally(() => {
+        this.#disconnecting -= 1;
+        this.#scheduleWriterRelease();
+      });
+    });
+  }
+
+  #scheduleWriterRelease(): void {
+    if (
+      !this.#listening || !this.#onWritersIdle || !this.#writerReleaseNeeded ||
+      this.#connections.size > 0 || this.#disconnecting > 0
+    ) {
+      return;
+    }
+
+    this.#writerReleaseNeeded = false;
+    const transition = this.#idleTransition.then(async () => {
+      // 排队期间如果浏览器已经重连，保留标记，等下一次真正空闲再释放。
+      if (!this.#listening) return;
+      if (this.#connections.size > 0 || this.#disconnecting > 0) {
+        this.#writerReleaseNeeded = true;
+        return;
+      }
+      await this.#onWritersIdle?.();
+    });
+    this.#idleTransition = transition.catch((error: unknown) => {
+      console.error(
+        `释放 Codex 会话 writer 失败：${error instanceof Error ? error.message : String(error)}`,
+      );
     });
   }
 }

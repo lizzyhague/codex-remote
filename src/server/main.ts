@@ -1,7 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { AppServerClient } from "../app-server/client.ts";
+import { RestartableAppServer } from "../app-server/runtime.ts";
 import { ApprovalBroker } from "../approvals/broker.ts";
 import { ProjectCatalog } from "../projects/catalog.ts";
 import { CodexSessionService } from "../sessions/service.ts";
@@ -22,7 +22,7 @@ export async function main(): Promise<void> {
   const trash = await TrashStore.open(resolveTrashStatePath());
 
   const projects = await ProjectCatalog.fromConfigFile(configPath);
-  const appServer = new AppServerClient({ workingDirectory: process.cwd() });
+  const appServer = new RestartableAppServer({ workingDirectory: process.cwd() });
   let approvals: ApprovalBroker | null = null;
   let remote: RemoteWebSocketServer | null = null;
   let cleanupTimer: NodeJS.Timeout | null = null;
@@ -49,6 +49,12 @@ export async function main(): Promise<void> {
     remote = new RemoteWebSocketServer({
       token,
       allowedOrigins: readAllowedOrigins(process.env.CODEX_REMOTE_ALLOWED_ORIGINS),
+      onWritersIdle: async () => {
+        // 理论上 BrowserConnection 已取消自己任务的审批；这里再清一次，避免旧
+        // app-server 进程退出后 ApprovalBroker 留下无法回答的请求。
+        approvals?.cancelAll();
+        await appServer.releaseWriters();
+      },
       services: {
         projects,
         sessions,

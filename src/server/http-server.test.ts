@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 import WebSocket from "ws";
 
@@ -102,6 +103,69 @@ test("serves health and authenticated WebSocket only on loopback", async () => {
   }
 });
 
+test("releases writers only after the last thread-using browser disconnects", async () => {
+  const transport = new EmptyTransport();
+  const approvals = new ApprovalBroker(transport);
+  const services = emptyServices(transport, approvals);
+  let nextSession = 1;
+  services.sessions.start = async () => openedSession(`session-${nextSession++}`);
+
+  let idleCalls = 0;
+  let resolveIdle!: () => void;
+  const idle = new Promise<void>((resolve) => {
+    resolveIdle = resolve;
+  });
+  const server = new RemoteWebSocketServer({
+    token: "test-secret",
+    services,
+    authTimeoutMs: 2_000,
+    onWritersIdle: async () => {
+      idleCalls += 1;
+      resolveIdle();
+    },
+  });
+  const address = await server.listen(0);
+  const url = `ws://${address.host}:${address.port}/ws`;
+  const first = new WebSocket(url);
+  const second = new WebSocket(url);
+
+  try {
+    await Promise.all([
+      withTimeout(once(first, "open"), "打开第一个 WebSocket"),
+      withTimeout(once(second, "open"), "打开第二个 WebSocket"),
+    ]);
+    for (const [index, socket] of [first, second].entries()) {
+      await sendRequest(socket, {
+        type: "auth",
+        requestId: `auth-${index}`,
+        token: "test-secret",
+      });
+      await sendRequest(socket, {
+        type: "session.start",
+        requestId: `open-${index}`,
+        projectId: "projects/demo",
+      });
+    }
+
+    const firstClosed = once(first, "close");
+    first.close();
+    await withTimeout(firstClosed, "关闭第一个 WebSocket");
+    await delay(20);
+    assert.equal(idleCalls, 0);
+
+    const secondClosed = once(second, "close");
+    second.close();
+    await withTimeout(secondClosed, "关闭第二个 WebSocket");
+    await withTimeout(idle, "等待 writer 释放");
+    assert.equal(idleCalls, 1);
+  } finally {
+    first.terminate();
+    second.terminate();
+    await withTimeout(server.close(), "关闭服务器");
+    approvals.dispose();
+  }
+});
+
 function emptyServices(
   transport: EmptyTransport,
   approvals: ApprovalBroker,
@@ -139,6 +203,39 @@ function emptyServices(
     approvals,
     locks: new ProjectTaskLocks(),
   };
+}
+
+function openedSession(id: string): OpenedSession {
+  return {
+    session: {
+      id,
+      sessionId: id,
+      title: "测试会话",
+      preview: "",
+      createdAt: 1,
+      updatedAt: 1,
+      state: "idle",
+      deletedAt: null,
+      purgeAt: null,
+    },
+    turns: [],
+    activeTurnId: null,
+    runtime: {
+      cwd: "/projects/demo",
+      model: "gpt-test",
+      reasoningEffort: "medium",
+      approvalPolicy: "on-request",
+      sandboxPolicy: { type: "workspaceWrite" },
+      activePermissionProfile: { id: ":workspace", extends: null },
+    },
+  };
+}
+
+async function sendRequest(socket: WebSocket, message: object): Promise<unknown> {
+  const response = once(socket, "message");
+  socket.send(JSON.stringify(message));
+  const received = await withTimeout(response, "等待 WebSocket 响应");
+  return JSON.parse(String(received[0]));
 }
 
 function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
