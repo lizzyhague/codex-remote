@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "lib": ["ES2024"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["node"],
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": [
+    "src/approvals/**/*.ts",
+    "src/app-server/**/*.ts",
+    "src/commands/**/*.ts",
+    "src/projects/**/*.ts",
+    "src/server/**/*.ts",
+    "src/sessions/**/*.ts"
+  ]
+}

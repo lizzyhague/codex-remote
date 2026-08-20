@@ -1,0 +1,26 @@
+{
+  "name": "codex-remote",
+  "version": "0.1.0",
+  "description": "Single-user web interface for controlling Codex CLI on a remote host.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/server/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"src/**/*.test.ts\" \"public/**/*.test.js\"",
+    "smoke": "node src/app-server/smoke.ts",
+    "smoke:server": "node src/server/smoke.ts"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "@types/ws": "^8.18.1",
+    "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  }
+}
