@@ -1,5 +1,9 @@
 # 使用 Tailscale Serve 部署
 
+> 如果由 AI 协助部署，AI 必须先阅读 [AI 部署与交接规范](deployment-ai.md)，先只读
+> 核对环境并取得用户对修改文件、安装软件和管理员权限的明确同意。本页只说明
+> Tailscale 路径，不能代替部署前检查和部署后交接。
+
 这条路径适合只让自己或 tailnet 中明确授权的设备访问。Codex Remote 仍监听
 `127.0.0.1:8787`，Tailscale Serve 负责 tailnet 内的 HTTPS 和访问控制。
 

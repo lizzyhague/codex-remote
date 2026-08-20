@@ -5,6 +5,10 @@
 - [Tailscale Serve 私网部署](deployment-tailscale.md)
 - [公网 HTTPS 部署](deployment-public.md)
 
+由 AI 协助部署时，AI 还必须遵守 [AI 部署与交接规范](deployment-ai.md)。不能只以
+`systemctl is-active` 或 `/healthz` 成功就宣布部署完成；还要验证实际 HTTPS 入口、
+浏览器登录和后端监听地址，并向用户完成安全与使用规则交接。
+
 Codex Remote 固定监听 `127.0.0.1`，systemd 单元不依赖具体入口。
 
 ## systemd 模板
@@ -152,3 +156,29 @@ curl http://127.0.0.1:8787/healthz
 - WebSocket 被拒绝：检查日志中的 Origin/Host；
 - 页面脚本未启动：检查 `boot.js`、`app.js` 和依赖资源是否返回 200；
 - 更新后仍像旧版本：彻底关闭已安装 PWA，再从 HTTPS 地址重新打开。
+
+### SSH 无法恢复已有会话
+
+当前 Codex Remote 实例共用一个 App Server 子进程。网页恢复过的会话会由该进程
+持有 writer；只有所有浏览器标签页和已安装的 PWA 都断开后，后端才会重建子进程并
+统一释放这些 writer。主动关闭页面后可稍等数秒；手机锁屏、网络切换或异常断网时，
+还需要等待 WebSocket 心跳确认连接已经失效。
+
+如果目标会话仍报告 active writer，且无法确认是否存在残留浏览器连接，可以先在
+SSH 中运行 `codex` 创建一个新会话，不要恢复被锁定的会话。随后在普通 SSH shell
+中停止 Codex Remote 服务：
+
+```bash
+sudo systemctl stop codex-remote.service
+```
+
+停止服务会断开全部网页连接、中断仍在执行的网页任务，并终止该服务管理的 App
+Server 子进程，从而释放它持有的全部 writer。确认服务已经停止后，再从 Codex CLI
+恢复原会话。需要重新启用网页端时执行：
+
+```bash
+sudo systemctl start codex-remote.service
+```
+
+不要使用 `pkill codex` 或类似的宽泛进程匹配命令；它可能同时终止 SSH 中正在运行的
+Codex CLI 或主机上的其他 App Server 实例。
