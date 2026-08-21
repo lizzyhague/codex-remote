@@ -835,23 +835,59 @@ button:focus-visible {
 }
 
 .composer-actions span {
-  margin-right: auto;
   color: var(--muted);
   font-size: 0.78rem;
-}
-
-.command-menu-button {
-  flex: none;
-  min-width: 42px;
-  padding-inline: 0.75rem;
-  font-size: 1.05rem;
-  font-weight: 700;
 }
 
 .task-button {
   flex: none;
   min-width: 4.25rem;
+  margin-left: auto;
   padding-inline: 0.75rem;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .session-list,
+  .timeline,
+  .composer textarea {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .session-sidebar:hover .session-list,
+  .timeline:hover,
+  .composer textarea:hover,
+  .composer textarea:focus {
+    scrollbar-color: #5f6673 transparent;
+  }
+
+  .session-list::-webkit-scrollbar,
+  .timeline::-webkit-scrollbar,
+  .composer textarea::-webkit-scrollbar {
+    width: 10px;
+  }
+
+  .session-list::-webkit-scrollbar-track,
+  .timeline::-webkit-scrollbar-track,
+  .composer textarea::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .session-list::-webkit-scrollbar-thumb,
+  .timeline::-webkit-scrollbar-thumb,
+  .composer textarea::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: transparent;
+    background-clip: padding-box;
+  }
+
+  .session-sidebar:hover .session-list::-webkit-scrollbar-thumb,
+  .timeline:hover::-webkit-scrollbar-thumb,
+  .composer textarea:hover::-webkit-scrollbar-thumb,
+  .composer textarea:focus::-webkit-scrollbar-thumb {
+    background-color: #5f6673;
+  }
 }
 
 @media (max-width: 800px) {

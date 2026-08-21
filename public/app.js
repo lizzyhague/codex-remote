@@ -699,7 +699,7 @@ function createSessionMenu(session) {
   button.className = "session-menu-trigger quiet";
   button.type = "button";
   button.setAttribute("aria-label", `选择并整理 ${session.title || "新会话"}`);
-  button.textContent = "•••";
+  button.textContent = "⋯";
   button.addEventListener("click", () => {
     setSelectionMode(true, false);
     state.selectedSessions.add(session.id);
