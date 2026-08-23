@@ -7,6 +7,8 @@ const SIDEBAR_COLLAPSED_KEY = "codex-remote.sidebar-collapsed";
 const RECONNECT_DELAY_MS = 2_500;
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_COMMAND_OUTPUT = 100_000;
+/** 输入框失焦后稍等再点亮 rewind / full access，避免同一下既失焦又点到确认。 */
+const COMPOSER_CONFIRM_UNLOCK_MS = 300;
 
 const elements = {
   loginView: byId("login-view"),
@@ -85,6 +87,8 @@ const state = {
   commandBusy: false,
   controlsTask: false,
   fullAccessEnabled: false,
+  composerLocksConfirms: false,
+  composerFocusTimer: null,
   rewindText: null,
   requestNumber: 0,
   pendingRequests: new Map(),
@@ -244,6 +248,20 @@ elements.messageInput.addEventListener("input", () => {
   resizeComposer();
   slashCommands.handleInput();
   updateControls();
+});
+
+elements.messageInput.addEventListener("focus", () => {
+  clearTimeout(state.composerFocusTimer);
+  state.composerLocksConfirms = true;
+  updateControls();
+});
+
+elements.messageInput.addEventListener("blur", () => {
+  clearTimeout(state.composerFocusTimer);
+  state.composerFocusTimer = setTimeout(() => {
+    state.composerLocksConfirms = false;
+    updateControls();
+  }, COMPOSER_CONFIRM_UNLOCK_MS);
 });
 
 elements.messageInput.addEventListener("keydown", (event) => {
@@ -1433,12 +1451,18 @@ function updateControls() {
     : state.commandBusy
     ? "快捷操作执行中，可以继续写"
     : "在浏览器里写好，再发送给 Codex";
+  const confirmLocked = state.composerLocksConfirms;
   elements.commandMenuButton.disabled = !connected || !hasSession || busy || hasText;
-  elements.rewindShortcut.disabled = !connected || !hasSession || busy;
+  elements.rewindShortcut.disabled = !connected || !hasSession || busy || confirmLocked;
+  elements.rewindShortcut.title = confirmLocked
+    ? "请先点开输入框再回退"
+    : "";
   elements.usageShortcut.disabled = !connected || !hasSession || state.commandBusy;
-  elements.fullAccessShortcut.disabled = !connected || !hasSession || busy;
+  elements.fullAccessShortcut.disabled = !connected || !hasSession || busy || confirmLocked;
   elements.fullAccessShortcut.setAttribute("aria-pressed", String(state.fullAccessEnabled));
-  elements.fullAccessShortcut.title = state.fullAccessEnabled
+  elements.fullAccessShortcut.title = confirmLocked
+    ? "请先点开输入框再切换权限"
+    : state.fullAccessEnabled
     ? "关闭 Full access，恢复当前会话的默认权限"
     : "仅为当前会话打开 Full access";
   elements.taskButton.textContent = state.running ? "停止" : "发送";
