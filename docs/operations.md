@@ -72,9 +72,10 @@ journalctl -u codex-remote.service -f
 curl http://127.0.0.1:8787/healthz
 ```
 
-`codex app-server` 结束时，网页后端会主动退出，由 systemd 的
-`Restart=on-failure` 拉起。服务反复重启时，应先看日志中 App Server 的 stderr，
-而不只是检查网页入口。
+目录 App Server 结束时，网页后端会主动退出，由 systemd 的 `Restart=on-failure`
+拉起。单个会话 Worker 异常退出只会把该任务标记为 `failed`，不会带走 HTTP 服务或
+其他 Worker。服务反复重启时，应先看日志中的 App Server/Worker 错误，而不只是检查
+网页入口。
 
 ## 更新
 
@@ -91,7 +92,8 @@ curl http://127.0.0.1:8787/healthz
 ```
 
 根据安装目录权限，其中部分命令可能需要以服务账户或管理员身份运行。重启会断开
-浏览器连接，并中断仍在执行的任务。
+浏览器连接；`running` 和 `waiting_for_permission` 会在新进程启动时明确标记为
+`interrupted`，尚未启动的 `queued` 消息会继续调度。仍建议等活动任务完成后更新。
 
 升级 Codex CLI 后也应运行同样的检查。`src/generated/` 中的类型与生成它们的 Codex
 版本绑定；若协议变化导致类型或测试失败，应先重新生成类型并审查差异，不要只关闭
@@ -115,8 +117,15 @@ curl http://127.0.0.1:8787/healthz
 时间和恢复目标，不包含会话标题或正文。文件会在第一次使用回收站时创建，权限应只
 允许服务账户访问。
 
-迁移主机时，如需保留回收站剩余保留天数，应复制这个文件。Codex 会话和登录状态
-属于 Codex 自己的数据，不由本项目备份；应按所用 Codex CLI 版本的方式单独迁移。
+`CODEX_REMOTE_WORK_STATE_FILE` 指向 Worker SQLite 状态库。它包含已接受消息、任务
+状态、脱敏后的流事件、工具输出和中断原因，应视作敏感对话数据，只允许服务账户
+访问。SQLite 使用 WAL；不要在服务运行时只复制主数据库文件而漏掉尚未 checkpoint
+的 `-wal`。可靠做法是在无活动任务时停止服务后复制数据库，或使用 SQLite 的在线
+备份能力。
+
+迁移主机时，如需保留回收站剩余保留天数、排队消息和中断记录，应同时迁移这两个
+状态文件。Codex 原生会话和登录状态仍属于 Codex 自己的数据，应按所用 Codex CLI
+版本的方式单独迁移。
 
 ## Origin 与反向代理
 
@@ -159,22 +168,21 @@ curl http://127.0.0.1:8787/healthz
 
 ### SSH 无法恢复已有会话
 
-当前 Codex Remote 实例共用一个 App Server 子进程。网页恢复过的会话会由该进程
-持有 writer；只有所有浏览器标签页和已安装的 PWA 都断开后，后端才会重建子进程并
-统一释放这些 writer。主动关闭页面后可稍等数秒；手机锁屏、网络切换或异常断网时，
-还需要等待 WebSocket 心跳确认连接已经失效。
+每个正在执行的会话由自己的 App Server Worker 持有 writer。页面关闭不会终止已经
+接受的任务；等该任务完成且队列为空后，Worker 会立即退出并释放目标 writer。其他
+浏览器页面和其他会话不会延迟这一步。
 
-如果目标会话仍报告 active writer，且无法确认是否存在残留浏览器连接，可以先在
-SSH 中运行 `codex` 创建一个新会话，不要恢复被锁定的会话。随后在普通 SSH shell
-中停止 Codex Remote 服务：
+如果目标会话长时间仍报告 active writer，先在网页会话列表确认它是否仍为“运行中”，
+再查看服务日志中的 Worker 状态。不要用 SSH CLI 与网页 Worker 同时修改同一项目。
+确实需要强制接管时，先停止 Codex Remote 服务：
 
 ```bash
 sudo systemctl stop codex-remote.service
 ```
 
-停止服务会断开全部网页连接、中断仍在执行的网页任务，并终止该服务管理的 App
-Server 子进程，从而释放它持有的全部 writer。确认服务已经停止后，再从 Codex CLI
-恢复原会话。需要重新启用网页端时执行：
+停止服务会断开全部网页连接、中断仍在执行的 Worker，并终止它们的独立进程组，从而
+释放 writer。确认服务已经停止后，再从 Codex CLI 恢复原会话。需要重新启用网页端时
+先退出该 CLI 会话，再执行：
 
 ```bash
 sudo systemctl start codex-remote.service

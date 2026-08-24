@@ -819,6 +819,29 @@ button.small {
   color: var(--muted);
 }
 
+.approval-card[data-interaction-id] > label,
+.approval-card[data-interaction-id] > small,
+.approval-card[data-interaction-id] > a,
+.approval-card[data-interaction-id] > input {
+  grid-column: 1 / -1;
+}
+
+.approval-card[data-interaction-id] > label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.approval-card[data-interaction-id] input,
+.approval-card[data-interaction-id] select {
+  width: 100%;
+}
+
+.approval-card[data-interaction-id] select[multiple] {
+  min-height: 7rem;
+}
+
 .notice {
   color: #fde68a;
   font-size: 0.9rem;

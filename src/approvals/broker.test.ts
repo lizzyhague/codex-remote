@@ -148,6 +148,40 @@ test("cancels pending approvals for a disconnected turn", () => {
   assert.equal(broker.cancelThread("thread-1"), 1);
 });
 
+test("grants only the permission profile requested for this turn", () => {
+  const transport = new FakeTransport();
+  const broker = new ApprovalBroker(transport);
+  const events: ApprovalEvent[] = [];
+  broker.onEvent((event) => events.push(event));
+  transport.request({
+    id: "permission-1",
+    method: "item/permissions/requestApproval",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "permission-item-1",
+      startedAtMs: 789,
+      reason: "需要读取额外目录",
+      permissions: {
+        network: null,
+        fileSystem: { read: ["/allowed"] },
+      },
+    },
+  });
+  const requested = events[0];
+  assert.equal(requested?.type, "approval_requested");
+  if (requested?.type !== "approval_requested") return;
+  assert.equal(requested.approval.kind, "permissions");
+  assert.equal(broker.answer(requested.approval.id, "approve_once"), true);
+  assert.deepEqual(transport.responses, [{
+    id: "permission-1",
+    result: {
+      permissions: { fileSystem: { read: ["/allowed"] } },
+      scope: "turn",
+    },
+  }]);
+});
+
 test("clears stale UI when app-server resolves a request", () => {
   const transport = new FakeTransport();
   const broker = new ApprovalBroker(transport);

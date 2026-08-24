@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -86,3 +86,85 @@ lines.on("line", (line) => {
     await client.close();
   }
 });
+
+test("closes descendants left in a Worker process group", async (context) => {
+  const temporaryDirectory = await mkdtemp(path.join(tmpdir(), "codex-remote-group-"));
+  const pidFile = path.join(temporaryDirectory, "descendant.pid");
+  let descendantPid: number | null = null;
+  context.after(async () => {
+    if (descendantPid && processExists(descendantPid)) {
+      try {
+        process.kill(descendantPid, "SIGKILL");
+      } catch {
+        // 已经退出。
+      }
+    }
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  });
+  const fakeServer = path.join(temporaryDirectory, "fake-worker.mjs");
+  await writeFile(fakeServer, `#!/usr/bin/env node
+import { spawn } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { createInterface } from "node:readline";
+const pidFile = ${JSON.stringify(pidFile)};
+const lines = createInterface({ input: process.stdin });
+lines.on("line", async (line) => {
+  const message = JSON.parse(line);
+  if (message.method !== "initialize") return;
+  const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore"
+  });
+  descendant.unref();
+  await writeFile(pidFile, String(descendant.pid));
+  console.log(JSON.stringify({
+    id: message.id,
+    result: {
+      userAgent: "fake-worker",
+      codexHome: "/tmp/fake-codex",
+      platformFamily: "unix",
+      platformOs: "linux"
+    }
+  }));
+});
+`, "utf8");
+  await chmod(fakeServer, 0o700);
+  const client = new AppServerClient({
+    codexBinary: fakeServer,
+    processGroup: true,
+  });
+  try {
+    await client.initialize({
+      clientInfo: {
+        name: "codex_remote_test",
+        title: "Codex Remote Test",
+        version: "0.1.0",
+      },
+      capabilities: {
+        experimentalApi: false,
+        requestAttestation: false,
+      },
+    });
+    descendantPid = Number(await readFile(pidFile, "utf8"));
+    assert.equal(processExists(descendantPid), true);
+  } finally {
+    await client.close();
+  }
+  await waitFor(() => !processExists(descendantPid!), 3_000);
+});
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("等待进程退出超时。");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}

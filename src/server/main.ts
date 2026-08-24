@@ -2,12 +2,18 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { RestartableAppServer } from "../app-server/runtime.ts";
+import { codexRemoteInitializeParams } from "../app-server/initialize.ts";
 import { ApprovalBroker } from "../approvals/broker.ts";
 import { ProjectCatalog } from "../projects/catalog.ts";
 import { CodexSessionService } from "../sessions/service.ts";
 import { resolveTrashStatePath, TrashStore } from "../sessions/trash-store.ts";
 import { RemoteWebSocketServer } from "./http-server.ts";
 import { ProjectTaskLocks } from "./project-locks.ts";
+import {
+  resolveWorkerStatePath,
+  WorkerStateStore,
+} from "../workers/state-store.ts";
+import { SessionWorkerManager } from "../workers/manager.ts";
 
 const TRASH_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 
@@ -20,27 +26,40 @@ export async function main(): Promise<void> {
   const configPath = process.env.CODEX_REMOTE_PROJECTS_CONFIG ??
     path.resolve("config/projects.json");
   const trash = await TrashStore.open(resolveTrashStatePath());
+  const workerState = await WorkerStateStore.open(resolveWorkerStatePath());
 
   const projects = await ProjectCatalog.fromConfigFile(configPath);
   const appServer = new RestartableAppServer({ workingDirectory: process.cwd() });
   let approvals: ApprovalBroker | null = null;
   let remote: RemoteWebSocketServer | null = null;
+  let workers: SessionWorkerManager | null = null;
   let cleanupTimer: NodeJS.Timeout | null = null;
 
   try {
-    await appServer.initialize({
-      clientInfo: {
-        name: "codex_remote",
-        title: "Codex Remote",
-        version: "0.1.0",
-      },
-      capabilities: {
-        experimentalApi: true,
-        requestAttestation: false,
-      },
-    });
+    await appServer.initialize(codexRemoteInitializeParams());
     approvals = new ApprovalBroker(appServer);
     const sessions = new CodexSessionService(appServer, projects, trash);
+    const locks = new ProjectTaskLocks();
+    workers = new SessionWorkerManager({
+      store: workerState,
+      projects,
+      trash,
+      locks,
+      workingDirectory: process.cwd(),
+      ...(process.env.CODEX_BIN ? { codexBinary: process.env.CODEX_BIN } : {}),
+      ...optionalNumber(
+        "maxWorkers",
+        readPositiveInteger(process.env.CODEX_REMOTE_MAX_WORKERS),
+      ),
+      ...optionalNumber(
+        "minAvailableMemoryBytes",
+        readMebibytes(process.env.CODEX_REMOTE_MIN_AVAILABLE_MEMORY_MIB),
+      ),
+      ...optionalNumber(
+        "offlineGraceMs",
+        readNonnegativeInteger(process.env.CODEX_REMOTE_OFFLINE_GRACE_MS),
+      ),
+    });
     await cleanExpiredTrash(sessions);
     cleanupTimer = setInterval(() => {
       void cleanExpiredTrash(sessions);
@@ -60,10 +79,12 @@ export async function main(): Promise<void> {
         sessions,
         turnTransport: appServer,
         approvals,
-        locks: new ProjectTaskLocks(),
+        locks,
+        workers,
       },
     });
     const address = await remote.listen(port);
+    workers.start();
     console.log(`Codex Remote 正在监听 http://${address.host}:${address.port}/`);
 
     // codex app-server 一旦消失，这个进程就无法再服务任何请求。继续监听只会
@@ -83,11 +104,13 @@ export async function main(): Promise<void> {
   } finally {
     if (cleanupTimer) clearInterval(cleanupTimer);
     await remote?.close();
+    await workers?.close();
     try {
       approvals?.cancelAll();
     } finally {
       approvals?.dispose();
       await appServer.close();
+      workerState.close();
     }
   }
 }
@@ -116,6 +139,36 @@ function readPort(source: string): number {
     throw new Error("CODEX_REMOTE_PORT 必须是 1 到 65535 之间的整数。");
   }
   return port;
+}
+
+function readPositiveInteger(source: string | undefined): number | undefined {
+  if (source === undefined || source.trim() === "") return undefined;
+  const value = Number(source);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error("Worker 数量必须是正整数。");
+  }
+  return value;
+}
+
+function readNonnegativeInteger(source: string | undefined): number | undefined {
+  if (source === undefined || source.trim() === "") return undefined;
+  const value = Number(source);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error("离线宽限时间必须是非负整数毫秒。");
+  }
+  return value;
+}
+
+function readMebibytes(source: string | undefined): number | undefined {
+  const value = readNonnegativeInteger(source);
+  return value === undefined ? undefined : value * 1_048_576;
+}
+
+function optionalNumber<Key extends string>(
+  key: Key,
+  value: number | undefined,
+): { [Property in Key]?: number } {
+  return value === undefined ? {} : { [key]: value } as { [Property in Key]?: number };
 }
 
 function waitForShutdownSignal(): Promise<void> {

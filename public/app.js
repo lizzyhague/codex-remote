@@ -3,6 +3,7 @@ import { renderMarkdown, sanitizeHref } from "./markdown.js?v=12";
 const TOKEN_KEY = "codex-remote.token";
 const PROJECT_KEY = "codex-remote.project";
 const SESSION_KEY = "codex-remote.session";
+const OUTBOX_KEY = "codex-remote.outbox-v2";
 const SIDEBAR_COLLAPSED_KEY = "codex-remote.sidebar-collapsed";
 const RECONNECT_DELAY_MS = 2_500;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -68,6 +69,7 @@ const state = {
   reconnectTimer: null,
   reconnectAllowed: true,
   authenticated: false,
+  backgroundWorkers: false,
   token: "",
   projectId: null,
   sessionId: null,
@@ -130,7 +132,10 @@ elements.tokenForm.addEventListener("submit", (event) => {
 });
 
 elements.changeTokenButton.addEventListener("click", () => {
-  if (state.running && !window.confirm("更换令牌会断开连接，并停止当前任务。继续吗？")) {
+  const warning = state.backgroundWorkers
+    ? "更换令牌会断开当前页面；后台任务可能继续运行。继续吗？"
+    : "更换令牌会断开连接，并停止当前任务。继续吗？";
+  if (state.running && !window.confirm(warning)) {
     return;
   }
   state.reconnectAllowed = false;
@@ -146,7 +151,7 @@ elements.changeTokenButton.addEventListener("click", () => {
 });
 
 elements.projectSelect.addEventListener("change", () => {
-  if (state.running) return;
+  if (state.running && !state.backgroundWorkers) return;
   state.projectId = elements.projectSelect.value || null;
   resetCurrentSession();
   elements.sessionSearchInput.value = "";
@@ -322,9 +327,10 @@ async function connect(token) {
   socket.addEventListener("open", async () => {
     if (generation !== state.generation) return;
     try {
-      await request("auth", { token });
+      const authentication = await request("auth", { token });
       if (generation !== state.generation) return;
       state.authenticated = true;
+      state.backgroundWorkers = authentication?.features?.backgroundWorkers === true;
       stateSet(TOKEN_KEY, token);
       elements.loginStatus.textContent = "";
       elements.connectButton.disabled = false;
@@ -354,8 +360,10 @@ async function connect(token) {
 
   socket.addEventListener("close", () => {
     if (generation !== state.generation) return;
+    const backgroundWorkers = state.backgroundWorkers;
     state.socket = null;
     state.authenticated = false;
+    state.backgroundWorkers = false;
     state.running = false;
     state.commandBusy = false;
     state.controlsTask = false;
@@ -368,7 +376,9 @@ async function connect(token) {
 
     if (state.reconnectAllowed && state.token) {
       if (!elements.appView.hidden) {
-        showNotice("连接中断，VPS 会停止正在进行的任务。正在重新连接……");
+        showNotice(backgroundWorkers
+          ? "连接中断；已接受的任务会由 VPS 后台继续处理。正在重新连接……"
+          : "连接中断，VPS 会停止正在进行的任务。正在重新连接……");
       }
       state.reconnectTimer = setTimeout(() => {
         void connect(state.token);
@@ -522,7 +532,7 @@ async function loadSessions({ append = false } = {}) {
 }
 
 async function startSession() {
-  if (!state.projectId || state.running) return;
+  if (!state.projectId || (state.running && !state.backgroundWorkers)) return;
   if (state.sessionView !== "active") setSessionView("active", false);
   setNavigationBusy(true);
   hideNotice();
@@ -541,7 +551,7 @@ async function startSession() {
 }
 
 async function resumeSession(sessionId) {
-  if (!state.projectId || state.running) return;
+  if (!state.projectId || (state.running && !state.backgroundWorkers)) return;
   setNavigationBusy(true);
   hideNotice();
   try {
@@ -573,6 +583,9 @@ function applyOpenedSession(opened) {
     Array.isArray(opened.tasks) ? opened.tasks : [],
     opened.hasOlder === true,
   );
+  for (const event of Array.isArray(opened.replayEvents) ? opened.replayEvents : []) {
+    handleServerEvent(event);
+  }
 
   if (state.running) {
     showThinking();
@@ -585,6 +598,7 @@ function applyOpenedSession(opened) {
     hideNotice();
   }
   updateControls();
+  void retryOutboxForCurrentSession();
 }
 
 function setSessionView(view, load = true) {
@@ -680,7 +694,8 @@ function createSessionItem(session) {
   const open = document.createElement("button");
   open.className = "session-open";
   open.type = "button";
-  open.disabled = state.sessionView !== "active" || state.running;
+  open.disabled = state.sessionView !== "active" ||
+    (state.running && !state.backgroundWorkers);
   appendSessionText(open, session);
   if (state.sessionView === "active") {
     open.addEventListener("click", () => {
@@ -978,9 +993,23 @@ async function sendMessage() {
   updateControls();
   scrollToBottom(true);
 
+  const clientMessageId = createClientMessageId();
+  saveOutbox({
+    clientMessageId,
+    projectId: state.projectId,
+    sessionId: state.sessionId,
+    text,
+  });
   try {
-    await request("message.send", { text });
+    await request("message.send", { text, clientMessageId });
+    clearOutbox(clientMessageId);
   } catch (error) {
+    const uncertainDelivery = error?.code === "request_timeout" || !state.authenticated;
+    if (uncertainDelivery) {
+      showNotice("连接在确认消息前中断。消息 ID 已保留；重新打开这个会话后会安全重试。");
+      return;
+    }
+    clearOutbox(clientMessageId);
     const pendingIndex = state.pendingUserMessages.findIndex((pending) =>
       pending.element === optimistic
     );
@@ -1038,6 +1067,23 @@ async function toggleFullAccess() {
 
 function handleServerEvent(event) {
   switch (event.type) {
+    case "task.queued": {
+      state.running = true;
+      state.controlsTask = true;
+      setCurrentSessionState("active");
+      if (typeof event.text === "string" && event.text) {
+        let pending = state.pendingUserMessages.find((candidate) =>
+          candidate.text === event.text);
+        if (!pending) {
+          const element = addMessage("user", event.text, `queued-${event.taskId}`, false);
+          pending = { text: event.text, element };
+          state.pendingUserMessages.push(pending);
+        }
+      }
+      showThinking("正在排队");
+      updateControls();
+      break;
+    }
     case "sessions.changed":
       if (event.closedSessionId === state.sessionId) {
         resetCurrentSession();
@@ -1097,10 +1143,18 @@ function handleServerEvent(event) {
       break;
     case "approval.requested":
       hideThinking();
-      addApproval(event.approval);
+      addApproval(event.approval, event.sessionId);
       break;
     case "approval.resolved":
       removeApproval(event.approvalId);
+      if (state.running) showThinking();
+      break;
+    case "interaction.requested":
+      hideThinking();
+      addInteraction(event.interaction, event.sessionId);
+      break;
+    case "interaction.resolved":
+      removeInteraction(event.interactionId);
       if (state.running) showThinking();
       break;
   }
@@ -1568,7 +1622,7 @@ function addCommandResult(result) {
     scrollToBottom(false);
   }
 }
-function addApproval(approval) {
+function addApproval(approval, sessionId = null) {
   if (!approval?.id || elements.approvalList.querySelector(`[data-approval-id="${CSS.escape(approval.id)}"]`)) {
     return;
   }
@@ -1578,11 +1632,17 @@ function addApproval(approval) {
   const description = document.createElement("p");
   description.textContent = approval.reason || (approval.kind === "command"
     ? "Codex 请求执行一项操作。"
+    : approval.kind === "permissions"
+    ? "Codex 请求为本轮增加权限。"
     : "Codex 请求修改文件。");
   const detail = document.createElement("small");
+  const session = state.sessions.find((candidate) => candidate.id === sessionId);
+  const sessionLabel = sessionId && sessionId !== state.sessionId
+    ? `${session?.title || "另一个会话"} · `
+    : "";
   detail.textContent = approval.network
     ? `网络访问：${approval.network.protocol}://${approval.network.host}`
-    : "请选择本次允许，或拒绝。";
+    : `${sessionLabel}请选择本次允许，或拒绝。`;
   description.append(detail);
 
   const decline = document.createElement("button");
@@ -1597,6 +1657,60 @@ function addApproval(approval) {
   approve.addEventListener("click", () => void answerApproval(card, approval.id, "approve_once"));
   card.append(description, decline, approve);
   elements.approvalList.append(card);
+}
+
+async function retryOutboxForCurrentSession() {
+  if (!state.authenticated) return;
+  const matches = loadOutbox().filter((entry) =>
+    entry.projectId === state.projectId && entry.sessionId === state.sessionId
+  );
+  for (const outbox of matches) {
+    try {
+      await request("message.send", {
+        text: outbox.text,
+        clientMessageId: outbox.clientMessageId,
+      });
+      clearOutbox(outbox.clientMessageId);
+    } catch (error) {
+      if (error?.code !== "request_timeout" && state.authenticated) {
+        clearOutbox(outbox.clientMessageId);
+        showNotice(`保留消息重试失败：${errorMessage(error)}`);
+      }
+      break;
+    }
+  }
+}
+
+function createClientMessageId() {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function saveOutbox(entry) {
+  const entries = loadOutbox().filter((candidate) =>
+    candidate.clientMessageId !== entry.clientMessageId
+  );
+  entries.push(entry);
+  stateSet(OUTBOX_KEY, JSON.stringify(entries.slice(-20)));
+}
+
+function loadOutbox() {
+  try {
+    const value = JSON.parse(stateGet(OUTBOX_KEY) || "[]");
+    if (!Array.isArray(value)) return [];
+    return value.filter((entry) => entry && typeof entry.clientMessageId === "string" &&
+        typeof entry.projectId === "string" && typeof entry.sessionId === "string" &&
+        typeof entry.text === "string"
+    );
+  } catch {
+    return [];
+  }
+}
+
+function clearOutbox(clientMessageId) {
+  const entries = loadOutbox().filter((entry) => entry.clientMessageId !== clientMessageId);
+  if (entries.length === 0) removeStored(OUTBOX_KEY);
+  else stateSet(OUTBOX_KEY, JSON.stringify(entries));
 }
 
 async function answerApproval(card, approvalId, decision) {
@@ -1616,18 +1730,232 @@ function removeApproval(approvalId) {
   elements.approvalList.querySelector(selector)?.remove();
 }
 
+function addInteraction(interaction, sessionId = null) {
+  if (
+    !interaction?.id ||
+    elements.approvalList.querySelector(
+      `[data-interaction-id="${CSS.escape(interaction.id)}"]`,
+    )
+  ) return;
+  const card = document.createElement("section");
+  card.className = "approval-card";
+  card.dataset.interactionId = interaction.id;
+  const session = state.sessions.find((candidate) => candidate.id === sessionId);
+  const heading = document.createElement("p");
+  heading.textContent = sessionId && sessionId !== state.sessionId
+    ? `${session?.title || "另一个会话"}需要你的输入。`
+    : "Codex 需要你的输入。";
+  card.append(heading);
+
+  const fields = new Map();
+  let canSubmit = true;
+  if (interaction.kind === "user_input") {
+    for (const question of Array.isArray(interaction.questions) ? interaction.questions : []) {
+      const label = document.createElement("label");
+      label.textContent = question.question || question.header || "请选择";
+      let control;
+      if (Array.isArray(question.options) && question.options.length > 0) {
+        control = document.createElement("select");
+        for (const option of question.options) {
+          const element = document.createElement("option");
+          element.value = option.label;
+          element.textContent = option.description
+            ? `${option.label} — ${option.description}`
+            : option.label;
+          control.append(element);
+        }
+      } else {
+        control = document.createElement("input");
+        control.type = question.isSecret ? "password" : "text";
+      }
+      label.append(control);
+      card.append(label);
+      let other = null;
+      if (question.isOther && Array.isArray(question.options)) {
+        other = document.createElement("input");
+        other.type = question.isSecret ? "password" : "text";
+        other.placeholder = "其他回答（可选）";
+        card.append(other);
+      }
+      fields.set(question.id, { control, other, multiple: false });
+    }
+  } else {
+    const message = document.createElement("small");
+    message.textContent = `${interaction.serverName || "MCP"}：${interaction.message || "需要确认"}`;
+    card.append(message);
+    if (typeof interaction.url === "string" && interaction.url) {
+      const link = document.createElement("a");
+      link.href = interaction.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = "打开登录或授权页面";
+      card.append(link);
+    } else {
+      const count = addMcpFormFields(card, fields, interaction.schema);
+      if (count === 0) {
+        const unsupported = document.createElement("small");
+        unsupported.textContent = "这个 MCP 表单暂时无法在网页中安全呈现，只能取消本轮。";
+        card.append(unsupported);
+        canSubmit = false;
+      }
+    }
+  }
+
+  const cancel = document.createElement("button");
+  cancel.className = "danger";
+  cancel.type = "button";
+  cancel.textContent = "取消本轮";
+  const submit = document.createElement("button");
+  submit.className = "primary";
+  submit.type = "button";
+  submit.textContent = interaction.kind === "user_input" || interaction.mode !== "url"
+    ? "提交回答"
+    : "已完成，继续";
+  cancel.addEventListener("click", () =>
+    void answerInteraction(card, interaction.id, "cancel", {}));
+  submit.addEventListener("click", () => {
+    const answers = {};
+    for (const [questionId, field] of fields) {
+      if (field.multiple) {
+        answers[questionId] = [...field.control.selectedOptions]
+          .map((option) => option.value.trim())
+          .filter(Boolean);
+      } else {
+        const value = field.other?.value.trim() || field.control.value.trim();
+        answers[questionId] = value ? [value] : [];
+      }
+    }
+    void answerInteraction(card, interaction.id, "submit", answers);
+  });
+  card.append(cancel);
+  if (canSubmit) card.append(submit);
+  elements.approvalList.append(card);
+}
+
+function addMcpFormFields(card, fields, schema) {
+  const properties = schema?.properties;
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return 0;
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  let count = 0;
+  for (const [fieldId, fieldSchema] of Object.entries(properties).slice(0, 50)) {
+    if (!fieldSchema || typeof fieldSchema !== "object" || Array.isArray(fieldSchema)) continue;
+    const label = document.createElement("label");
+    label.textContent = fieldSchema.title || fieldId;
+    const choices = mcpSchemaChoices(fieldSchema);
+    let control;
+    let multiple = false;
+    if (choices.length > 0) {
+      control = document.createElement("select");
+      multiple = fieldSchema.type === "array";
+      control.multiple = multiple;
+      if (!multiple && !required.has(fieldId)) {
+        const blank = document.createElement("option");
+        blank.value = "";
+        blank.textContent = "不填写";
+        control.append(blank);
+      }
+      for (const choice of choices) {
+        const option = document.createElement("option");
+        option.value = choice.value;
+        option.textContent = choice.title || choice.value;
+        control.append(option);
+      }
+    } else if (fieldSchema.type === "boolean") {
+      control = document.createElement("select");
+      for (const [value, title] of required.has(fieldId)
+        ? [["true", "是"], ["false", "否"]]
+        : [["", "不填写"], ["true", "是"], ["false", "否"]]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = title;
+        control.append(option);
+      }
+    } else if (fieldSchema.type === "string" || fieldSchema.type === "number" ||
+      fieldSchema.type === "integer") {
+      control = document.createElement("input");
+      control.type = fieldSchema.type === "string"
+        ? mcpStringInputType(fieldSchema.format)
+        : "number";
+      if (fieldSchema.type === "integer") control.step = "1";
+      if (typeof fieldSchema.minimum === "number") control.min = String(fieldSchema.minimum);
+      if (typeof fieldSchema.maximum === "number") control.max = String(fieldSchema.maximum);
+      if (typeof fieldSchema.minLength === "number") control.minLength = fieldSchema.minLength;
+      if (typeof fieldSchema.maxLength === "number") control.maxLength = fieldSchema.maxLength;
+    } else {
+      continue;
+    }
+    control.required = required.has(fieldId);
+    label.append(control);
+    if (typeof fieldSchema.description === "string" && fieldSchema.description) {
+      const description = document.createElement("small");
+      description.textContent = fieldSchema.description;
+      label.append(description);
+    }
+    card.append(label);
+    fields.set(fieldId, { control, other: null, multiple });
+    count += 1;
+  }
+  return count;
+}
+
+function mcpSchemaChoices(schema) {
+  const source = Array.isArray(schema.oneOf)
+    ? schema.oneOf
+    : Array.isArray(schema.enum)
+    ? schema.enum
+    : Array.isArray(schema.items?.anyOf)
+    ? schema.items.anyOf
+    : Array.isArray(schema.items?.enum)
+    ? schema.items.enum
+    : [];
+  return source.flatMap((choice) => {
+    if (typeof choice === "string") return [{ value: choice, title: choice }];
+    return choice && typeof choice.const === "string"
+      ? [{ value: choice.const, title: choice.title || choice.const }]
+      : [];
+  });
+}
+
+function mcpStringInputType(format) {
+  if (format === "email" || format === "url" || format === "date") return format;
+  if (format === "uri") return "url";
+  if (format === "date-time") return "datetime-local";
+  return "text";
+}
+
+async function answerInteraction(card, interactionId, action, answers) {
+  const controls = card.querySelectorAll("button, input, select");
+  controls.forEach((control) => { control.disabled = true; });
+  try {
+    await request("interaction.answer", { interactionId, action, answers });
+  } catch (error) {
+    controls.forEach((control) => { control.disabled = false; });
+    showNotice(errorMessage(error));
+  }
+}
+
+function removeInteraction(interactionId) {
+  elements.approvalList.querySelector(
+    `[data-interaction-id="${CSS.escape(interactionId)}"]`,
+  )?.remove();
+}
+
 function updateControls() {
   const connected = state.authenticated;
   const hasSession = Boolean(state.sessionId);
   const hasText = Boolean(elements.messageInput.value.trim());
   const busy = state.running || state.commandBusy;
   const navigationBusy = state.navigationBusy || state.sessionLoading;
-  elements.projectSelect.disabled = !connected || busy || navigationBusy || state.selectionMode;
-  elements.newSessionButton.disabled = !connected || busy || navigationBusy ||
+  const navigationLocked = state.commandBusy || navigationBusy ||
+    (state.running && !state.backgroundWorkers);
+  const projectHasActiveTask = state.sessions.some((session) => session.state === "active");
+  elements.projectSelect.disabled = !connected || navigationLocked || state.selectionMode;
+  elements.newSessionButton.disabled = !connected || navigationLocked ||
     state.selectionMode || !state.projectId;
   elements.sessionSearchInput.disabled = !connected || navigationBusy ||
     state.selectionMode || !state.projectId;
-  elements.selectSessionsButton.disabled = !connected || busy || navigationBusy ||
+  elements.selectSessionsButton.disabled = !connected || navigationLocked ||
+    projectHasActiveTask ||
     !state.sessions.some((session) => session.state !== "active");
   elements.loadMoreSessionsButton.disabled = !connected || navigationBusy;
   elements.sessionViewBackButton.disabled = !connected || navigationBusy;
@@ -1636,9 +1964,10 @@ function updateControls() {
   for (const item of elements.sessionList.querySelectorAll(".session-item")) {
     const itemIsActive = item.dataset.state === "active";
     for (const button of item.querySelectorAll("button")) {
-      const cannotOpen = button.classList.contains("session-open") &&
-        state.sessionView !== "active";
-      button.disabled = navigationBusy || busy || itemIsActive || cannotOpen;
+      const opensSession = button.classList.contains("session-open");
+      const cannotOpen = opensSession && state.sessionView !== "active";
+      button.disabled = navigationLocked || cannotOpen ||
+        (!opensSession && (state.running || projectHasActiveTask || itemIsActive));
     }
     for (const checkbox of item.querySelectorAll('input[type="checkbox"]')) {
       checkbox.disabled = navigationBusy || busy || itemIsActive;

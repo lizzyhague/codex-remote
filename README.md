@@ -16,10 +16,11 @@ SSH 逐键输入延迟的影响。
 - 从配置的项目根目录中选择项目；
 - 搜索、新建、恢复、归档和删除 Codex 会话；
 - 流式显示回复、命令状态和审批请求；
-- 手机和电脑同步当前会话的新消息；
-- 每个项目同时只允许一个设备控制任务；
-- 支持停止任务、断线中断和 WebSocket 心跳；
-- 所有浏览器连接断开后重建 App Server，释放已加载会话的 writer，允许本机 CLI 接管；
+- 手机和电脑同步当前会话的新消息、审批和用户输入请求；
+- 消息由后端持久化确认，页面关闭后仍可继续执行，并用 `clientMessageId` 避免断线重发；
+- 每个活动会话使用独立 App Server Worker；同一项目仍只运行一个任务；
+- Worker 完成队列后立即退出并释放该会话的 writer，不依赖浏览器连接生命周期；
+- 普通权限离线等待 10 秒后会取消需要审批的整轮，Full access 可继续处理执行审批；
 - 长会话分页加载，完成消息渲染安全的 Markdown 子集；
 - 提供模型、权限、计划、检查、回退和用量等斜杠命令，以及输入框下的常用快捷入口；
 - 可安装为 PWA，并缓存应用外壳。
@@ -33,8 +34,8 @@ Codex/Claude Code 在同一项目中并行执行。
 手机或电脑浏览器
   -> HTTPS 入口（Tailscale Serve 或公网反向代理）
   -> 127.0.0.1:8787 上的 Codex Remote
-  -> stdio / JSONL
-  -> codex app-server
+  -> 后端队列与 SQLite 事件日志
+  -> 每个活动会话独立的 stdio / JSONL codex app-server Worker
 ```
 
 应用始终只监听 `127.0.0.1`。Tailscale 和公网 HTTPS 是两种部署入口，不是两套代码。
@@ -147,14 +148,20 @@ Codex 运行在专用的非 root 系统账户下。
 | `CODEX_REMOTE_ALLOWED_ORIGINS` | 额外允许的浏览器 Origin，逗号分隔；通常留空 |
 | `CODEX_REMOTE_PROJECTS_CONFIG` | 项目根目录配置文件，默认 `config/projects.json` |
 | `CODEX_REMOTE_STATE_FILE` | 回收站登记文件路径 |
+| `CODEX_REMOTE_WORK_STATE_FILE` | 已接受任务与事件日志的 SQLite 路径 |
+| `CODEX_REMOTE_MAX_WORKERS` | 最大活动 Worker 数，默认 `2` |
+| `CODEX_REMOTE_MIN_AVAILABLE_MEMORY_MIB` | 启动 Worker 所需最低可用内存，默认 `1024` MiB |
+| `CODEX_REMOTE_OFFLINE_GRACE_MS` | 最后一个客户端离线后的审批宽限期，默认 `10000` 毫秒 |
 | `CODEX_BIN` | Codex 可执行文件；默认从 `PATH` 查找 |
 
 真实令牌和 `config/projects.json` 都已被 Git 忽略。仓库只保存示例文件。
 
 ## 数据与浏览器存储
 
-Codex Remote 不复制对话正文。Codex 负责保存会话；本项目只在状态文件中记录回收站
-会话 ID、删除时间和恢复目标，默认保留 30 天。
+Codex 仍负责保存原生会话和完整历史。为了支持后台执行，Codex Remote 还会在 Worker
+状态库中保存已接受消息、任务状态、脱敏后的流事件和中断原因；这份日志可能包含对话
+正文和工具输出，应按与 Codex 会话数据相同的敏感级别保护。回收站登记仍单独保存，
+默认保留 30 天。
 
 访问令牌会保存在浏览器 `localStorage`，用于刷新和断线重连。不要在共享设备上保存
 令牌；怀疑泄露时应立即更换服务端令牌，并清除已登录浏览器中的旧值。

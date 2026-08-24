@@ -60,13 +60,20 @@ export type BrowserRequest =
     argument: string | null;
   }
   | { type: "permissions.full-access.toggle"; requestId: string }
-  | { type: "message.send"; requestId: string; text: string }
+  | { type: "message.send"; requestId: string; clientMessageId: string; text: string }
   | { type: "task.stop"; requestId: string }
   | {
     type: "approval.answer";
     requestId: string;
     approvalId: string;
     decision: "approve_once" | "decline";
+  }
+  | {
+    type: "interaction.answer";
+    requestId: string;
+    interactionId: string;
+    action: "submit" | "cancel";
+    answers: Record<string, string[]>;
   };
 
 export type BrowserResponse =
@@ -191,6 +198,11 @@ export function parseBrowserRequest(source: string): BrowserRequest {
       return {
         type: "message.send",
         requestId,
+        // 旧前端缓存升级期间可能暂时不带该字段；requestId 仍是单次连接内唯一值。
+        // 新前端会传持久 UUID，才能在断线重试时获得跨连接幂等性。
+        clientMessageId: value.clientMessageId === undefined
+          ? requestId
+          : requireString(value.clientMessageId, "客户端消息 ID", requestId, 128),
         text: requireMessageText(value.text, requestId),
       };
     case "task.stop":
@@ -205,6 +217,19 @@ export function parseBrowserRequest(source: string): BrowserRequest {
         requestId,
         approvalId: requireString(value.approvalId, "审批 ID", requestId, 256),
         decision,
+      };
+    }
+    case "interaction.answer": {
+      const action = value.action;
+      if (action !== "submit" && action !== "cancel") {
+        throw new ProtocolError("invalid_action", "交互操作无法识别。", requestId);
+      }
+      return {
+        type: "interaction.answer",
+        requestId,
+        interactionId: requireString(value.interactionId, "交互 ID", requestId, 256),
+        action,
+        answers: action === "cancel" ? {} : requireAnswers(value.answers, requestId),
       };
     }
     default:
@@ -279,6 +304,21 @@ function requireMessageText(value: unknown, requestId: string): string {
     );
   }
   return text;
+}
+
+function requireAnswers(value: unknown, requestId: string): Record<string, string[]> {
+  if (!isObject(value) || Object.keys(value).length > 50) {
+    throw new ProtocolError("invalid_field", "回答格式无法识别。", requestId);
+  }
+  const result: Record<string, string[]> = {};
+  for (const [questionId, answer] of Object.entries(value)) {
+    if (!readBoundedString(questionId, 128) || !Array.isArray(answer) || answer.length > 50) {
+      throw new ProtocolError("invalid_field", "回答格式无法识别。", requestId);
+    }
+    result[questionId] = answer.map((entry) =>
+      requireString(entry, "回答", requestId, 4_096));
+  }
+  return result;
 }
 
 function requireString(

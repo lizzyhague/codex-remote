@@ -42,7 +42,7 @@ export type RemoteWebSocketServerOptions = {
 
 const DEFAULT_WEB_ROOT = fileURLToPath(new URL("../../public/", import.meta.url));
 
-/** 没有回 pong 的连接会被判定为已断开，释放它占住的项目锁。 */
+/** 没有回 pong 的连接会被判定为已断开，用于准确执行离线审批宽限规则。 */
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 
 /** 浏览器长时间不读数据时的发送缓冲上限，超过就断开，避免后端内存无界增长。 */
@@ -280,7 +280,7 @@ export class RemoteWebSocketServer {
     authTimer.unref();
 
     // 手机换网络或息屏时 TCP 常常只是半开：不发心跳的话，后端要等到内核超时
-    // 才会发现连接已死，这期间它占住的项目锁会挡住用户重连后的新连接。
+    // 才会发现连接已死，也就无法准确判断何时进入离线审批宽限期。
     let responsive = true;
     webSocket.on("pong", () => {
       responsive = true;

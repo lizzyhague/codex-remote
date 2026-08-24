@@ -27,13 +27,21 @@ import {
   toBrowserTasks,
 } from "./history.ts";
 import { ProjectTaskLocks } from "./project-locks.ts";
+import { toBrowserStreamEvent } from "./stream-events.ts";
+import {
+  SessionWorkerManager,
+  WorkerManagerError,
+  type ManagedSessionOpen,
+  type WorkerManagerEvent,
+} from "../workers/manager.ts";
 
 const HISTORY_PAGE_SIZE = 20;
 
 /**
  * 有些命令（例如 `/compact`）的响应里没有 turn ID，只能等 `turn/started` 通知
  * 才知道任务真的开始了。如果通知始终不来，项目锁必须自己放开，否则整个项目
- * 会一直显示“正在执行任务”，直到这个浏览器断开为止。
+ * 会一直显示“正在执行任务”。这段只服务于未注入 Worker 管理器的兼容测试路径；
+ * 生产 Worker 路径在管理器中处理同类超时。
  */
 const TASK_CLAIM_TIMEOUT_MS = 10_000;
 
@@ -76,6 +84,8 @@ export type BrowserConnectionServices = {
   turnTransport: AppServerTransport;
   approvals: ApprovalBroker;
   locks: ProjectTaskLocks;
+  /** 生产环境使用；省略时保留原有单连接状态机，供现有单元测试逐步迁移。 */
+  workers?: SessionWorkerManager;
 };
 
 export class BrowserRequestError extends Error {
@@ -97,6 +107,7 @@ export class BrowserConnection {
   readonly #approvalIds = new Set<string>();
   readonly #unsubscribeApprovals: () => void;
   readonly #unsubscribeSessionChanges: () => void;
+  readonly #unsubscribeWorkerEvents: () => void;
   readonly #completionWaiters = new Map<string, () => void>();
   #authenticated = false;
   #disconnected = false;
@@ -104,6 +115,7 @@ export class BrowserConnection {
   #disconnectPromise: Promise<BrowserDisconnectResult> | null = null;
   #usedThreadWriter = false;
   #projectId: string | null = null;
+  #managedSessionId: string | null = null;
   #turnSession: CodexTurnSession | null = null;
   #commandRunner: CommandRunner | null = null;
   #unsubscribeTurnEvents: (() => void) | null = null;
@@ -132,6 +144,9 @@ export class BrowserConnection {
     });
     this.#unsubscribeSessionChanges = services.sessions.onChange?.((event) => {
       this.#handleSessionChange(event);
+    }) ?? (() => {});
+    this.#unsubscribeWorkerEvents = services.workers?.onEvent((event) => {
+      this.#handleWorkerEvent(event);
     }) ?? (() => {});
   }
 
@@ -195,7 +210,9 @@ export class BrowserConnection {
       const data = await this.#dispatch(request);
       this.#send({ type: "response", requestId: request.requestId, ok: true, data });
     } catch (error) {
-      const code = error instanceof BrowserRequestError ? error.code : "request_failed";
+      const code = error instanceof BrowserRequestError || error instanceof WorkerManagerError
+        ? error.code
+        : "request_failed";
       this.#sendFailure(request.requestId, code, publicErrorMessage(error));
     }
   }
@@ -211,11 +228,17 @@ export class BrowserConnection {
       return;
     }
     this.#authenticated = true;
+    this.#services.workers?.clientAuthenticated(this.#id);
     this.#send({
       type: "response",
       requestId: request.requestId,
       ok: true,
-      data: { authenticated: true },
+      data: {
+        authenticated: true,
+        ...(this.#services.workers
+          ? { features: { backgroundWorkers: true } }
+          : {}),
+      },
     });
   }
 
@@ -224,23 +247,29 @@ export class BrowserConnection {
       case "projects.list":
         return { projects: await this.#services.projects.list() };
       case "sessions.list":
-        return toBrowserSessionPage(
-          await this.#services.sessions.list(request.projectId, {
-            cursor: request.cursor,
-            view: request.view,
-            searchTerm: request.searchTerm,
-          }),
-        );
+        return this.#listSessions(request);
       case "sessions.mutate":
         return this.#mutateSessions(request);
       case "session.start":
         this.#assertCanSwitchSession();
+        if (this.#services.workers) {
+          return this.#openManagedSession(
+            request.projectId,
+            await this.#services.workers.startSession(request.projectId),
+          );
+        }
         return this.#openSession(
           request.projectId,
           await this.#services.sessions.start(request.projectId),
         );
       case "session.resume":
         this.#assertCanSwitchSession();
+        if (this.#services.workers) {
+          return this.#openManagedSession(
+            request.projectId,
+            await this.#services.workers.resumeSession(request.projectId, request.sessionId),
+          );
+        }
         return this.#openSession(
           request.projectId,
           await this.#services.sessions.resume(request.projectId, request.sessionId),
@@ -250,24 +279,64 @@ export class BrowserConnection {
       case "commands.list":
         return { commands: COMMAND_CATALOG };
       case "command.options":
+        if (this.#services.workers) {
+          const { projectId, sessionId } = this.#requireManagedSession();
+          return this.#services.workers.commandOptions(projectId, sessionId, request.command);
+        }
         return this.#requireCommandRunner().options(request.command);
       case "command.run":
+        if (this.#services.workers) return this.#runManagedCommand(request);
         return this.#runCommand(request);
       case "permissions.full-access.toggle":
+        if (this.#services.workers) {
+          const { projectId, sessionId } = this.#requireManagedSession();
+          this.#assertCanChangeSettings();
+          return this.#services.workers.toggleFullAccess(projectId, sessionId);
+        }
         this.#assertCanChangeSettings();
         return this.#requireCommandRunner().toggleFullAccess();
       case "message.send":
+        if (this.#services.workers) {
+          const { projectId, sessionId } = this.#requireManagedSession();
+          return this.#services.workers.enqueueMessage(
+            projectId,
+            sessionId,
+            request.clientMessageId,
+            request.text,
+          );
+        }
         return this.#sendMessage(request.text);
       case "task.stop":
+        if (this.#services.workers) {
+          return this.#services.workers.stopTask(this.#requireManagedSession().sessionId);
+        }
         return this.#stopTask();
       case "approval.answer":
+        if (this.#services.workers) {
+          return this.#services.workers.answerApproval(request.approvalId, request.decision);
+        }
         return this.#answerApproval(request.approvalId, request.decision);
+      case "interaction.answer":
+        if (!this.#services.workers) {
+          throw new BrowserRequestError("unsupported_interaction", "当前后端不支持这种交互。");
+        }
+        return this.#services.workers.answerInteraction(
+          request.interactionId,
+          request.action,
+          request.answers,
+        );
     }
   }
 
   async #mutateSessions(
     request: Extract<BrowserRequest, { type: "sessions.mutate" }>,
   ): Promise<SessionMutationResult> {
+    if (this.#services.workers?.projectBusy(request.projectId)) {
+      throw new BrowserRequestError(
+        "project_busy",
+        "这个项目有已接受或正在执行的任务，暂时不能整理会话。",
+      );
+    }
     if (!this.#services.locks.acquire(
       request.projectId,
       this.#id,
@@ -297,7 +366,7 @@ export class BrowserConnection {
         )
         : await this.#services.sessions.restoreTrash(request.projectId, request.sessionIds);
 
-      const openSessionId = this.#turnSession?.threadId;
+      const openSessionId = this.#currentSessionId();
       const removesOpenSession = request.action === "archive" ||
         request.action === "trash-active" || request.action === "trash-archived";
       if (
@@ -310,6 +379,31 @@ export class BrowserConnection {
     } finally {
       this.#services.locks.release(request.projectId, this.#id);
     }
+  }
+
+  async #listSessions(
+    request: Extract<BrowserRequest, { type: "sessions.list" }>,
+  ): Promise<ReturnType<typeof toBrowserSessionPage>> {
+    if (
+      this.#services.workers && this.#projectId &&
+      this.#projectId !== request.projectId
+    ) {
+      // 前端切换项目时没有单独的 detach 请求；第一次加载新项目列表就是释放
+      // 旧空会话临时 Worker 的明确边界。已经接受的后台任务不受 detach 影响。
+      this.#disposeTurnSession();
+    }
+    const page = await this.#services.sessions.list(request.projectId, {
+      cursor: request.cursor,
+      view: request.view,
+      searchTerm: request.searchTerm,
+    });
+    if (this.#services.workers) {
+      page.sessions = page.sessions.map((session) =>
+        this.#services.workers!.activeTask(session.id)
+          ? { ...session, state: "active" }
+          : session);
+    }
+    return toBrowserSessionPage(page);
   }
 
   #openSession(projectId: string, opened: OpenedSession): unknown {
@@ -359,8 +453,32 @@ export class BrowserConnection {
     };
   }
 
+  #openManagedSession(projectId: string, managed: ManagedSessionOpen): unknown {
+    this.#disposeTurnSession();
+    this.#projectId = projectId;
+    this.#managedSessionId = managed.opened.session.id;
+    this.#services.workers!.attachSession(this.#id, this.#managedSessionId);
+    const visibleStart = Math.max(0, managed.opened.turns.length - HISTORY_PAGE_SIZE);
+    this.#olderTurns = managed.opened.turns.slice(0, visibleStart);
+    const visibleTurns = managed.opened.turns.slice(visibleStart);
+    return {
+      ...toBrowserOpenedSession(
+        { ...managed.opened, activeTurnId: managed.activeTaskId },
+        visibleTurns,
+        this.#olderTurns.length > 0,
+      ),
+      activeTaskId: managed.activeTaskId,
+      controlsActiveTask: managed.controlsActiveTask,
+      fullAccessEnabled: managed.fullAccessEnabled,
+      replayEvents: managed.replayEvents.map((stored) => ({
+        ...stored.event,
+        sequence: stored.sequence,
+      })),
+    };
+  }
+
   #loadOlderHistory(): { tasks: ReturnType<typeof toBrowserTasks>; hasOlder: boolean } {
-    this.#requireOpenSession();
+    this.#requireCurrentSession();
     const start = Math.max(0, this.#olderTurns.length - HISTORY_PAGE_SIZE);
     const turns = this.#olderTurns.slice(start);
     this.#olderTurns.length = start;
@@ -422,6 +540,31 @@ export class BrowserConnection {
         }
         return runner.usage(request.option);
     }
+  }
+
+  async #runManagedCommand(
+    request: Extract<BrowserRequest, { type: "command.run" }>,
+  ): Promise<unknown> {
+    const workers = this.#services.workers!;
+    const { projectId, sessionId } = this.#requireManagedSession();
+    const result = await workers.runCommand(
+      projectId,
+      sessionId,
+      `${this.#id}:${request.requestId}`,
+      request.command,
+      request.option,
+      request.argument,
+    );
+    if (!Array.isArray(result.turns)) return result;
+    const turns = result.turns as Turn[];
+    const visibleStart = Math.max(0, turns.length - HISTORY_PAGE_SIZE);
+    this.#olderTurns = turns.slice(0, visibleStart);
+    const { turns: _turns, ...rest } = result;
+    return {
+      ...rest,
+      tasks: toBrowserTasks(turns.slice(visibleStart)),
+      hasOlder: this.#olderTurns.length > 0,
+    };
   }
 
   async #rewindOneTurn(runner: CommandRunner): Promise<unknown> {
@@ -642,7 +785,7 @@ export class BrowserConnection {
 
   #handleSessionChange(event: SessionChangeEvent): void {
     if (!this.#authenticated) return;
-    const currentSessionId = this.#turnSession?.threadId ?? null;
+    const currentSessionId = this.#currentSessionId();
     const closesCurrent = currentSessionId !== null &&
       event.sessionIds.includes(currentSessionId) &&
       (event.change === "archive" || event.change === "trash" ||
@@ -657,6 +800,24 @@ export class BrowserConnection {
         change: event.change,
         closedSessionId: closesCurrent ? currentSessionId : null,
       },
+    });
+  }
+
+  #handleWorkerEvent(stored: WorkerManagerEvent): void {
+    if (!this.#authenticated) return;
+    if (stored.audience === "session" && stored.threadId !== this.#managedSessionId) return;
+    if (stored.event.type === "approval.requested") {
+      const approval = stored.event.approval;
+      if (typeof approval === "object" && approval !== null && "id" in approval) {
+        this.#approvalIds.add(String((approval as { id: unknown }).id));
+      }
+    } else if (stored.event.type === "approval.resolved") {
+      const approvalId = stored.event.approvalId;
+      if (typeof approvalId === "string") this.#approvalIds.delete(approvalId);
+    }
+    this.#send({
+      type: "event",
+      event: { ...stored.event, sequence: stored.sequence },
     });
   }
 
@@ -689,7 +850,13 @@ export class BrowserConnection {
   async #handleDisconnect(): Promise<BrowserDisconnectResult> {
     this.#unsubscribeApprovals();
     this.#unsubscribeSessionChanges();
+    this.#unsubscribeWorkerEvents();
     await this.#queue;
+    if (this.#services.workers) {
+      this.#services.workers.clientDisconnected(this.#id);
+      this.#disposeTurnSession();
+      return { usedThreadWriter: false };
+    }
     const turnSession = this.#turnSession;
     const projectId = this.#projectId;
     const taskId = turnSession?.activeTurnId ?? null;
@@ -741,6 +908,16 @@ export class BrowserConnection {
    * 把沙箱放开到“完全访问”。
    */
   #assertCanChangeSettings(): void {
+    if (this.#services.workers) {
+      const sessionId = this.#requireManagedSession().sessionId;
+      if (this.#services.workers.activeTask(sessionId)) {
+        throw new BrowserRequestError(
+          "task_already_running",
+          "这个会话有任务正在运行，请先等它结束或停止它，再修改会话设置。",
+        );
+      }
+      return;
+    }
     const turnSession = this.#requireOpenSession();
     if (turnSession.activeTurnId) {
       throw new BrowserRequestError(
@@ -751,6 +928,7 @@ export class BrowserConnection {
   }
 
   #assertCanSwitchSession(): void {
+    if (this.#services.workers) return;
     if (
       this.#projectId && this.#turnSession?.activeTurnId &&
       this.#services.locks.owns(this.#projectId, this.#id)
@@ -765,6 +943,26 @@ export class BrowserConnection {
     }
     return this.#turnSession;
   }
+
+  #requireCurrentSession(): string {
+    const sessionId = this.#currentSessionId();
+    if (!sessionId || !this.#projectId) {
+      throw new BrowserRequestError("session_not_open", "请先新建或恢复一个会话。");
+    }
+    return sessionId;
+  }
+
+  #requireManagedSession(): { projectId: string; sessionId: string } {
+    const sessionId = this.#requireCurrentSession();
+    if (!this.#projectId || !this.#services.workers) {
+      throw new BrowserRequestError("session_not_open", "请先新建或恢复一个会话。");
+    }
+    return { projectId: this.#projectId, sessionId };
+  }
+
+  #currentSessionId(): string | null {
+    return this.#managedSessionId ?? this.#turnSession?.threadId ?? null;
+  }
   #requireCommandRunner(): CommandRunner {
     this.#requireOpenSession();
     if (!this.#commandRunner) {
@@ -774,6 +972,14 @@ export class BrowserConnection {
   }
 
   #disposeTurnSession(): void {
+    if (this.#services.workers) {
+      this.#services.workers.detachSession(this.#id);
+      this.#managedSessionId = null;
+      this.#projectId = null;
+      this.#olderTurns = [];
+      this.#approvalIds.clear();
+      return;
+    }
     // 先放锁再清 #projectId：关掉会话之后就再也收不到 turn/completed 通知了，
     // 这里不放开的话，这个项目会一直被判定为“有任务在运行”。
     this.#releaseProjectLock();
@@ -802,29 +1008,6 @@ export class BrowserConnection {
       this.#socket.send(JSON.stringify(message));
     }
   }
-}
-
-function toBrowserStreamEvent(event: CodexStreamEvent): Record<string, unknown> & { type: string } {
-  const { threadId: sessionId, turnId: taskId, ...rest } = event;
-  const type = event.type === "turn_started"
-    ? "task.started"
-    : event.type === "user_message_started"
-    ? "message.user"
-    : event.type === "assistant_text_delta"
-    ? "message.delta"
-    : event.type === "assistant_text_completed"
-    ? "message.completed"
-    : event.type === "tool_started"
-    ? "tool.started"
-    : event.type === "tool_output_delta"
-    ? "tool.output.delta"
-    : event.type === "tool_completed"
-    ? "tool.completed"
-    : event.type === "turn_completed"
-    ? "task.completed"
-    : "task.error";
-  const { type: _internalType, ...payload } = rest;
-  return { type, sessionId, taskId, ...payload };
 }
 
 function tokensEqual(received: string, expected: string): boolean {
