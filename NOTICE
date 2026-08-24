@@ -1,0 +1,30 @@
+Codex Remote
+Copyright (c) 2026 lizzyhague
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+---
+
+This product is not an official OpenAI product and is not affiliated with,
+endorsed by, or sponsored by OpenAI. "OpenAI" and "Codex" are trademarks of
+their respective owners and are used here only to describe what this software
+interoperates with.
+
+The name "Codex Remote" and this project's logo and other brand assets are NOT
+licensed under the Apache License, Version 2.0. All rights to them are reserved
+by the copyright holder. See Section 6 of the License, which grants no trademark
+rights.
+
+The TypeScript type definitions under src/generated/ are produced by the
+`codex app-server generate-ts` command of the OpenAI Codex CLI. They derive from
+that project's protocol schema and remain subject to its original license.

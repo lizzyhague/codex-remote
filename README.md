@@ -180,6 +180,15 @@ codex app-server generate-ts --out ./schemas
 
 升级类型时应记录 Codex CLI 版本、检查生成差异，并运行全部测试。
 
-## 许可证
+## 许可证与商标
 
-[MIT](LICENSE)。Copyright (c) 2026 lizzyhague。
+代码按 [Apache License 2.0](LICENSE) 发布。Copyright (c) 2026 lizzyhague。
+
+项目名称 “Codex Remote”、logo 及其他品牌素材**不在** Apache License 2.0 的授权范围
+内，版权人保留全部权利（见许可证第 6 条：本许可证不授予商标权）。你可以自由使用、
+修改和再分发本项目代码，但请为衍生版本使用你自己的名称和标识。
+
+本项目不是 OpenAI 官方产品，与 OpenAI 无任何关联，也未获其背书或赞助。“OpenAI”、
+“Codex” 等商标归各自所有者所有，此处仅用于说明本软件所对接的对象。
+
+其余声明见 [NOTICE](NOTICE)。
