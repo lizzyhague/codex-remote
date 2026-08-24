@@ -1,4 +1,4 @@
-import { renderMarkdown } from "./markdown.js?v=12";
+import { renderMarkdown, sanitizeHref } from "./markdown.js?v=12";
 
 const TOKEN_KEY = "codex-remote.token";
 const PROJECT_KEY = "codex-remote.project";
@@ -7,6 +7,7 @@ const SIDEBAR_COLLAPSED_KEY = "codex-remote.sidebar-collapsed";
 const RECONNECT_DELAY_MS = 2_500;
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_COMMAND_OUTPUT = 100_000;
+const TOOL_TITLE_LIMIT = 72;
 /** 输入框失焦后稍等再点亮 rewind / full access，避免同一下既失焦又点到确认。 */
 const COMPOSER_CONFIRM_UNLOCK_MS = 300;
 
@@ -919,12 +920,6 @@ function renderTasks(tasks) {
       if (item.type === "message") {
         addMessage(item.role, item.text, item.id, false);
         rendered += 1;
-      } else if (item.type === "command") {
-        completeCommand(item);
-        rendered += 1;
-      } else if (item.type === "file_change") {
-        addFileChange(item);
-        rendered += 1;
       }
     }
     if (task.error) {
@@ -1074,19 +1069,17 @@ function handleServerEvent(event) {
       hideThinking();
       completeAssistant(event.itemId, event.text || "");
       break;
-    case "command.started":
-      startCommand(event);
-      showThinking("正在执行命令");
+    case "tool.started":
+      sealAssistantStreams();
+      hideThinking();
+      startTool(event);
+      showThinking(event.tool?.kind === "think" ? "正在思考" : "正在执行工具");
       break;
-    case "command.output.delta":
-      appendCommandOutput(event.itemId, event.delta || "");
+    case "tool.output.delta":
+      appendToolOutput(event.itemId, event.delta || "");
       break;
-    case "command.completed":
-      completeCommand(event);
-      showThinking();
-      break;
-    case "file_change.completed":
-      addFileChange(event);
+    case "tool.completed":
+      completeTool(event);
       showThinking();
       break;
     case "task.completed":
@@ -1180,6 +1173,12 @@ function appendAssistantDelta(itemId, delta) {
   scheduleAssistantFrame(stream);
 }
 
+function sealAssistantStreams() {
+  for (const [itemId, stream] of state.assistantStreams) {
+    if (!stream.completed && stream.target) completeAssistant(itemId, stream.target);
+  }
+}
+
 function completeAssistant(itemId, text) {
   let stream = state.assistantStreams.get(itemId);
   if (!stream) {
@@ -1237,72 +1236,274 @@ function animateAssistant(stream) {
   scheduleAssistantFrame(stream);
 }
 
-function startCommand(event) {
+function startTool(event) {
   hideEmpty();
-  if (state.commands.has(event.itemId)) return;
+  const itemId = event.itemId ?? event.id;
+  if (!itemId || state.commands.has(itemId)) return;
+  const tool = publicTool(event.tool);
+  const kind = normalizeToolKind(tool.kind);
+  if (kind === "think") {
+    state.commands.set(itemId, { mode: "hidden", kind });
+    return;
+  }
+  const entries = publicToolEntries(tool.entries, kind, tool.title);
+  if (entries.length > 0 || isInlineToolKind(kind)) {
+    const group = document.createElement("div");
+    group.className = "tool-inline-group";
+    group.dataset.itemId = itemId;
+    elements.timeline.append(group);
+    const command = {
+      mode: "inline",
+      group,
+      kind,
+      title: tool.title || kind,
+      status: tool.status || "inProgress",
+      entries,
+    };
+    state.commands.set(itemId, command);
+    renderToolEntry(command);
+    scrollToBottom(false);
+    return;
+  }
+
   const details = document.createElement("details");
   details.className = "command";
-  details.dataset.itemId = event.itemId;
+  details.dataset.itemId = itemId;
+  details.dataset.kind = kind;
   const summary = document.createElement("summary");
-  const output = document.createElement("pre");
-  summary.textContent = `命令：${event.command || "（未知）"} · 运行中`;
-  output.textContent = "等待输出……";
-  details.append(summary, output);
+  const pane = document.createElement("div");
+  pane.className = "command-pane";
+  details.append(summary, pane);
   elements.timeline.append(details);
-  state.commands.set(event.itemId, {
+  const command = {
+    mode: "card",
     details,
     summary,
-    outputElement: output,
-    command: event.command || "（未知）",
-    output: "",
-    truncated: false,
-  });
+    pane,
+    kind,
+    title: tool.title || kind,
+    status: tool.status || "inProgress",
+    input: typeof tool.input === "string" ? tool.input : "",
+    query: typeof tool.query === "string" ? tool.query : "",
+    resources: publicResources(tool.resources),
+    output: typeof tool.output === "string" ? tool.output : "",
+    truncated: tool.outputTruncated === true,
+    exitCode: typeof tool.exitCode === "number" ? tool.exitCode : null,
+  };
+  state.commands.set(itemId, command);
+  renderToolEntry(command);
   scrollToBottom(false);
 }
 
-function appendCommandOutput(itemId, delta) {
+function appendToolOutput(itemId, delta) {
   const command = state.commands.get(itemId);
-  if (!command) return;
+  if (!command || command.mode !== "card" || command.kind !== "execute") return;
   command.output += delta;
   if (command.output.length > MAX_COMMAND_OUTPUT) {
     command.output = command.output.slice(-MAX_COMMAND_OUTPUT);
     command.truncated = true;
   }
-  command.outputElement.textContent = `${command.truncated ? "（较早输出已省略）\n" : ""}${command.output}`;
+  if (command.outputElement) command.outputElement.textContent = toolOutputText(command);
 }
 
-function completeCommand(event) {
-  if (!state.commands.has(event.id ?? event.itemId)) {
-    startCommand({
-      itemId: event.id ?? event.itemId,
-      command: event.command,
-    });
-  }
+function completeTool(event) {
   const itemId = event.id ?? event.itemId;
+  if (!itemId) return;
+  if (!state.commands.has(itemId)) startTool(event);
   const command = state.commands.get(itemId);
   if (!command) return;
-  command.command = event.command || command.command;
-  const status = commandStatus(event.status);
-  const exit = typeof event.exitCode === "number" ? `，退出码 ${event.exitCode}` : "";
-  command.summary.textContent = `命令：${command.command} · ${status}${exit}`;
-  if (typeof event.output === "string") {
-    command.output = event.output.length > MAX_COMMAND_OUTPUT
-      ? event.output.slice(-MAX_COMMAND_OUTPUT)
-      : event.output;
-    command.truncated = event.outputTruncated === true || event.output.length > MAX_COMMAND_OUTPUT;
+  const tool = publicTool(event.tool);
+  const nextKind = normalizeToolKind(tool.kind || command.kind);
+  if (nextKind === "think") {
+    command.details?.remove();
+    command.group?.remove();
+    state.commands.set(itemId, { mode: "hidden", kind: "think" });
+    return;
   }
-  command.outputElement.textContent = command.output
-    ? `${command.truncated ? "（较早输出已省略）\n" : ""}${command.output}`
-    : "没有输出。";
+  command.kind = nextKind;
+  if (typeof tool.title === "string" && tool.title) command.title = tool.title;
+  if (typeof tool.status === "string" && tool.status) command.status = tool.status;
+  if (command.mode === "inline") {
+    command.entries = publicToolEntries(tool.entries, nextKind, command.title);
+    renderToolEntry(command);
+    return;
+  }
+  if (typeof tool.input === "string") command.input = tool.input;
+  if (typeof tool.query === "string") command.query = tool.query;
+  if (Array.isArray(tool.resources)) command.resources = publicResources(tool.resources);
+  if (typeof tool.output === "string") {
+    command.output = tool.output.length > MAX_COMMAND_OUTPUT
+      ? tool.output.slice(-MAX_COMMAND_OUTPUT)
+      : tool.output;
+    command.truncated = tool.outputTruncated === true || tool.output.length > MAX_COMMAND_OUTPUT;
+  }
+  if (typeof tool.exitCode === "number") command.exitCode = tool.exitCode;
+  renderToolEntry(command);
 }
 
-function addFileChange(event) {
-  hideEmpty();
-  const note = document.createElement("p");
-  note.className = "file-change";
-  note.textContent = `文件改动完成：${event.changedFiles ?? 0} 个文件。`;
-  elements.timeline.append(note);
-  scrollToBottom(false);
+function renderToolEntry(command) {
+  if (command.mode === "hidden") return;
+  const status = commandStatus(command.status);
+  if (command.mode === "inline") {
+    command.group.replaceChildren();
+    const entries = command.entries.length > 0
+      ? command.entries
+      : [{ kind: command.kind, title: command.title }];
+    for (const entry of entries) {
+      const line = document.createElement("p");
+      line.className = "tool-inline";
+      line.textContent = `${entry.kind} · ${clipTitle(entry.title)} · ${status}`;
+      command.group.append(line);
+    }
+    return;
+  }
+  command.details.dataset.kind = command.kind;
+  const exit = typeof command.exitCode === "number" ? ` · 退出码 ${command.exitCode}` : "";
+  command.summary.textContent = `${command.kind} · ${clipTitle(command.title)} · ${status}${exit}`;
+  command.pane.replaceChildren();
+  command.outputElement = null;
+  if (command.kind === "search") {
+    appendToolTextBlock(
+      command.pane,
+      "关键词",
+      command.query || (isRunningTool(command) ? "等待关键词……" : "没有可用的关键词。"),
+      "command-input",
+    );
+    appendResourceBlock(command, "结果", "没有可用的结果地址。");
+    return;
+  }
+  if (command.kind === "fetch") {
+    appendResourceBlock(command, "地址", "没有可用的资源地址。");
+    return;
+  }
+  appendToolTextBlock(command.pane, "输入", command.input || "没有输入。", "command-input");
+  command.outputElement = appendToolTextBlock(
+    command.pane,
+    "输出",
+    toolOutputText(command),
+    "command-output",
+  );
+}
+
+function appendToolTextBlock(pane, label, text, className) {
+  const block = document.createElement("div");
+  block.className = "command-block";
+  const kicker = document.createElement("div");
+  kicker.className = "command-kicker";
+  kicker.textContent = label;
+  const content = document.createElement("pre");
+  content.className = className;
+  content.textContent = text;
+  block.append(kicker, content);
+  pane.append(block);
+  return content;
+}
+
+function appendResourceBlock(command, label, emptyText) {
+  const block = document.createElement("div");
+  block.className = "command-block";
+  const kicker = document.createElement("div");
+  kicker.className = "command-kicker";
+  kicker.textContent = label;
+  block.append(kicker);
+  if (!command.resources.length) {
+    const empty = document.createElement("p");
+    empty.className = "command-resource-empty";
+    empty.textContent = isRunningTool(command) ? "等待地址……" : emptyText;
+    block.append(empty);
+  } else {
+    const list = document.createElement("ul");
+    list.className = "command-resources";
+    for (const resource of command.resources) {
+      const item = document.createElement("li");
+      const text = resource.label ? `${resource.label} — ${resource.address}` : resource.address;
+      const href = sanitizeHref(resource.address);
+      if (href && /^https?:\/\//i.test(href)) {
+        const link = document.createElement("a");
+        link.href = href;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = text;
+        item.append(link);
+      } else {
+        item.textContent = text;
+      }
+      list.append(item);
+    }
+    block.append(list);
+  }
+  command.pane.append(block);
+}
+
+function publicTool(value) {
+  return value && typeof value === "object" ? value : {};
+}
+
+function publicToolEntries(value, fallbackKind, fallbackTitle) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const kind = normalizeToolKind(entry.kind);
+    if (!isInlineToolKind(kind)) return [];
+    return [{
+      kind,
+      title: typeof entry.title === "string" && entry.title.trim()
+        ? entry.title
+        : fallbackTitle || fallbackKind,
+    }];
+  });
+}
+
+function publicResources(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const resources = [];
+  for (const item of value) {
+    if (!item || typeof item.address !== "string") continue;
+    const address = item.address.trim();
+    if (!address || address.length > 2_048 || /[\u0000-\u001f\u007f]/.test(address) || seen.has(address)) {
+      continue;
+    }
+    seen.add(address);
+    resources.push({
+      address,
+      label: typeof item.label === "string"
+        ? item.label.replace(/\s+/g, " ").trim().slice(0, 256)
+        : "",
+    });
+  }
+  return resources;
+}
+
+function isRunningTool(command) {
+  return command.status === "inProgress" || command.status === "in_progress" ||
+    command.status === "pending";
+}
+
+function toolOutputText(command) {
+  if (command.output) {
+    return `${command.truncated ? "（较早输出已省略）\n" : ""}${command.output}`;
+  }
+  return isRunningTool(command) ? "等待输出……" : "没有输出。";
+}
+
+function normalizeToolKind(kind) {
+  return [
+    "read", "edit", "delete", "move", "search", "execute",
+    "think", "fetch", "switch_mode", "other",
+  ].includes(kind) ? kind : "other";
+}
+
+function isInlineToolKind(kind) {
+  return kind === "read" || kind === "edit" || kind === "delete" ||
+    kind === "move" || kind === "switch_mode";
+}
+
+function clipTitle(title) {
+  const normalized = String(title || "Tool").replace(/\s+/g, " ").trim() || "Tool";
+  return normalized.length <= TOOL_TITLE_LIMIT
+    ? normalized
+    : `${normalized.slice(0, TOOL_TITLE_LIMIT - 1)}…`;
 }
 
 function addTaskNote(text) {
@@ -1600,7 +1801,7 @@ function commandStatus(status) {
     ? "失败"
     : status === "declined"
     ? "已拒绝"
-    : status === "inProgress"
+    : status === "inProgress" || status === "in_progress" || status === "pending"
     ? "运行中"
     : status || "结束";
 }

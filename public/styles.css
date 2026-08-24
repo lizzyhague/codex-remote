@@ -714,17 +714,75 @@ button.small {
   overflow-wrap: anywhere;
 }
 
-.command pre {
-  max-height: 320px;
-  overflow: auto;
-  padding: 0.75rem;
+.command-pane {
   border-top: 1px solid var(--border);
-  color: #b9f6d2;
+}
+
+.command-block {
+  padding: 0.55rem 0.8rem 0.7rem;
+}
+
+.command-kicker {
+  margin-bottom: 0.28rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.command-block + .command-block {
+  border-top: 1px solid var(--border);
+}
+
+.command pre {
+  max-height: 240px;
+  margin: 0;
+  overflow: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.command-input {
+  color: #e5e7eb;
+}
+
+.command-output {
+  color: #b9f6d2;
+}
+
+.command-resources {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1.15rem;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.command-resources a {
+  color: #9bc8ff;
+}
+
+.command-resource-empty {
+  margin: 0;
+  color: var(--muted);
   font-size: 0.82rem;
 }
 
-.file-change,
+.tool-inline-group {
+  margin: 0 0 0.9rem;
+}
+
+.tool-inline {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.87rem;
+}
+
 .task-note {
   margin: 0 0 0.9rem;
   color: var(--muted);

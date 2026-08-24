@@ -89,7 +89,7 @@ test("streams assistant text and command output for its own thread", async () =>
       delta: "你",
     },
     {
-      type: "command_output_delta",
+      type: "tool_output_delta",
       threadId: "thread-1",
       turnId: "turn-1",
       itemId: "command-1",
@@ -221,7 +221,12 @@ test("emits authoritative completed message, command, and file summaries", () =>
     params: {
       threadId: "thread-1",
       turnId: "turn-1",
-      item: { type: "commandExecution", id: "command-1", command: "npm test" },
+      item: {
+        type: "commandExecution",
+        id: "command-1",
+        command: "npm test",
+        status: "inProgress",
+      },
     },
   });
   transport.emit({
@@ -257,7 +262,10 @@ test("emits authoritative completed message, command, and file summaries", () =>
         type: "fileChange",
         id: "change-1",
         status: "completed",
-        changes: [{}, {}],
+        changes: [
+          { path: "src/a.ts", kind: { type: "update", move_path: null } },
+          { path: "src/b.ts", kind: { type: "delete" } },
+        ],
       },
     },
   });
@@ -271,11 +279,22 @@ test("emits authoritative completed message, command, and file summaries", () =>
       text: "开始检查",
     },
     {
-      type: "command_started",
+      type: "tool_started",
       threadId: "thread-1",
       turnId: "turn-1",
       itemId: "command-1",
-      command: "npm test",
+      tool: {
+        kind: "execute",
+        title: "npm test",
+        status: "inProgress",
+        input: "npm test",
+        query: null,
+        resources: [],
+        output: null,
+        outputTruncated: false,
+        exitCode: null,
+        entries: [],
+      },
     },
     {
       type: "assistant_text_completed",
@@ -285,23 +304,127 @@ test("emits authoritative completed message, command, and file summaries", () =>
       text: "完成",
     },
     {
-      type: "command_completed",
+      type: "tool_completed",
       threadId: "thread-1",
       turnId: "turn-1",
       itemId: "command-1",
-      command: "npm test",
-      status: "completed",
-      output: "pass\n",
-      exitCode: 0,
-      durationMs: 20,
+      tool: {
+        kind: "execute",
+        title: "npm test",
+        status: "completed",
+        input: "npm test",
+        query: null,
+        resources: [],
+        output: "pass\n",
+        outputTruncated: false,
+        exitCode: 0,
+        entries: [],
+      },
     },
     {
-      type: "file_change_completed",
+      type: "tool_completed",
       threadId: "thread-1",
       turnId: "turn-1",
       itemId: "change-1",
-      status: "completed",
-      changedFiles: 2,
+      tool: {
+        kind: "edit",
+        title: "2 个文件",
+        status: "completed",
+        input: null,
+        query: null,
+        resources: [],
+        output: null,
+        outputTruncated: false,
+        exitCode: null,
+        entries: [
+          { kind: "edit", title: "src/a.ts" },
+          { kind: "delete", title: "src/b.ts" },
+        ],
+      },
     },
   ]);
+});
+
+test("streams raw programmatic exec as one paired tool entry", () => {
+  const transport = new FakeTransport();
+  const session = new CodexTurnSession(transport, "thread-1", "turn-1");
+  const events: CodexStreamEvent[] = [];
+  session.onEvent((event) => events.push(event));
+
+  transport.emit({
+    method: "rawResponseItem/completed",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call",
+        call_id: "call-1",
+        name: "exec",
+        input: "const result = await tools.exec_command({ cmd: \"npm test\" });",
+      },
+    },
+  });
+  transport.emit({
+    method: "rawResponseItem/completed",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call_output",
+        call_id: "call-1",
+        output: [{ type: "input_text", text: "pass\n" }],
+      },
+    },
+  });
+
+  assert.equal(events.length, 2);
+  assert.equal(events[0]?.type, "tool_started");
+  assert.equal(events[1]?.type, "tool_completed");
+  assert.equal(
+    events[0]?.type === "tool_started" ? events[0].itemId : null,
+    "raw-exec:call-1",
+  );
+  assert.equal(
+    events[1]?.type === "tool_completed" ? events[1].itemId : null,
+    "raw-exec:call-1",
+  );
+  assert.equal(
+    events[1]?.type === "tool_completed" ? events[1].tool.output : null,
+    "pass\n",
+  );
+});
+
+test("ignores orphan raw exec outputs and unrelated custom calls", () => {
+  const transport = new FakeTransport();
+  const session = new CodexTurnSession(transport, "thread-1", "turn-1");
+  const events: CodexStreamEvent[] = [];
+  session.onEvent((event) => events.push(event));
+
+  transport.emit({
+    method: "rawResponseItem/completed",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call",
+        call_id: "call-other",
+        name: "another_tool",
+        input: "payload",
+      },
+    },
+  });
+  transport.emit({
+    method: "rawResponseItem/completed",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call_output",
+        call_id: "call-missing",
+        output: "ignored",
+      },
+    },
+  });
+
+  assert.deepEqual(events, []);
 });

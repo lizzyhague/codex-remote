@@ -42,6 +42,47 @@ test("marks only ordinary user turns for input restoration", () => {
   assert.equal(tasks[3]?.restoresInput, false);
 });
 
+test("reload restores only dialog while preserving separate assistant items", () => {
+  const hiddenItems = [
+    {
+      type: "agentMessage",
+      id: "assistant-before",
+      text: "第一段",
+      phase: null,
+      memoryCitation: null,
+    },
+    { type: "reasoning", id: "reasoning-1", summary: ["hidden"], content: [] },
+    {
+      type: "commandExecution",
+      id: "command-1",
+      command: "npm test",
+      aggregatedOutput: "private output",
+    },
+    {
+      type: "fileChange",
+      id: "change-1",
+      changes: [{ path: "src/a.ts", kind: { type: "update", move_path: null }, diff: "private" }],
+    },
+    {
+      type: "agentMessage",
+      id: "assistant-after",
+      text: "第二段",
+      phase: null,
+      memoryCitation: null,
+    },
+    { type: "exitedReviewMode", id: "review-result", review: "审查报告" },
+  ] as ThreadItem[];
+
+  const tasks = toBrowserTasks([turn("tool-boundaries", hiddenItems)]);
+  assert.deepEqual(tasks[0]?.items, [
+    { type: "message", id: "assistant-before", role: "assistant", text: "第一段" },
+    { type: "message", id: "assistant-after", role: "assistant", text: "第二段" },
+    { type: "message", id: "review-result", role: "assistant", text: "审查报告" },
+  ]);
+  assert.equal(JSON.stringify(tasks).includes("private"), false);
+  assert.equal(JSON.stringify(tasks).includes("npm test"), false);
+});
+
 function turn(id: string, items: ThreadItem[]): Turn {
   return {
     id,

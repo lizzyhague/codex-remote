@@ -2,33 +2,14 @@ import type { ThreadItem } from "../generated/v2/ThreadItem.ts";
 import type { Turn } from "../generated/v2/Turn.ts";
 import type { OpenedSession, SessionPage, SessionSummary } from "../sessions/service.ts";
 
-const MAX_STORED_COMMAND_OUTPUT = 100_000;
-
 export type BrowserSessionSummary = Omit<SessionSummary, "sessionId">;
 
-export type BrowserTimelineItem =
-  | {
-    type: "message";
-    id: string;
-    role: "user" | "assistant";
-    text: string;
-  }
-  | {
-    type: "command";
-    id: string;
-    command: string;
-    status: string;
-    output: string | null;
-    outputTruncated: boolean;
-    exitCode: number | null;
-    durationMs: number | null;
-  }
-  | {
-    type: "file_change";
-    id: string;
-    status: string;
-    changedFiles: number;
-  };
+export type BrowserTimelineItem = {
+  type: "message";
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+};
 
 export type BrowserTaskSnapshot = {
   id: string;
@@ -115,28 +96,16 @@ function toBrowserTimelineItem(item: ThreadItem): BrowserTimelineItem[] {
       text: item.text,
     }];
   }
-  if (item.type === "commandExecution") {
-    const output = item.aggregatedOutput;
-    const outputTruncated = output !== null && output.length > MAX_STORED_COMMAND_OUTPUT;
+  if (item.type === "exitedReviewMode") {
     return [{
-      type: "command",
+      type: "message",
       id: item.id,
-      command: item.command,
-      status: item.status,
-      output: outputTruncated ? output.slice(-MAX_STORED_COMMAND_OUTPUT) : output,
-      outputTruncated,
-      exitCode: item.exitCode,
-      durationMs: item.durationMs,
+      role: "assistant",
+      text: item.review,
     }];
   }
-  if (item.type === "fileChange") {
-    return [{
-      type: "file_change",
-      id: item.id,
-      status: item.status,
-      changedFiles: item.changes.length,
-    }];
-  }
+  // 重新加载只恢复对话。工具、思考和模式切换仍作为独立 ThreadItem
+  // 保存在 App Server 中，因此相邻的 agentMessage 不会被合并成一个气泡。
   return [];
 }
 

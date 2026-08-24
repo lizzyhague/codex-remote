@@ -272,6 +272,34 @@ test("authenticates and translates a full streaming task", async () => {
     },
   });
   appServer.notify({
+    method: "item/started",
+    params: {
+      threadId: "session-1",
+      turnId: "task-1",
+      item: {
+        type: "webSearch",
+        id: "search-1",
+        query: "Codex App Server",
+        action: { type: "search", query: "Codex App Server" },
+        results: null,
+      },
+    },
+  });
+  appServer.notify({
+    method: "item/completed",
+    params: {
+      threadId: "session-1",
+      turnId: "task-1",
+      item: {
+        type: "webSearch",
+        id: "search-1",
+        query: "Codex App Server",
+        action: { type: "search", query: "Codex App Server" },
+        results: [{ title: "Docs", url: "https://developers.openai.com/codex/app-server" }],
+      },
+    },
+  });
+  appServer.notify({
     method: "turn/completed",
     params: {
       threadId: "session-1",
@@ -288,8 +316,18 @@ test("authenticates and translates a full streaming task", async () => {
     "message.user",
     "response",
     "message.delta",
+    "tool.started",
+    "tool.completed",
     "task.completed",
   ]);
+  const completedTool = socket.messages
+    .map((message) => message.type === "event" ? message.event as JsonObject : null)
+    .find((event) => event?.type === "tool.completed");
+  assert.equal((completedTool?.tool as JsonObject).kind, "search");
+  assert.deepEqual((completedTool?.tool as JsonObject).resources, [{
+    address: "https://developers.openai.com/codex/app-server",
+    label: "Docs",
+  }]);
   assert.equal(services.locks.acquire("projects/demo", "computer", "other"), true);
   approvals.dispose();
   await connection.disconnect();

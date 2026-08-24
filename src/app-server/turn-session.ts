@@ -5,6 +5,11 @@ import type { TurnInterruptParams } from "../generated/v2/TurnInterruptParams.ts
 import type { TurnInterruptResponse } from "../generated/v2/TurnInterruptResponse.ts";
 
 import type { AppServerMessageListener, JsonObject } from "./client.ts";
+import {
+  publicRawToolView,
+  publicToolView,
+  type PublicToolView,
+} from "./tool-view.ts";
 
 export interface AppServerTransport {
   request<Result = unknown>(method: string, params: unknown): Promise<Result>;
@@ -28,18 +33,18 @@ export type CodexStreamEvent =
     delta: string;
   }
   | {
-    type: "command_output_delta";
+    type: "tool_output_delta";
     threadId: string;
     turnId: string;
     itemId: string;
     delta: string;
   }
   | {
-    type: "command_started";
+    type: "tool_started";
     threadId: string;
     turnId: string;
     itemId: string;
-    command: string;
+    tool: PublicToolView;
   }
   | {
     type: "assistant_text_completed";
@@ -49,23 +54,11 @@ export type CodexStreamEvent =
     text: string;
   }
   | {
-    type: "command_completed";
+    type: "tool_completed";
     threadId: string;
     turnId: string;
     itemId: string;
-    command: string;
-    status: string;
-    output: string | null;
-    exitCode: number | null;
-    durationMs: number | null;
-  }
-  | {
-    type: "file_change_completed";
-    threadId: string;
-    turnId: string;
-    itemId: string;
-    status: string;
-    changedFiles: number;
+    tool: PublicToolView;
   }
   | {
     type: "turn_completed";
@@ -94,6 +87,7 @@ export class CodexTurnSession {
   #activeTurnId: string | null;
   #starting = false;
   #completedBeforeStartResponse = new Set<string>();
+  #rawExecTools = new Map<string, { turnId: string; tool: PublicToolView }>();
   #interruptPromise: Promise<boolean> | null = null;
   #interruptRequestedFor: string | null = null;
 
@@ -194,6 +188,7 @@ export class CodexTurnSession {
   dispose(): void {
     this.#unsubscribe();
     this.#listeners.clear();
+    this.#rawExecTools.clear();
   }
 
   #handleNotification(message: JsonObject): void {
@@ -228,18 +223,15 @@ export class CodexTurnSession {
         }
         return;
       }
-      if (
-        item?.type === "commandExecution" &&
-        typeof item.id === "string" &&
-        typeof item.command === "string" &&
-        typeof params.turnId === "string"
-      ) {
+      if (item && typeof item.id === "string" && typeof params.turnId === "string") {
+        const tool = publicToolView(item, "inProgress");
+        if (!tool) return;
         this.#emit({
-          type: "command_started",
+          type: "tool_started",
           threadId: this.#threadId,
           turnId: params.turnId,
           itemId: item.id,
-          command: item.command,
+          tool,
         });
       }
       return;
@@ -247,6 +239,11 @@ export class CodexTurnSession {
 
     if (method === "item/completed") {
       this.#handleCompletedItem(params);
+      return;
+    }
+
+    if (method === "rawResponseItem/completed") {
+      this.#handleRawResponseItem(params);
       return;
     }
 
@@ -276,7 +273,7 @@ export class CodexTurnSession {
     if (method === "item/commandExecution/outputDelta") {
       const delta = readDelta(params);
       if (delta) {
-        this.#emit({ type: "command_output_delta", ...delta });
+        this.#emit({ type: "tool_output_delta", ...delta });
       }
       return;
     }
@@ -292,6 +289,9 @@ export class CodexTurnSession {
       }
       if (this.#starting) {
         this.#completedBeforeStartResponse.add(turn.id);
+      }
+      for (const [callId, pending] of this.#rawExecTools) {
+        if (pending.turnId === turn.id) this.#rawExecTools.delete(callId);
       }
       const error = asObject(turn.error);
       this.#emit({
@@ -344,35 +344,49 @@ export class CodexTurnSession {
       this.#emit({ type: "assistant_text_completed", ...common, text: item.review });
       return;
     }
-    if (
-      item.type === "commandExecution" &&
-      typeof item.command === "string" &&
-      typeof item.status === "string"
-    ) {
+    const tool = publicToolView(item, "completed");
+    if (tool) this.#emit({ type: "tool_completed", ...common, tool });
+  }
+
+  #handleRawResponseItem(params: JsonObject): void {
+    if (typeof params.turnId !== "string") return;
+    const item = asObject(params.item);
+    if (!item) return;
+
+    if (item.type === "custom_tool_call") {
+      const event = publicRawToolView(item);
+      if (!event || event.phase !== "started" || this.#rawExecTools.has(event.callId)) return;
+      this.#rawExecTools.set(event.callId, { turnId: params.turnId, tool: event.tool });
       this.#emit({
-        type: "command_completed",
-        ...common,
-        command: item.command,
-        status: item.status,
-        output: typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : null,
-        exitCode: typeof item.exitCode === "number" ? item.exitCode : null,
-        durationMs: typeof item.durationMs === "number" ? item.durationMs : null,
+        type: "tool_started",
+        threadId: this.#threadId,
+        turnId: params.turnId,
+        itemId: rawExecItemId(event.callId),
+        tool: event.tool,
       });
       return;
     }
-    if (
-      item.type === "fileChange" &&
-      typeof item.status === "string" &&
-      Array.isArray(item.changes)
-    ) {
-      this.#emit({
-        type: "file_change_completed",
-        ...common,
-        status: item.status,
-        changedFiles: item.changes.length,
-      });
-    }
+
+    if (item.type !== "custom_tool_call_output") return;
+    const callId = typeof item.call_id === "string" ? item.call_id : null;
+    if (!callId) return;
+    const pending = this.#rawExecTools.get(callId);
+    if (!pending || pending.turnId !== params.turnId) return;
+    const event = publicRawToolView(item, pending.tool);
+    if (!event || event.phase !== "completed") return;
+    this.#rawExecTools.delete(callId);
+    this.#emit({
+      type: "tool_completed",
+      threadId: this.#threadId,
+      turnId: params.turnId,
+      itemId: rawExecItemId(callId),
+      tool: event.tool,
+    });
   }
+}
+
+function rawExecItemId(callId: string): string {
+  return `raw-exec:${callId}`;
 }
 
 function readTurnStartId(value: unknown): string {
