@@ -1,6 +1,6 @@
 {
   "name": "Codex Remote",
-  "short_name": "Codex",
+  "short_name": "Codex Remote",
   "description": "通过私人网络使用 VPS 上的 Codex",
   "start_url": "/",
   "scope": "/",
