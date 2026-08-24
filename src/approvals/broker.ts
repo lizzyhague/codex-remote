@@ -26,6 +26,10 @@ export type ApprovalRequest =
   }
   | ApprovalBase & {
     kind: "file_change";
+  }
+  | ApprovalBase & {
+    kind: "permissions";
+    permissions: JsonObject;
   };
 
 export type ApprovalAnswer = "approve_once" | "decline";
@@ -83,8 +87,10 @@ export class ApprovalBroker {
       return false;
     }
 
-    const decision = answer === "approve_once" ? "accept" : "decline";
-    this.#transport.respondToServerRequest(pending.requestId, { decision });
+    this.#transport.respondToServerRequest(
+      pending.requestId,
+      approvalResponse(pending.approval, answer),
+    );
     this.#removePending(
       approvalId,
       answer === "approve_once" ? "approved" : "declined",
@@ -119,9 +125,10 @@ export class ApprovalBroker {
     );
 
     for (const [approvalId, pending] of matches) {
-      this.#transport.respondToServerRequest(pending.requestId, {
-        decision: "cancel",
-      });
+      this.#transport.respondToServerRequest(
+        pending.requestId,
+        cancelApprovalResponse(pending.approval),
+      );
       this.#removePending(approvalId, "cancelled");
     }
     return matches.length;
@@ -138,6 +145,8 @@ export class ApprovalBroker {
       ? readCommandApproval(params)
       : message.method === "item/fileChange/requestApproval"
       ? readFileChangeApproval(params)
+      : message.method === "item/permissions/requestApproval"
+      ? readPermissionsApproval(params)
       : null;
     if (!approval) {
       return;
@@ -212,6 +221,45 @@ function readFileChangeApproval(
 ): Omit<Extract<ApprovalRequest, { kind: "file_change" }>, "id"> | null {
   const base = readApprovalBase(params);
   return base ? { ...base, kind: "file_change" } : null;
+}
+
+function readPermissionsApproval(
+  params: JsonObject,
+): Omit<Extract<ApprovalRequest, { kind: "permissions" }>, "id"> | null {
+  const base = readApprovalBase(params);
+  const permissions = asObject(params.permissions);
+  return base && permissions
+    ? { ...base, kind: "permissions", permissions: structuredClone(permissions) }
+    : null;
+}
+
+function approvalResponse(
+  approval: ApprovalRequest,
+  answer: ApprovalAnswer,
+): JsonObject {
+  if (approval.kind !== "permissions") {
+    return { decision: answer === "approve_once" ? "accept" : "decline" };
+  }
+  if (answer !== "approve_once") {
+    return { permissions: {}, scope: "turn" };
+  }
+  const granted: JsonObject = {};
+  if (approval.permissions.network !== null && approval.permissions.network !== undefined) {
+    granted.network = approval.permissions.network;
+  }
+  if (
+    approval.permissions.fileSystem !== null &&
+    approval.permissions.fileSystem !== undefined
+  ) {
+    granted.fileSystem = approval.permissions.fileSystem;
+  }
+  return { permissions: granted, scope: "turn" };
+}
+
+function cancelApprovalResponse(approval: ApprovalRequest): JsonObject {
+  return approval.kind === "permissions"
+    ? { permissions: {}, scope: "turn" }
+    : { decision: "cancel" };
 }
 
 function readApprovalBase(params: JsonObject): Omit<ApprovalBase, "id"> | null {

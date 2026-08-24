@@ -26,6 +26,11 @@ type RpcErrorPayload = {
 export type AppServerClientOptions = {
   codexBinary?: string;
   workingDirectory?: string;
+  /**
+   * 为这个 app-server 建立独立进程组。会话 Worker 使用它，确保异常清理时
+   * 可以终止该 Worker 启动的完整进程树；共享目录进程保持默认值 false。
+   */
+  processGroup?: boolean;
   onNotification?: AppServerMessageListener;
   onServerRequest?: AppServerMessageListener;
 };
@@ -48,6 +53,7 @@ export class AppServerRpcError extends Error {
  */
 export class AppServerClient {
   readonly #child: ChildProcessWithoutNullStreams;
+  readonly #processGroup: boolean;
   readonly #notificationListeners = new Set<AppServerMessageListener>();
   readonly #serverRequestListeners = new Set<AppServerMessageListener>();
   readonly #pending = new Map<RequestId, PendingRequest>();
@@ -59,6 +65,7 @@ export class AppServerClient {
   #unexpectedLines = 0;
 
   constructor(options: AppServerClientOptions = {}) {
+    this.#processGroup = options.processGroup === true;
     if (options.onNotification) {
       this.#notificationListeners.add(options.onNotification);
     }
@@ -76,6 +83,7 @@ export class AppServerClient {
         cwd: options.workingDirectory,
         env: process.env,
         stdio: ["pipe", "pipe", "pipe"],
+        detached: this.#processGroup,
       },
     );
 
@@ -185,9 +193,55 @@ export class AppServerClient {
     ]).finally(() => clearTimeout(timer));
 
     if (!exited) {
-      this.#child.kill("SIGTERM");
-      await this.#exitPromise;
+      this.#terminate("SIGTERM");
+      let killTimer: NodeJS.Timeout | undefined;
+      const terminated = await Promise.race([
+        this.#exitPromise.then(() => true),
+        new Promise<false>((resolve) => {
+          killTimer = setTimeout(() => resolve(false), 2_000);
+        }),
+      ]).finally(() => clearTimeout(killTimer));
+      if (!terminated) {
+        this.#terminate("SIGKILL");
+        await this.#exitPromise;
+      }
     }
+    await this.#terminateRemainingProcessGroup();
+  }
+
+  async #terminateRemainingProcessGroup(): Promise<void> {
+    const pid = this.#child.pid;
+    if (!pid || !this.#processGroup || !processGroupExists(pid)) return;
+    // 组长退出后，仍可能有忽略 stdin 生命周期的工具孙进程留在同一组。
+    try {
+      process.kill(-pid, "SIGTERM");
+    } catch {
+      return;
+    }
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      if (!processGroupExists(pid)) return;
+    }
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // ESRCH 表示整个组已经干净退出，正是期望状态。
+    }
+  }
+
+  #terminate(signal: NodeJS.Signals): void {
+    const pid = this.#child.pid;
+    if (pid && this.#processGroup) {
+      try {
+        // detached 子进程的 pid 同时是进程组 id；负 pid 会把工具子进程一起终止。
+        process.kill(-pid, signal);
+        return;
+      } catch {
+        // 非 Worker 客户端没有独立进程组，或者进程已先一步退出；退回单进程信号。
+      }
+    }
+    this.#child.kill(signal);
   }
 
   #write(message: object): void {
@@ -268,6 +322,15 @@ export class AppServerClient {
       pending.reject(error);
     }
     this.#pending.clear();
+  }
+}
+
+function processGroupExists(processGroupId: number): boolean {
+  try {
+    process.kill(-processGroupId, 0);
+    return true;
+  } catch {
+    return false;
   }
 }
 

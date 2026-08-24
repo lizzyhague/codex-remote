@@ -23,6 +23,30 @@ test("parses the small stable browser protocol", () => {
     searchTerm: "测试",
   });
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
+    type: "message.send",
+    requestId: "send-1",
+    clientMessageId: "018-message",
+    text: "后台执行",
+  })), {
+    type: "message.send",
+    requestId: "send-1",
+    clientMessageId: "018-message",
+    text: "后台执行",
+  });
+  assert.deepEqual(parseBrowserRequest(JSON.stringify({
+    type: "interaction.answer",
+    requestId: "answer-1",
+    interactionId: "interaction-1",
+    action: "submit",
+    answers: { choice: ["A"] },
+  })), {
+    type: "interaction.answer",
+    requestId: "answer-1",
+    interactionId: "interaction-1",
+    action: "submit",
+    answers: { choice: ["A"] },
+  });
+  assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "sessions.mutate",
     requestId: "sessions-2",
     projectId: "projects/demo",

@@ -29,10 +29,10 @@ export type RestartableAppServerOptions =
 /**
  * 在不结束 HTTP 服务的前提下管理可重建的 app-server 子进程。
  *
- * app-server 会独占已加载会话的 rollout writer，而且 thread/unsubscribe 在最后一个
- * 订阅者离开后仍有 30 分钟的卸载宽限期。最后一个网页客户端离开时重建子进程，
- * 才能立即把 writer 交还给本机 Codex CLI。监听器挂在这一层，因此重建后不需要
- * 重新创建 SessionService、ApprovalBroker 或 HTTP 服务。
+ * 生产入口把这一实例作为目录 App Server，不用它执行 turn 或长期恢复会话；旧连接
+ * 状态机仍可在最后一个网页客户端离开时重建它，以立即释放曾加载的 rollout writer。
+ * 监听器挂在这一层，因此重建后不需要重新创建 SessionService、ApprovalBroker 或
+ * HTTP 服务。
  */
 export class RestartableAppServer {
   readonly #clientOptions: Omit<
@@ -105,7 +105,7 @@ export class RestartableAppServer {
     this.#current.respondToServerRequest(id, result);
   }
 
-  /** 只在所有网页连接完成清理后调用；关闭旧进程会立即释放所有 rollout writer。 */
+  /** 旧连接路径在所有网页连接完成清理后调用，关闭旧进程并释放它的 writer。 */
   releaseWriters(): Promise<void> {
     if (this.#closed) {
       return Promise.reject(new Error("codex app-server 运行时已经关闭。"));

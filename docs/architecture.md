@@ -33,16 +33,18 @@ Codex Remote 解决的是高 RTT 下的交互手感问题。编辑发生在浏�
 入口是 `src/server/main.ts`。它创建：
 
 - `ProjectCatalog`：解析项目白名单；
-- `AppServerClient`：管理一个 `codex app-server --stdio` 子进程；
+- `RestartableAppServer`：管理只做列表、读取和会话整理的目录 App Server；
+- `SessionWorkerManager`：持久化已接受任务，按会话启动独立 App Server Worker；
 - `CodexSessionService`：把项目 ID 翻译为 App Server 的 thread 请求；
 - `ApprovalBroker`：接收 App Server 的双向审批请求并回答；
-- `ProjectTaskLocks`：限制每个项目只有一个控制设备；
+- `ProjectTaskLocks`：限制每个项目只有一个正在执行的任务；
 - `RemoteWebSocketServer`：提供静态 PWA、健康检查和浏览器 WebSocket。
 
-这一层不保存 Codex 对话副本。会话仍由 Codex 自己保存和恢复。为了区分
-“已归档”和“回收站”，Node 服务只额外保存一份小型回收站登记，其中包含
-thread ID、项目 ID、删除时间和恢复目标，不包含标题、turn 或消息正文。打开
-回收站列表时，显示摘要仍从 Codex App Server 读取。
+Codex 仍是原生会话和完整历史的权威存储。为了让页面断开后继续执行，Node 服务还会
+在 SQLite 中保存已接受消息、任务状态、脱敏后的浏览器流事件、任务权限模式、逐会话 Full access 状态和中断原因；
+其中可能含有消息正文和工具输出。回收站登记仍是独立的小型 JSON 文件，只包含
+thread ID、项目 ID、删除时间和恢复目标。打开回收站列表时，摘要仍从 Codex App
+Server 读取。
 
 ### 前端启动与静态资源
 
@@ -50,7 +52,11 @@ thread ID、项目 ID、删除时间和恢复目标，不包含标题、turn 或
 
 斜杠菜单是可选增强：`slash-menu.js` 单独注册菜单类，`app.js` 在它不可用时使用空实现，核心登录和会话选择仍能工作。当前浏览器请求等待 15 秒后会关闭连接并重连，避免一个没有响应的请求永久禁用页面控件。
 
-HTTP 服务只提供 `src/server/http-server.ts` 中 `STATIC_FILES` 明确列出的文件。新增 `public/` 资源时，必须同时增加静态路由和相应测试，否则浏览器会收到 404。PWA 外壳资源使用查询参数版本，Service Worker 也使用独立缓存名；当前版本是 `v13`。修改外壳文件时要同步更新两处版本，防止旧 HTML 和新脚本混用。
+鉴权响应会声明后台 Worker 能力。这样发布静态文件但尚未重启旧后端的短暂窗口里，
+新前端仍沿用旧版的断线和会话导航限制；只有连接到带能力标记的新后端后，才显示并
+启用后台执行行为。
+
+HTTP 服务只提供 `src/server/http-server.ts` 中 `STATIC_FILES` 明确列出的文件。新增 `public/` 资源时，必须同时增加静态路由和相应测试，否则浏览器会收到 404。PWA 外壳资源使用查询参数版本，Service Worker 也使用独立缓存名；当前应用资源版本是 `v15`，缓存名是 `v16`。修改外壳文件时要同步更新两处版本，防止旧 HTML 和新脚本混用。
 
 ### Codex App Server
 
@@ -113,33 +119,40 @@ Codex App Server 的 `thread/archive` 和 `thread/unarchive` 表示普通归档�
 浏览器的会话整理请求受项目锁保护，运行任务期间不能归档或删除。整理完成后，
 所有已连接设备都会收到列表变更通知；停留在被移走会话上的设备会退出该会话。
 
-同一项目同时只允许一个浏览器连接控制任务。另一个设备可以观察服务器推送的新增用户消息和 AI 输出，但不能同时开始或停止该任务。
+同一项目同时只运行一个 AI 任务。任务控制权属于已认证的后端会话，不再属于某个
+WebSocket；任意在线的已认证设备都可以观察输出、处理审批或停止任务。
 
 登录或断线重连后只加载会话列表，不自动恢复浏览器上次保存的会话。恢复会话由用户明确选择，避免状态不确定的旧会话在启动阶段占住全部导航控件。
 
-切换会话不会自动停止另一个设备控制的任务。控制设备断线时，后端会中断它拥有的活动任务；用户重新连接后可以明确要求继续。
+切换项目或会话、关闭页面或 WebSocket 断线不会直接停止已接受任务。任务会在独立
+Worker 中继续，直到完成、用户停止、遇到无人处理的权限/输入请求，或 Worker 失败；
+用户可以同时打开另一个会话，受项目锁和全局 Worker 上限约束继续工作。
 
-这套锁只存在于当前 Node 进程内。服务重启后锁会重建，Codex 会话本身仍在磁盘上。
+进程内项目锁在服务重启后会重建；SQLite 中的队列和任务状态则会恢复。重启前仍在
+执行的任务被标成 `interrupted`，尚未启动的队列继续参与调度，Codex 会话本身仍在
+磁盘上。
 
-项目锁必须能自己放开，否则一个项目会永久停在“正在执行任务”。除了任务结束和
-连接断开，还有两条兜底路径：关闭当前会话（切换、被归档或移入回收站）时立即
-释放；`/compact` 这类响应里没有 turn ID 的命令，如果十秒内没有等到
-`turn/started`，也会释放锁并通知浏览器结束“运行中”状态。
+项目锁必须能自己放开，否则一个项目会永久停在“正在执行任务”。生产 Worker 路径
+在任务完成、失败或 Worker 退出时统一清理并释放；`/compact` 这类响应里没有 turn
+ID 的命令，如果十秒内没有等到 `turn/started`，也会完成任务记录并释放锁。
 
 浏览器 WebSocket 有服务端心跳。手机换网络或息屏时 TCP 常常只是半开，没有心跳
-就要等内核超时才会发现，这期间旧连接会一直占住项目锁，挡住用户重连后的新连接。
+就要等内核超时才会发现；后端需要准确知道是否还有已认证设备在线，才能执行权限
+请求的十秒宽限规则。
 
-当前整个 Codex Remote 实例共用一个 App Server 子进程。Codex App Server 会独占
-已加载会话的 rollout writer；官方的 `thread/unsubscribe` 在最后一个订阅者离开后
-仍会把 thread 保留最多 30 分钟，不能满足“关掉网页后立即用本机
-`codex resume` 接管”的需求。由于当前架构不能单独重建某个会话对应的进程，关闭
-目标会话所在的页面并不足以立即释放它的 writer。
+目录 App Server 不执行 turn，也不长期恢复可写 thread。每个活动会话由独立
+`codex app-server --stdio` 子进程承载；Worker 处在自己的进程组内，正常完成、用户
+取消和异常清理都会关闭整个组。任务完成且该会话队列为空后，Worker 立即退出，因而
+只释放该会话的 rollout writer，不影响其他会话和 HTTP/Tailscale 入口。
 
-任一浏览器连接使用过 thread 后，后端会记录一次待处理的 writer 释放。只有全部
-浏览器 WebSocket 连接都断开并完成清理，服务才会重建公共 App Server 子进程，一次
-释放其中已经加载的所有会话 writer；Node.js HTTP 服务和 Tailscale/公网入口不会
-退出。即使剩余连接只停留在项目或会话列表，也会推迟这次重建；这类只读连接本身
-不会加载新的 thread。恰好在重建期间到达的浏览器请求会等待新子进程完成初始化。
+Codex 的空 thread 在第一轮开始前还没有 rollout。新建空会话因此暂时保留创建它的
+Worker；首条消息到达后转为正常活动 Worker。若所有查看该空会话的页面都离开，后端
+等待同一离线宽限期后关闭它；此时没有用户消息或回复需要恢复。历史会话只在执行
+操作时启动 Worker，单纯查看列表不会启动。
+
+默认最多同时存在两个 Worker。达到上限或同一项目已有任务时，新消息先以 `queued`
+状态持久化；调度器在资源可用后按接收顺序启动。每次启动前读取 Linux
+`MemAvailable`，默认低于 1024 MiB 时继续排队，而不是冒险把 VPS 推入 OOM。
 
 ## 斜杠命令
 
@@ -159,7 +172,10 @@ Codex App Server 的 `thread/archive` 和 `thread/unarchive` 表示普通归档�
 
 AI 回复期间输入框保持可编辑，用户可以预先写下一条消息；发送动作仍不可用，原有停止任务按钮继续控制当前回复。回复结束后草稿保持不变并可以发送。
 
-`/model`、`/permissions` 和 `/plan` 通过 `thread/settings/update` 改当前已加载 thread 的后续设置，不写 Codex 全局配置文件。这三个命令在当前会话有任务运行时会被后端拒绝：它们会立刻影响正在跑的任务，而观察端设备本来就不该有任务控制权，否则它可以在别人的任务跑到一半时把沙箱放开到“完全访问”。Codex CLI 0.147.0 将会话设置、权限 profile 和协作模式接口标为实验 App Server 能力，因此客户端初始化声明 `experimentalApi: true`；这只开启 stdio 客户端协议能力，不会让 App Server 监听网络。
+`/model`、`/permissions` 和 `/plan` 通过 `thread/settings/update` 改当前已加载 thread 的后续设置，不写 Codex 全局配置文件。这三个命令在当前会话有任务运行时会被后端拒绝，因为它们会立刻改变正在执行任务的模型、协作模式或沙箱权限。Codex CLI 0.147.0 将会话设置、权限 profile 和协作模式接口标为实验 App Server 能力，因此客户端初始化声明 `experimentalApi: true`；这只开启 stdio 客户端协议能力，不会让 App Server 监听网络。
+
+Full access 的当前会话选择另外写入 Worker SQLite。每个短生命周期 Worker 和任务
+Worker 启动后都先与该状态协调；任务被接受时还会固化本轮权限模式，启动时不能降级。
 
 Codex Remote 不在 `thread/start` 或 `thread/resume` 上覆盖默认权限。新建和恢复会话
 继承部署主机上的 Codex 默认配置；用户仍可通过 `/permissions` 切换 App Server
@@ -168,7 +184,7 @@ Codex Remote 不在 `thread/start` 或 `thread/resume` 上覆盖默认权限。�
 
 `/model` 的模型和思考强度分两级选择。第二级只显示 `model/list` 为所选模型返回的 `supportedReasoningEfforts`；用户选定后再把 model 和 effort 一次性写入当前 thread。手动输入 `/model <id>` 仍使用该模型的默认 effort。
 
-`/compact` 和 `/review` 会成为受项目锁约束的活动任务，可使用同一个“停止”按钮，控制设备断线时也会中断。第一版 `/usage` 不兑换 rate-limit reset credit，避免只读查看意外变成账户写操作。
+`/compact` 和 `/review` 与普通消息一样进入持久化任务队列，可使用同一个“停止”按钮，页面断开后也能继续。第一版 `/usage` 不兑换 rate-limit reset credit，避免只读查看意外变成账户写操作。
 
 `/rewind` 每次固定调用 `thread/rollback` 回退一个底层 turn；完成后用 App Server 返回的 turns 重建最近 20 轮和更早分页，所以再次执行会继续回退前一个 turn。浏览器历史快照会标记该 turn 是否包含可恢复的普通用户原文：回退普通对话后把原文放回输入框，回退 `/compact`、`/review` 等特殊 turn 后输入框保持空白。它只改变对话历史，不撤销该轮已经造成的文件改动。执行前必须确认，活动任务期间不能执行。
 
@@ -186,15 +202,23 @@ Markdown 是前端自带的简单子集：支持标题、段落、粗体、斜�
 
 ## 断线恢复
 
-浏览器 WebSocket 断开后会重新连接并重新认证，但不会自动打开上次会话。用户从列表重新选择会话后，历史从 Codex 的持久会话恢复。
+浏览器 WebSocket 断开后会重新连接并重新认证，但不会自动打开上次会话。用户从列表
+重新选择会话后，已完成历史从 Codex 恢复；仍在运行的部分输出、工具事件和审批从
+SQLite 事件日志按顺序重放。
 
-如果断开的是任务控制设备，后端按当前产品约定中断活动任务。重新连接不会擅自继续执行，需要用户再次发送“继续”等明确指令。
+消息在返回 `accepted` 前先落盘。浏览器为每条消息生成并暂存 `clientMessageId`；确认
+包丢失时，重新打开同一会话会用原 ID 重试，唯一约束保证它不会重复执行。
 
-当前实现按全站连接而不是按单个会话判断释放时机。必须关闭所有浏览器标签页和已
-安装的 PWA，使全部 WebSocket 连接断开；后端完成断线清理并重建公共 App Server 后，
-同一主机上的 Codex CLI 才能恢复此前由网页加载的任意会话。只浏览项目或会话列表、
-从未打开 thread 的连接不会单独触发重建，但只要它仍然连接，就会推迟已经待处理的
-writer 释放。主动关闭页面通常很快生效；锁屏、切换网络或异常断网需要等待心跳检测。
+后端以“是否至少有一个已认证客户端在线”判断审批可用性。最后一个客户端断开后保留
+10 秒：普通权限任务若仍有审批等待，宽限结束后会先拒绝请求、再中断整轮并记录
+`no_client_for_permission`；Full access 可自动接受执行和文件权限，但选择题、MCP
+表单、验证码与登录授权永不自动回答，无人在线时会中断并记录
+`no_client_for_user_input`。
+
+后端重启时，已经处于 `running` 或 `waiting_for_permission` 的记录标为
+`interrupted`；尚未启动的 `queued` 消息保留并在资源允许时继续调度。Worker 完成后
+立即退出，所以本机 `codex resume` 只需等待目标任务和队列结束，不再要求关闭所有
+浏览器页面。
 
 ## 将来接 Claude Code
 
