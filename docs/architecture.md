@@ -15,6 +15,7 @@ Codex Remote 解决的是高 RTT 下的交互手感问题。编辑发生在浏�
 
 - 保存访问令牌；
 - 本地编辑消息；
+- 选择、上传和移除当前会话的附件；
 - 选择项目和会话；
 - 在响应式会话导航中搜索、归档、恢复和临时多选会话；
 - 渲染最近的历史、流式回复、完成消息的 Markdown、命令状态和审批；
@@ -39,12 +40,36 @@ Codex Remote 解决的是高 RTT 下的交互手感问题。编辑发生在浏�
 - `ApprovalBroker`：接收 App Server 的双向审批请求并回答；
 - `ProjectTaskLocks`：限制每个项目只有一个正在执行的任务；
 - `RemoteWebSocketServer`：提供静态 PWA、健康检查和浏览器 WebSocket。
+- `SharedUploadClient`：通过 Unix socket 申请票据、流式转交附件并维护任务租约。
 
 Codex 仍是原生会话和完整历史的权威存储。为了让页面断开后继续执行，Node 服务还会
 在 SQLite 中保存已接受消息、任务状态、脱敏后的浏览器流事件、任务权限模式、逐会话 Full access 状态和中断原因；
 其中可能含有消息正文和工具输出。回收站登记仍是独立的小型 JSON 文件，只包含
 thread ID、项目 ID、删除时间和恢复目标。打开回收站列表时，摘要仍从 Codex App
 Server 读取。
+
+### 共享附件服务
+
+`src/shared-upload/main.ts` 是独立进程，只监听权限为 `0600` 的 Unix socket。它用
+SQLite 保存一次性票据、附件绑定、哈希、过期时间和任务租约；文件先写入 `.part`，
+完整接收并同步后才原子移入 blobs。默认目录在仓库之外的
+`~/.local/share/ai-remote/uploads/`。
+
+浏览器先在已认证 WebSocket 上申请票据，再向 Codex Remote 的同源
+`POST /attachments/upload` 发送原始字节。Node 后端把请求流直接转交共享服务；票据
+本身承担这次 HTTP 上传的短期授权。浏览器得到的结果只有原始文件名、附件 ID、MIME、
+大小、哈希和时间，不含绝对路径。
+
+发送消息时，Worker 管理器再次按 `codex + projectId + sessionId` 验证附件，并创建
+15 分钟租约。排队和运行期间每 5 分钟续期，任务完成、失败或中断时释放；过期清理
+只删除没有有效租约的附件。Worker SQLite 固化公开元数据，不保存实际路径。图片在
+启动 turn 时映射为 `localImage`；UTF-8 文本由后端受限读取并作为私有文本块输入，
+该块不会进入浏览器实时事件或历史。当前 Codex 协议无法消费的普通二进制文件会在
+入队前明确拒绝。
+
+共享服务、Remote 和 App Server 当前必须使用同一 Unix 账户，才能满足目录 `0700`、
+文件 `0600` 的安全规则。详细 API 与其它项目接入边界见
+[共享上传服务实现与接入说明](shared-upload-integration.md)。
 
 ### 前端启动与静态资源
 
@@ -56,7 +81,7 @@ Server 读取。
 新前端仍沿用旧版的断线和会话导航限制；只有连接到带能力标记的新后端后，才显示并
 启用后台执行行为。
 
-HTTP 服务只提供 `src/server/http-server.ts` 中 `STATIC_FILES` 明确列出的文件。新增 `public/` 资源时，必须同时增加静态路由和相应测试，否则浏览器会收到 404。PWA 外壳资源使用查询参数版本，Service Worker 也使用独立缓存名；当前应用资源版本是 `v15`，缓存名是 `v16`。修改外壳文件时要同步更新两处版本，防止旧 HTML 和新脚本混用。
+HTTP 服务只提供 `src/server/http-server.ts` 中 `STATIC_FILES` 明确列出的文件。新增 `public/` 资源时，必须同时增加静态路由和相应测试，否则浏览器会收到 404。PWA 外壳资源使用查询参数版本，Service Worker 也使用独立缓存名；当前应用资源版本是 `v16`，缓存名是 `v18`。修改外壳文件时要同步更新两处版本，防止旧 HTML 和新脚本混用。
 
 ### Codex App Server
 

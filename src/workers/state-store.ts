@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import type { PublicAttachment } from "../shared-upload/types.ts";
+
 export type WorkerTaskStatus =
   | "queued"
   | "running"
@@ -21,6 +23,7 @@ export type WorkerTask = {
   threadId: string;
   kind: WorkerTaskKind;
   payload: string;
+  attachments: PublicAttachment[];
   status: WorkerTaskStatus;
   nativeTurnId: string | null;
   permissionMode: WorkerPermissionMode;
@@ -77,6 +80,7 @@ export class WorkerStateStore {
         thread_id TEXT NOT NULL,
         kind TEXT NOT NULL,
         payload TEXT NOT NULL,
+        attachments_json TEXT NOT NULL DEFAULT '[]',
         status TEXT NOT NULL,
         native_turn_id TEXT,
         permission_mode TEXT NOT NULL,
@@ -105,6 +109,11 @@ export class WorkerStateStore {
         updated_at_ms INTEGER NOT NULL
       ) STRICT;
     `);
+    const taskColumns = database.prepare("PRAGMA table_info(worker_tasks)").all()
+      .map((row) => String(asRow(row).name));
+    if (!taskColumns.includes("attachments_json")) {
+      database.exec("ALTER TABLE worker_tasks ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'");
+    }
     return new WorkerStateStore(database);
   }
 
@@ -127,15 +136,18 @@ export class WorkerStateStore {
     `).run(threadId, enabled ? 1 : 0, nowMs);
   }
 
-  enqueue(task: Omit<WorkerTask, "status" | "nativeTurnId" | "updatedAtMs" | "error" | "interruptionReason">): {
+  enqueue(task: Omit<WorkerTask, "status" | "nativeTurnId" | "updatedAtMs" | "error" | "interruptionReason" | "attachments"> & {
+    attachments?: PublicAttachment[];
+  }): {
     task: WorkerTask;
     duplicate: boolean;
   } {
-    const existing = this.#findByClientMessageId(task.clientMessageId);
+    const existing = this.findByClientMessageId(task.clientMessageId);
     if (existing) {
       if (
         existing.projectId !== task.projectId || existing.threadId !== task.threadId ||
-        existing.kind !== task.kind || existing.payload !== task.payload
+        existing.kind !== task.kind || existing.payload !== task.payload ||
+        JSON.stringify(existing.attachments) !== JSON.stringify(task.attachments ?? [])
       ) {
         throw new Error("clientMessageId 已被另一条消息使用。");
       }
@@ -144,10 +156,10 @@ export class WorkerStateStore {
 
     this.#database.prepare(`
       INSERT INTO worker_tasks (
-        id, client_message_id, project_id, thread_id, kind, payload, status,
+        id, client_message_id, project_id, thread_id, kind, payload, attachments_json, status,
         native_turn_id, permission_mode, created_at_ms, updated_at_ms, error,
         interruption_reason
-      ) VALUES (?, ?, ?, ?, ?, ?, 'queued', NULL, ?, ?, ?, NULL, NULL)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', NULL, ?, ?, ?, NULL, NULL)
     `).run(
       task.id,
       task.clientMessageId,
@@ -155,6 +167,7 @@ export class WorkerStateStore {
       task.threadId,
       task.kind,
       task.payload,
+      JSON.stringify(task.attachments ?? []),
       task.permissionMode,
       task.createdAtMs,
       task.createdAtMs,
@@ -169,6 +182,13 @@ export class WorkerStateStore {
     const task = row ? readTaskRow(row) : null;
     if (!task) throw new Error(`找不到 Worker 任务：${taskId}`);
     return task;
+  }
+
+  findByClientMessageId(clientMessageId: string): WorkerTask | null {
+    const row = this.#database.prepare(
+      "SELECT * FROM worker_tasks WHERE client_message_id = ?",
+    ).get(clientMessageId);
+    return row ? readTaskRow(row) : null;
   }
 
   queued(): WorkerTask[] {
@@ -328,12 +348,6 @@ export class WorkerStateStore {
     this.#database.close();
   }
 
-  #findByClientMessageId(clientMessageId: string): WorkerTask | null {
-    const row = this.#database.prepare(
-      "SELECT * FROM worker_tasks WHERE client_message_id = ?",
-    ).get(clientMessageId);
-    return row ? readTaskRow(row) : null;
-  }
 }
 
 function readTaskRow(value: unknown): WorkerTask {
@@ -345,6 +359,7 @@ function readTaskRow(value: unknown): WorkerTask {
     threadId: String(row.thread_id),
     kind: readKind(row.kind),
     payload: String(row.payload),
+    attachments: readAttachments(row.attachments_json),
     status: readStatus(row.status),
     nativeTurnId: nullableString(row.native_turn_id),
     permissionMode: row.permission_mode === "full_access" ? "full_access" : "manual",
@@ -353,6 +368,23 @@ function readTaskRow(value: unknown): WorkerTask {
     error: nullableString(row.error),
     interruptionReason: nullableString(row.interruption_reason),
   };
+}
+
+function readAttachments(value: unknown): PublicAttachment[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(typeof value === "string" ? value : "[]");
+  } catch {
+    throw new Error("Worker 状态库包含无效附件数据。");
+  }
+  if (!Array.isArray(parsed) || parsed.some((entry) =>
+    typeof entry !== "object" || entry === null || Array.isArray(entry) ||
+    typeof (entry as Record<string, unknown>).id !== "string" ||
+    "path" in (entry as Record<string, unknown>)
+  )) {
+    throw new Error("Worker 状态库包含无效附件数据。");
+  }
+  return parsed as PublicAttachment[];
 }
 
 function readEventRow(value: unknown): StoredWorkerEvent {

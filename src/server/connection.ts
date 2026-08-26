@@ -8,6 +8,8 @@ import { COMMAND_CATALOG } from "../commands/catalog.ts";
 import { CommandRunner } from "../commands/runner.ts";
 import type { ProjectSummary } from "../projects/catalog.ts";
 import type { Turn } from "../generated/v2/Turn.ts";
+import type { SharedUploadClient } from "../shared-upload/client.ts";
+import { SharedUploadError } from "../shared-upload/types.ts";
 import type {
   OpenedSession,
   SessionChangeEvent,
@@ -86,6 +88,7 @@ export type BrowserConnectionServices = {
   locks: ProjectTaskLocks;
   /** 生产环境使用；省略时保留原有单连接状态机，供现有单元测试逐步迁移。 */
   workers?: SessionWorkerManager;
+  uploads?: Pick<SharedUploadClient, "createTicket">;
 };
 
 export class BrowserRequestError extends Error {
@@ -210,7 +213,8 @@ export class BrowserConnection {
       const data = await this.#dispatch(request);
       this.#send({ type: "response", requestId: request.requestId, ok: true, data });
     } catch (error) {
-      const code = error instanceof BrowserRequestError || error instanceof WorkerManagerError
+      const code = error instanceof BrowserRequestError || error instanceof WorkerManagerError ||
+          error instanceof SharedUploadError
         ? error.code
         : "request_failed";
       this.#sendFailure(request.requestId, code, publicErrorMessage(error));
@@ -295,15 +299,35 @@ export class BrowserConnection {
         }
         this.#assertCanChangeSettings();
         return this.#requireCommandRunner().toggleFullAccess();
+      case "attachment.ticket.create": {
+        if (!this.#services.uploads) {
+          throw new BrowserRequestError("uploads_unavailable", "当前后端没有启用附件服务。");
+        }
+        const { projectId, sessionId } = this.#services.workers
+          ? this.#requireManagedSession()
+          : { projectId: this.#projectId!, sessionId: this.#requireOpenSession().threadId };
+        return this.#services.uploads.createTicket({
+          caller: "codex",
+          projectId,
+          sessionId,
+          originalName: request.originalName,
+          declaredMime: request.declaredMime,
+          expectedSize: request.expectedSize,
+        });
+      }
       case "message.send":
         if (this.#services.workers) {
           const { projectId, sessionId } = this.#requireManagedSession();
-          return this.#services.workers.enqueueMessage(
+          return this.#services.workers.enqueueMessageWithAttachments(
             projectId,
             sessionId,
             request.clientMessageId,
             request.text,
+            request.attachmentIds,
           );
+        }
+        if (request.attachmentIds.length > 0) {
+          throw new BrowserRequestError("uploads_unavailable", "当前兼容模式不能发送附件。");
         }
         return this.#sendMessage(request.text);
       case "task.stop":

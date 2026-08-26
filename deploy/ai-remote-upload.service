@@ -1,0 +1,22 @@
+[Unit]
+Description=Shared upload service for AI Remote backends
+After=local-fs.target
+
+[Service]
+Type=simple
+# 必须与读取附件的 Remote 和 coding agent 使用同一个 Unix 账户。
+User=codex-remote
+Group=codex-remote
+WorkingDirectory=/opt/codex-remote
+Environment=HOME=/var/lib/codex-remote
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=NODE_ENV=production
+EnvironmentFile=-/etc/ai-remote-upload.env
+ExecStart=/usr/bin/node /opt/codex-remote/src/shared-upload/main.ts
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=15s
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

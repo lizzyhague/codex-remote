@@ -18,6 +18,8 @@ SSH 逐键输入延迟的影响。
 - 流式显示回复、命令状态和审批请求；
 - 手机和电脑同步当前会话的新消息、审批和用户输入请求；
 - 消息由后端持久化确认，页面关闭后仍可继续执行，并用 `clientMessageId` 避免断线重发；
+- 可在手机或电脑选择多个截图或普通文件，先上传到本机共享服务，再随消息确认发送；
+  当前 Codex 原生理解图片和合计不超过 512 KiB 的 UTF-8 文本，其它格式会明确报错；
 - 每个活动会话使用独立 App Server Worker；同一项目仍只运行一个任务；
 - Worker 完成队列后立即退出并释放该会话的 writer，不依赖浏览器连接生命周期；
 - 普通权限离线等待 10 秒后会取消需要审批的整轮，Full access 可继续处理执行审批；
@@ -34,6 +36,7 @@ Codex/Claude Code 在同一项目中并行执行。
 手机或电脑浏览器
   -> HTTPS 入口（Tailscale Serve 或公网反向代理）
   -> 127.0.0.1:8787 上的 Codex Remote
+  -> Unix socket 上的共享上传服务（附件路径）
   -> 后端队列与 SQLite 事件日志
   -> 每个活动会话独立的 stdio / JSONL codex app-server Worker
 ```
@@ -107,7 +110,13 @@ cp config/projects.example.json config/projects.json
 openssl rand -hex 32
 ```
 
-启动服务：
+先在一个终端启动共享上传服务：
+
+```bash
+npm run start:uploads
+```
+
+再在另一个终端启动 Codex Remote：
 
 ```bash
 CODEX_REMOTE_TOKEN="粘贴刚生成的令牌" \
@@ -149,6 +158,7 @@ Codex 运行在专用的非 root 系统账户下。
 | `CODEX_REMOTE_PROJECTS_CONFIG` | 项目根目录配置文件，默认 `config/projects.json` |
 | `CODEX_REMOTE_STATE_FILE` | 回收站登记文件路径 |
 | `CODEX_REMOTE_WORK_STATE_FILE` | 已接受任务与事件日志的 SQLite 路径 |
+| `AI_REMOTE_UPLOAD_SOCKET` | 共享上传服务 Unix socket；默认 `~/.local/share/ai-remote/upload.sock` |
 | `CODEX_REMOTE_MAX_WORKERS` | 最大活动 Worker 数，默认 `2` |
 | `CODEX_REMOTE_MIN_AVAILABLE_MEMORY_MIB` | 启动 Worker 所需最低可用内存，默认 `1024` MiB |
 | `CODEX_REMOTE_OFFLINE_GRACE_MS` | 最后一个客户端离线后的审批宽限期，默认 `10000` 毫秒 |
@@ -156,12 +166,17 @@ Codex 运行在专用的非 root 系统账户下。
 
 真实令牌和 `config/projects.json` 都已被 Git 忽略。仓库只保存示例文件。
 
+共享上传服务另有 `AI_REMOTE_UPLOAD_ROOT` 和 `AI_REMOTE_UPLOAD_MIN_FREE_MIB`。完整接口、
+数据目录和其它 Remote 的接入方式见
+[共享上传服务实现与接入说明](docs/shared-upload-integration.md)。
+
 ## 数据与浏览器存储
 
 Codex 仍负责保存原生会话和完整历史。为了支持后台执行，Codex Remote 还会在 Worker
 状态库中保存已接受消息、任务状态、脱敏后的流事件和中断原因；这份日志可能包含对话
-正文和工具输出，应按与 Codex 会话数据相同的敏感级别保护。回收站登记仍单独保存，
-默认保留 30 天。
+正文、附件公开元数据和工具输出，应按与 Codex 会话数据相同的敏感级别保护。附件
+字节和元数据 SQLite 默认位于 `~/.local/share/ai-remote/uploads/`，同样属于敏感
+数据并保留 30 天。回收站登记仍单独保存，默认保留 30 天。
 
 访问令牌会保存在浏览器 `localStorage`，用于刷新和断线重连。不要在共享设备上保存
 令牌；怀疑泄露时应立即更换服务端令牌，并清除已登录浏览器中的旧值。

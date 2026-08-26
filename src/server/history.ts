@@ -1,6 +1,7 @@
 import type { ThreadItem } from "../generated/v2/ThreadItem.ts";
 import type { Turn } from "../generated/v2/Turn.ts";
 import type { OpenedSession, SessionPage, SessionSummary } from "../sessions/service.ts";
+import { isPrivateAttachmentInputText } from "../app-server/turn-session.ts";
 
 export type BrowserSessionSummary = Omit<SessionSummary, "sessionId">;
 
@@ -111,7 +112,8 @@ function toBrowserTimelineItem(item: ThreadItem): BrowserTimelineItem[] {
 
 function userMessageText(item: Extract<ThreadItem, { type: "userMessage" }>): string {
   return item.content
-    .filter((part) => part.type === "text")
+    .filter((part): part is Extract<typeof part, { type: "text" }> =>
+      part.type === "text" && !isPrivateAttachmentInputText(part.text))
     .map((part) => part.text)
     .join("\n");
 }

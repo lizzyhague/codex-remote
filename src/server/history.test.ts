@@ -3,6 +3,7 @@ import test from "node:test";
 
 import type { ThreadItem } from "../generated/v2/ThreadItem.ts";
 import type { Turn } from "../generated/v2/Turn.ts";
+import { PRIVATE_ATTACHMENT_INPUT_PREFIX } from "../app-server/turn-session.ts";
 import { toBrowserTasks } from "./history.ts";
 
 test("marks only ordinary user turns for input restoration", () => {
@@ -81,6 +82,25 @@ test("reload restores only dialog while preserving separate assistant items", ()
   ]);
   assert.equal(JSON.stringify(tasks).includes("private"), false);
   assert.equal(JSON.stringify(tasks).includes("npm test"), false);
+});
+
+test("reload hides inlined attachment content from the browser timeline", () => {
+  const tasks = toBrowserTasks([turn("attachment", [
+    userMessage(
+      "user-attachment",
+      "检查附件\n\n[附件：notes.txt · file-id]",
+      `${PRIVATE_ATTACHMENT_INPUT_PREFIX}\n/private/path\nsecret note`,
+    ),
+  ])]);
+
+  assert.deepEqual(tasks[0]?.items, [{
+    type: "message",
+    id: "user-attachment",
+    role: "user",
+    text: "检查附件\n\n[附件：notes.txt · file-id]",
+  }]);
+  assert.equal(JSON.stringify(tasks).includes("/private/path"), false);
+  assert.equal(JSON.stringify(tasks).includes("secret note"), false);
 });
 
 function turn(id: string, items: ThreadItem[]): Turn {

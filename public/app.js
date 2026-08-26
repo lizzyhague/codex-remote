@@ -4,6 +4,7 @@ const TOKEN_KEY = "codex-remote.token";
 const PROJECT_KEY = "codex-remote.project";
 const SESSION_KEY = "codex-remote.session";
 const OUTBOX_KEY = "codex-remote.outbox-v2";
+const ATTACHMENT_DRAFTS_KEY = "codex-remote.attachment-drafts-v1";
 const SIDEBAR_COLLAPSED_KEY = "codex-remote.sidebar-collapsed";
 const RECONNECT_DELAY_MS = 2_500;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -11,6 +12,8 @@ const MAX_COMMAND_OUTPUT = 100_000;
 const TOOL_TITLE_LIMIT = 72;
 /** 输入框失焦后稍等再点亮 rewind / full access，避免同一下既失焦又点到确认。 */
 const COMPOSER_CONFIRM_UNLOCK_MS = 300;
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const MAX_MESSAGE_ATTACHMENTS = 100;
 
 const elements = {
   loginView: byId("login-view"),
@@ -56,6 +59,9 @@ const elements = {
   composer: byId("composer"),
   slashMenu: slashMenuElement(),
   messageInput: byId("message-input"),
+  attachmentInput: byId("attachment-input"),
+  attachmentList: byId("attachment-list"),
+  attachmentButton: byId("attachment-button"),
   rewindShortcut: byId("rewind-shortcut"),
   usageShortcut: byId("usage-shortcut"),
   fullAccessShortcut: byId("full-access-shortcut"),
@@ -93,6 +99,9 @@ const state = {
   composerLocksConfirms: false,
   composerFocusTimer: null,
   rewindText: null,
+  rewindAttachments: [],
+  pendingAttachments: [],
+  attachmentUploads: new Map(),
   requestNumber: 0,
   pendingRequests: new Map(),
   pendingUserMessages: [],
@@ -138,6 +147,7 @@ elements.changeTokenButton.addEventListener("click", () => {
   if (state.running && !window.confirm(warning)) {
     return;
   }
+  abortAttachmentUploads();
   state.reconnectAllowed = false;
   clearTimeout(state.reconnectTimer);
   state.socket?.close(1000, "Change token");
@@ -236,6 +246,16 @@ elements.commandMenuButton.addEventListener("click", () => {
   slashCommands.handleInput();
   updateControls();
   elements.messageInput.focus();
+});
+
+elements.attachmentButton.addEventListener("click", () => {
+  elements.attachmentInput.click();
+});
+
+elements.attachmentInput.addEventListener("change", () => {
+  const files = [...elements.attachmentInput.files];
+  elements.attachmentInput.value = "";
+  void uploadFiles(files);
 });
 
 elements.rewindShortcut.addEventListener("click", () => {
@@ -574,6 +594,7 @@ function applyOpenedSession(opened) {
   state.running = Boolean(opened.activeTaskId);
   state.controlsTask = Boolean(opened.controlsActiveTask);
   state.fullAccessEnabled = opened.fullAccessEnabled === true;
+  loadAttachmentDraftForCurrentSession();
   stateSet(SESSION_KEY, state.sessionId);
   upsertSession(opened.session);
   renderSessionList();
@@ -850,11 +871,15 @@ function trashRemainingText(purgeAt) {
 }
 
 function resetCurrentSession() {
+  abortAttachmentUploads();
   state.sessionId = null;
   state.sessionTitle = "";
   state.running = false;
   state.controlsTask = false;
   state.fullAccessEnabled = false;
+  state.pendingAttachments = [];
+  state.rewindAttachments = [];
+  renderAttachmentList();
   removeStored(SESSION_KEY);
   updateConversationTitle();
   renderSessionList();
@@ -916,7 +941,9 @@ window.addEventListener("resize", syncSidebarState);
 
 function renderHistory(tasks, hasOlder) {
   clearTimeline();
-  state.rewindText = rewindTextFromLatestTask(tasks);
+  const rewind = rewindDraftFromLatestTask(tasks);
+  state.rewindText = rewind.text;
+  state.rewindAttachments = rewind.attachments;
   elements.timeline.append(elements.historyLoader);
   elements.historyLoader.hidden = !hasOlder;
   const rendered = renderTasks(tasks);
@@ -977,14 +1004,18 @@ async function loadOlderHistory() {
 
 async function sendMessage() {
   const text = elements.messageInput.value.trim();
-  if (!text || !state.sessionId || state.running || !state.authenticated) return;
-  if (await slashCommands.submit(text)) return;
+  const attachments = readyAttachments();
+  if ((!text && attachments.length === 0) || !state.sessionId || state.running ||
+    !state.authenticated || state.attachmentUploads.size > 0) return;
+  if (attachments.length === 0 && await slashCommands.submit(text)) return;
 
   hideEmpty();
   hideNotice();
-  const optimistic = addMessage("user", text, `local-${Date.now()}`, false);
-  state.pendingUserMessages.push({ text, element: optimistic });
+  const displayText = displayTextWithAttachments(text, attachments);
+  const optimistic = addMessage("user", displayText, `local-${Date.now()}`, false);
+  state.pendingUserMessages.push({ text: displayText, element: optimistic });
   elements.messageInput.value = "";
+  setPendingAttachments(state.pendingAttachments.filter((attachment) => attachment.status !== "ready"));
   resizeComposer();
   state.running = true;
   state.controlsTask = true;
@@ -999,9 +1030,14 @@ async function sendMessage() {
     projectId: state.projectId,
     sessionId: state.sessionId,
     text,
+    attachmentIds: attachments.map((attachment) => attachment.id),
   });
   try {
-    await request("message.send", { text, clientMessageId });
+    await request("message.send", {
+      text,
+      clientMessageId,
+      attachmentIds: attachments.map((attachment) => attachment.id),
+    });
     clearOutbox(clientMessageId);
   } catch (error) {
     const uncertainDelivery = error?.code === "request_timeout" || !state.authenticated;
@@ -1027,8 +1063,155 @@ async function sendMessage() {
       ? `${errorMessage(error)}消息已经放回输入框。`
       : `${errorMessage(error)}未发送的消息和当前草稿都已保留在输入框。`);
     updateControls();
+    setPendingAttachments(mergeAttachments(attachments, state.pendingAttachments));
     restoreComposerText(restorable ? text : `${text}\n\n${draft}`);
   }
+}
+
+async function uploadFiles(files) {
+  if (!state.sessionId || !state.projectId || !state.authenticated || files.length === 0) return;
+  const available = MAX_MESSAGE_ATTACHMENTS - state.pendingAttachments.length;
+  if (available <= 0) {
+    showNotice(`一条消息最多附加 ${MAX_MESSAGE_ATTACHMENTS} 个文件。`);
+    return;
+  }
+  if (files.length > available) {
+    showNotice(`一条消息最多附加 ${MAX_MESSAGE_ATTACHMENTS} 个文件，只处理了前 ${available} 个。`);
+  }
+  await Promise.all(files.slice(0, available).map((file) => uploadFile(file)));
+}
+
+async function uploadFile(file) {
+  const clientId = createClientMessageId();
+  const projectId = state.projectId;
+  const sessionId = state.sessionId;
+  const draft = {
+    clientId,
+    originalName: file.name || "未命名文件",
+    size: file.size,
+    status: "preparing",
+    statusText: "正在申请上传票据",
+  };
+  state.pendingAttachments.push(draft);
+  renderAttachmentList();
+  updateControls();
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    Object.assign(draft, { status: "failed", statusText: "超过 25 MiB 上限" });
+    renderAttachmentList();
+    updateControls();
+    return;
+  }
+
+  const controller = new AbortController();
+  state.attachmentUploads.set(clientId, controller);
+  try {
+    const ticket = await request("attachment.ticket.create", {
+      originalName: file.name || "未命名文件",
+      declaredMime: file.type || "application/octet-stream",
+      expectedSize: file.size,
+    });
+    if (projectId !== state.projectId || sessionId !== state.sessionId) {
+      throw new Error("上传期间切换了会话，请重新选择文件。");
+    }
+    Object.assign(draft, { status: "uploading", statusText: "正在上传" });
+    renderAttachmentList();
+    const response = await fetch("/attachments/upload", {
+      method: "POST",
+      headers: { "x-upload-ticket": ticket.ticket },
+      body: file,
+      signal: controller.signal,
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      const error = new Error(body?.error?.message || "附件上传失败。");
+      error.code = body?.error?.code;
+      throw error;
+    }
+    if (!body?.attachment?.id) throw new Error("上传服务没有返回附件 ID。");
+    Object.assign(draft, body.attachment, {
+      clientId,
+      status: "ready",
+      statusText: "上传完成",
+    });
+    persistCurrentAttachmentDraft();
+  } catch (error) {
+    Object.assign(draft, {
+      status: "failed",
+      statusText: error?.name === "AbortError" ? "已取消" : errorMessage(error),
+    });
+  } finally {
+    state.attachmentUploads.delete(clientId);
+    renderAttachmentList();
+    updateControls();
+  }
+}
+
+function renderAttachmentList() {
+  elements.attachmentList.replaceChildren();
+  elements.attachmentList.hidden = state.pendingAttachments.length === 0;
+  for (const attachment of state.pendingAttachments) {
+    const item = document.createElement("div");
+    item.className = "attachment-item";
+    item.dataset.status = attachment.status;
+    const name = document.createElement("span");
+    name.className = "attachment-name";
+    name.textContent = attachment.originalName || "未命名文件";
+    const meta = document.createElement("small");
+    meta.className = "attachment-meta";
+    meta.textContent = attachment.status === "ready"
+      ? `${attachment.id} · 上传完成`
+      : attachment.statusText || "处理中";
+    const remove = document.createElement("button");
+    remove.className = "quiet attachment-remove";
+    remove.type = "button";
+    remove.textContent = "移除";
+    remove.setAttribute("aria-label", `移除附件 ${attachment.originalName || "未命名文件"}`);
+    remove.addEventListener("click", () => removeAttachment(attachment));
+    item.append(name, meta, remove);
+    elements.attachmentList.append(item);
+  }
+}
+
+function removeAttachment(attachment) {
+  state.attachmentUploads.get(attachment.clientId)?.abort();
+  state.attachmentUploads.delete(attachment.clientId);
+  setPendingAttachments(state.pendingAttachments.filter((candidate) => candidate !== attachment));
+}
+
+function abortAttachmentUploads() {
+  for (const controller of state.attachmentUploads.values()) controller.abort();
+  state.attachmentUploads.clear();
+}
+
+function readyAttachments() {
+  return state.pendingAttachments.filter((attachment) =>
+    attachment.status === "ready" && typeof attachment.id === "string");
+}
+
+function setPendingAttachments(attachments) {
+  state.pendingAttachments = attachments;
+  persistCurrentAttachmentDraft();
+  renderAttachmentList();
+  updateControls();
+}
+
+function mergeAttachments(first, second) {
+  const merged = [];
+  const seen = new Set();
+  for (const attachment of [...first, ...second]) {
+    const key = attachment.id || attachment.clientId;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(attachment);
+  }
+  return merged;
+}
+
+function displayTextWithAttachments(text, attachments) {
+  if (attachments.length === 0) return text;
+  const lines = attachments.map((attachment) =>
+    `[附件：${attachment.originalName} · ${attachment.id}]`);
+  return text ? `${text}\n\n${lines.join("\n")}` : lines.join("\n");
 }
 
 async function stopTask() {
@@ -1071,12 +1254,14 @@ function handleServerEvent(event) {
       state.running = true;
       state.controlsTask = true;
       setCurrentSessionState("active");
-      if (typeof event.text === "string" && event.text) {
+      const queuedAttachments = publicAttachments(event.attachments);
+      if ((typeof event.text === "string" && event.text) || queuedAttachments.length > 0) {
+        const displayText = displayTextWithAttachments(event.text || "", queuedAttachments);
         let pending = state.pendingUserMessages.find((candidate) =>
-          candidate.text === event.text);
+          candidate.text === displayText);
         if (!pending) {
-          const element = addMessage("user", event.text, `queued-${event.taskId}`, false);
-          pending = { text: event.text, element };
+          const element = addMessage("user", displayText, `queued-${event.taskId}`, false);
+          pending = { text: displayText, element };
           state.pendingUserMessages.push(pending);
         }
       }
@@ -1103,7 +1288,11 @@ function handleServerEvent(event) {
       updateControls();
       break;
     case "message.user":
-      state.rewindText = typeof event.text === "string" && event.text ? event.text : null;
+      {
+        const rewind = splitAttachmentDisplayText(event.text || "", event.attachments);
+        state.rewindText = rewind.text;
+        state.rewindAttachments = rewind.attachments;
+      }
       receiveUserMessage(event);
       showThinking();
       break;
@@ -1572,15 +1761,26 @@ function addCommandResult(result) {
   if (!result || typeof result.title !== "string") return;
   if (result.kind === "rewind") {
     const rewindText = state.rewindText;
+    const rewindAttachments = state.rewindAttachments;
     renderHistory(
       Array.isArray(result.tasks) ? result.tasks : [],
       result.hasOlder === true,
     );
-    if (rewindText !== null && !elements.messageInput.value.trim()) {
-      restoreComposerText(rewindText);
+    if (
+      (rewindText !== null || rewindAttachments.length > 0) &&
+      !elements.messageInput.value.trim() && state.pendingAttachments.length === 0
+    ) {
+      restoreComposerText(rewindText || "");
+      setPendingAttachments(rewindAttachments.map((attachment) => ({
+        ...attachment,
+        clientId: createClientMessageId(),
+        status: "ready",
+        statusText: "已从回退消息恢复",
+      })));
     }
   } else if (result.kind === "task") {
     state.rewindText = null;
+    state.rewindAttachments = [];
   }
   hideEmpty();
   hideNotice();
@@ -1669,6 +1869,7 @@ async function retryOutboxForCurrentSession() {
       await request("message.send", {
         text: outbox.text,
         clientMessageId: outbox.clientMessageId,
+        attachmentIds: outbox.attachmentIds,
       });
       clearOutbox(outbox.clientMessageId);
     } catch (error) {
@@ -1700,8 +1901,10 @@ function loadOutbox() {
     if (!Array.isArray(value)) return [];
     return value.filter((entry) => entry && typeof entry.clientMessageId === "string" &&
         typeof entry.projectId === "string" && typeof entry.sessionId === "string" &&
-        typeof entry.text === "string"
-    );
+        typeof entry.text === "string" &&
+        (entry.attachmentIds === undefined ||
+          (Array.isArray(entry.attachmentIds) && entry.attachmentIds.every((id) => typeof id === "string")))
+    ).map((entry) => ({ ...entry, attachmentIds: entry.attachmentIds || [] }));
   } catch {
     return [];
   }
@@ -1711,6 +1914,63 @@ function clearOutbox(clientMessageId) {
   const entries = loadOutbox().filter((entry) => entry.clientMessageId !== clientMessageId);
   if (entries.length === 0) removeStored(OUTBOX_KEY);
   else stateSet(OUTBOX_KEY, JSON.stringify(entries));
+}
+
+function attachmentDraftKey() {
+  return state.projectId && state.sessionId ? `${state.projectId}\n${state.sessionId}` : null;
+}
+
+function loadAttachmentDraftForCurrentSession() {
+  const key = attachmentDraftKey();
+  const drafts = loadAttachmentDrafts();
+  state.pendingAttachments = key
+    ? publicAttachments(drafts[key]).map((attachment) => ({
+      ...attachment,
+      clientId: createClientMessageId(),
+      status: "ready",
+      statusText: "上传完成",
+    }))
+    : [];
+  renderAttachmentList();
+}
+
+function persistCurrentAttachmentDraft() {
+  const key = attachmentDraftKey();
+  if (!key) return;
+  const drafts = loadAttachmentDrafts();
+  const ready = readyAttachments().map(({ clientId: _clientId, status: _status, statusText: _statusText, ...attachment }) =>
+    attachment);
+  if (ready.length > 0) drafts[key] = ready;
+  else delete drafts[key];
+  const entries = Object.entries(drafts).slice(-50);
+  if (entries.length === 0) removeStored(ATTACHMENT_DRAFTS_KEY);
+  else stateSet(ATTACHMENT_DRAFTS_KEY, JSON.stringify(Object.fromEntries(entries)));
+}
+
+function loadAttachmentDrafts() {
+  try {
+    const value = JSON.parse(stateGet(ATTACHMENT_DRAFTS_KEY) || "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function publicAttachments(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((attachment) =>
+    attachment && typeof attachment === "object" &&
+    typeof attachment.id === "string" && attachment.id.length <= 128 &&
+    typeof attachment.originalName === "string" && attachment.originalName.length <= 1_024
+  ).map((attachment) => ({
+    id: attachment.id,
+    originalName: attachment.originalName,
+    size: Number.isFinite(attachment.size) ? attachment.size : NaN,
+    declaredMime: typeof attachment.declaredMime === "string" ? attachment.declaredMime : "",
+    detectedMime: typeof attachment.detectedMime === "string" ? attachment.detectedMime : "",
+    kind: attachment.kind === "image" ? "image" : "file",
+    expiresAtMs: Number.isFinite(attachment.expiresAtMs) ? attachment.expiresAtMs : null,
+  }));
 }
 
 async function answerApproval(card, approvalId, decision) {
@@ -1944,9 +2204,11 @@ function updateControls() {
   const connected = state.authenticated;
   const hasSession = Boolean(state.sessionId);
   const hasText = Boolean(elements.messageInput.value.trim());
+  const hasAttachments = readyAttachments().length > 0;
+  const uploading = state.attachmentUploads.size > 0;
   const busy = state.running || state.commandBusy;
   const navigationBusy = state.navigationBusy || state.sessionLoading;
-  const navigationLocked = state.commandBusy || navigationBusy ||
+  const navigationLocked = state.commandBusy || navigationBusy || uploading ||
     (state.running && !state.backgroundWorkers);
   const projectHasActiveTask = state.sessions.some((session) => session.state === "active");
   elements.projectSelect.disabled = !connected || navigationLocked || state.selectionMode;
@@ -1982,7 +2244,10 @@ function updateControls() {
     ? "快捷操作执行中，可以继续写"
     : "在浏览器里写好，再发送给 Codex";
   const confirmLocked = state.composerLocksConfirms;
-  elements.commandMenuButton.disabled = !connected || !hasSession || busy || hasText;
+  elements.attachmentButton.disabled = !connected || !hasSession || navigationBusy ||
+    state.selectionMode ||
+    state.pendingAttachments.length >= MAX_MESSAGE_ATTACHMENTS;
+  elements.commandMenuButton.disabled = !connected || !hasSession || busy || hasText || hasAttachments;
   elements.rewindShortcut.disabled = !connected || !hasSession || busy || confirmLocked;
   elements.rewindShortcut.title = confirmLocked
     ? "请先点开输入框再回退"
@@ -2000,7 +2265,8 @@ function updateControls() {
   elements.taskButton.classList.toggle("danger", state.running);
   elements.taskButton.disabled = state.running
     ? !connected || !state.controlsTask
-    : !connected || !hasSession || state.commandBusy || !hasText;
+    : !connected || !hasSession || state.commandBusy || uploading ||
+      (!hasText && !hasAttachments);
 }
 
 function setNavigationBusy(busy) {
@@ -2016,6 +2282,7 @@ function clearTimeline() {
   state.commands.clear();
   state.pendingUserMessages.length = 0;
   state.rewindText = null;
+  state.rewindAttachments = [];
   slashCommands.close();
   elements.historyLoader.hidden = true;
   hideThinking();
@@ -2050,15 +2317,41 @@ function resizeComposer() {
   elements.messageInput.style.height = `${Math.min(elements.messageInput.scrollHeight, window.innerHeight * 0.34)}px`;
 }
 
-function rewindTextFromLatestTask(tasks) {
+function rewindDraftFromLatestTask(tasks) {
   const latest = tasks.at(-1);
-  if (latest?.restoresInput !== true || !Array.isArray(latest.items)) return null;
+  if (latest?.restoresInput !== true || !Array.isArray(latest.items)) {
+    return { text: null, attachments: [] };
+  }
   const userMessage = latest.items.find((item) =>
     item?.type === "message" && item.role === "user"
   );
   return typeof userMessage?.text === "string" && userMessage.text
-    ? userMessage.text
-    : null;
+    ? splitAttachmentDisplayText(userMessage.text)
+    : { text: null, attachments: [] };
+}
+
+function splitAttachmentDisplayText(text, suppliedAttachments = []) {
+  const supplied = publicAttachments(suppliedAttachments);
+  const lines = String(text || "").split("\n");
+  const parsed = [];
+  while (lines.length > 0) {
+    const match = /^\[附件：(.*) · ([A-Za-z0-9_-]{1,128})\]$/u.exec(lines.at(-1));
+    if (!match) break;
+    lines.pop();
+    parsed.unshift({
+      id: match[2],
+      originalName: match[1],
+      size: NaN,
+      kind: "file",
+      expiresAtMs: null,
+    });
+  }
+  if (parsed.length > 0 && lines.at(-1) === "") lines.pop();
+  const cleanText = lines.join("\n");
+  return {
+    text: cleanText || null,
+    attachments: supplied.length > 0 ? supplied : parsed,
+  };
 }
 
 function restoreComposerText(text) {

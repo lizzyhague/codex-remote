@@ -1,13 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
-import type { CodexStreamEvent } from "../app-server/turn-session.ts";
+import {
+  CodexAttachmentError,
+  type CodexStreamEvent,
+  validateCodexTurnAttachments,
+} from "../app-server/turn-session.ts";
 import type { ApprovalEvent, ApprovalRequest } from "../approvals/broker.ts";
 import type { CommandName } from "../commands/catalog.ts";
 import type { CommandOptions } from "../commands/runner.ts";
 import type { ProjectCatalog } from "../projects/catalog.ts";
 import type { OpenedSession } from "../sessions/service.ts";
 import type { TrashStore } from "../sessions/trash-store.ts";
+import type { SharedUploadClient } from "../shared-upload/client.ts";
+import type {
+  AttachmentLease,
+  PublicAttachment,
+  ResolvedAttachment,
+} from "../shared-upload/types.ts";
 import { ProjectTaskLocks } from "../server/project-locks.ts";
 import { toBrowserStreamEvent } from "../server/stream-events.ts";
 import { SessionWorker, type SessionWorkerOptions } from "./session-worker.ts";
@@ -28,6 +38,8 @@ const DEFAULT_MIN_AVAILABLE_MEMORY_BYTES = 1_073_741_824;
 const DEFAULT_OFFLINE_GRACE_MS = 10_000;
 const DEFAULT_QUEUE_RETRY_MS = 5_000;
 const TASK_START_TIMEOUT_MS = 10_000;
+const ATTACHMENT_LEASE_RENEW_INTERVAL_MS = 5 * 60 * 1_000;
+const ATTACHMENT_LEASE_RENEW_MARGIN_MS = 60_000;
 
 export class WorkerManagerError extends Error {
   readonly code: string;
@@ -68,6 +80,15 @@ export type SessionWorkerManagerOptions = {
   now?: () => number;
   workerFactory?: WorkerFactory;
   availableMemory?: () => Promise<number>;
+  uploads?: Pick<
+    SharedUploadClient,
+    "createLease" | "renewLease" | "releaseLease"
+  >;
+};
+
+export type PreparedTaskAttachments = {
+  taskId: string;
+  lease: AttachmentLease;
 };
 
 type ActiveWorker = {
@@ -102,6 +123,7 @@ export class SessionWorkerManager {
   readonly #now: () => number;
   readonly #workerFactory: WorkerFactory;
   readonly #availableMemory: () => Promise<number>;
+  readonly #uploads: SessionWorkerManagerOptions["uploads"];
   readonly #listeners = new Set<(event: WorkerManagerEvent) => void>();
   readonly #workers = new Map<string, ActiveWorker>();
   readonly #provisionalWorkers = new Map<string, ProvisionalWorker>();
@@ -110,11 +132,13 @@ export class SessionWorkerManager {
   readonly #sessionFullAccess = new Map<string, boolean>();
   readonly #sessionSnapshots = new Map<string, OpenedSession>();
   readonly #threadOperationTails = new Map<string, Promise<void>>();
+  readonly #attachmentLeases = new Map<string, AttachmentLease>();
   #transientWorkers = 0;
   #workerReservations = 0;
   #offlineSinceMs: number | null = null;
   #offlineTimer: NodeJS.Timeout | null = null;
   #queueRetryTimer: NodeJS.Timeout | null = null;
+  #attachmentLeaseTimer: NodeJS.Timeout | null = null;
   #scheduleTail: Promise<void> = Promise.resolve();
   #closed = false;
 
@@ -138,6 +162,7 @@ export class SessionWorkerManager {
     this.#now = options.now ?? Date.now;
     this.#workerFactory = options.workerFactory ?? SessionWorker.create;
     this.#availableMemory = options.availableMemory ?? readAvailableMemory;
+    this.#uploads = options.uploads;
     this.#store.recoverInterrupted(this.#now());
   }
 
@@ -148,7 +173,68 @@ export class SessionWorkerManager {
 
   start(): void {
     if (this.#authenticatedClients.size === 0) this.#armOfflineGrace();
+    this.#attachmentLeaseTimer = setInterval(() => {
+      void this.#renewAttachmentLeases();
+    }, ATTACHMENT_LEASE_RENEW_INTERVAL_MS);
+    this.#attachmentLeaseTimer.unref();
     this.#schedule();
+  }
+
+  async prepareMessageAttachments(
+    projectId: string,
+    threadId: string,
+    attachmentIds: string[],
+    text = "",
+  ): Promise<PreparedTaskAttachments | null> {
+    if (attachmentIds.length === 0) return null;
+    if (!this.#uploads) {
+      throw new WorkerManagerError("uploads_unavailable", "当前后端没有启用附件服务。");
+    }
+    const taskId = randomUUID();
+    let lease: AttachmentLease | null = null;
+    try {
+      lease = await this.#uploads.createLease(
+        { caller: "codex", projectId, sessionId: threadId },
+        taskId,
+        attachmentIds,
+      );
+      validateCodexTurnAttachments(lease.attachments, text);
+      return { taskId, lease };
+    } catch (error) {
+      if (lease) await this.#uploads.releaseLease(lease.leaseId, lease.ownerId).catch(() => {});
+      throw uploadManagerError(error);
+    }
+  }
+
+  async enqueueMessageWithAttachments(
+    projectId: string,
+    threadId: string,
+    clientMessageId: string,
+    text: string,
+    attachmentIds: string[],
+  ): Promise<{ accepted: true; taskId: string; status: WorkerTask["status"]; duplicate: boolean }> {
+    const existing = this.#store.findByClientMessageId(clientMessageId);
+    if (existing) {
+      const existingIds = existing.attachments.map((attachment) => attachment.id);
+      if (
+        existing.projectId !== projectId || existing.threadId !== threadId ||
+        existing.kind !== "message" || existing.payload !== text ||
+        JSON.stringify(existingIds) !== JSON.stringify(attachmentIds)
+      ) {
+        throw new WorkerManagerError(
+          "message_id_conflict",
+          "客户端消息 ID 已被另一条消息使用。",
+        );
+      }
+      return {
+        accepted: true,
+        taskId: existing.id,
+        status: existing.status,
+        duplicate: true,
+      };
+    }
+    const prepared = await this.prepareMessageAttachments(projectId, threadId, attachmentIds, text);
+    return this.enqueueMessage(projectId, threadId, clientMessageId, text, prepared);
   }
 
   clientAuthenticated(clientId: string): void {
@@ -234,8 +320,16 @@ export class SessionWorkerManager {
     threadId: string,
     clientMessageId: string,
     text: string,
+    preparedAttachments: PreparedTaskAttachments | null = null,
   ): { accepted: true; taskId: string; status: WorkerTask["status"]; duplicate: boolean } {
-    return this.#enqueue(projectId, threadId, clientMessageId, "message", text);
+    return this.#enqueue(
+      projectId,
+      threadId,
+      clientMessageId,
+      "message",
+      text,
+      preparedAttachments,
+    );
   }
 
   enqueueCommandTask(
@@ -425,6 +519,7 @@ export class SessionWorkerManager {
     this.#closed = true;
     if (this.#offlineTimer) clearTimeout(this.#offlineTimer);
     if (this.#queueRetryTimer) clearTimeout(this.#queueRetryTimer);
+    if (this.#attachmentLeaseTimer) clearInterval(this.#attachmentLeaseTimer);
     await this.#scheduleTail.catch(() => {});
     await Promise.all([...this.#workers.values()].map(async (active) => {
       this.#clearStartTimer(active);
@@ -441,6 +536,9 @@ export class SessionWorkerManager {
     }));
     this.#workers.clear();
     this.#provisionalWorkers.clear();
+    await Promise.all([...this.#attachmentLeases.entries()].map(([taskId, lease]) =>
+      this.#releaseAttachmentLease(taskId, lease)
+    ));
     this.#listeners.clear();
   }
 
@@ -450,29 +548,48 @@ export class SessionWorkerManager {
     clientMessageId: string,
     kind: WorkerTaskKind,
     payload: string,
+    preparedAttachments: PreparedTaskAttachments | null = null,
   ): { accepted: true; taskId: string; status: WorkerTask["status"]; duplicate: boolean } {
     if (this.#closed) throw new WorkerManagerError("worker_manager_closed", "后端正在停止。");
     const createdAtMs = this.#now();
     const permissionMode: WorkerPermissionMode = this.#knownFullAccess(threadId)
       ? "full_access"
       : "manual";
-    const result = this.#store.enqueue({
-      id: randomUUID(),
-      clientMessageId,
-      projectId,
-      threadId,
-      kind,
-      payload,
-      permissionMode,
-      createdAtMs,
-    });
+    let result;
+    try {
+      result = this.#store.enqueue({
+        id: preparedAttachments?.taskId ?? randomUUID(),
+        clientMessageId,
+        projectId,
+        threadId,
+        kind,
+        payload,
+        attachments: preparedAttachments?.lease.attachments.map(publicAttachment) ?? [],
+        permissionMode,
+        createdAtMs,
+      });
+    } catch (error) {
+      if (preparedAttachments) {
+        void this.#releaseAttachmentLease(preparedAttachments.taskId, preparedAttachments.lease);
+      }
+      throw error;
+    }
+    if (preparedAttachments) {
+      if (result.duplicate) {
+        void this.#releaseAttachmentLease(preparedAttachments.taskId, preparedAttachments.lease);
+      } else {
+        this.#attachmentLeases.set(result.task.id, preparedAttachments.lease);
+      }
+    }
     if (!result.duplicate) {
       const stored = this.#store.appendEvent(result.task.id, threadId, {
         type: "task.queued",
         sessionId: threadId,
         taskId: result.task.id,
         status: "queued",
-        ...(kind === "message" ? { text: payload } : { command: kind }),
+        ...(kind === "message"
+          ? { text: payload, attachments: result.task.attachments }
+          : { command: kind }),
       }, createdAtMs);
       this.#emit(stored, "session");
       this.#schedule();
@@ -607,6 +724,7 @@ export class SessionWorkerManager {
     let worker: SessionWorker | null = null;
     let workerReserved = false;
     try {
+      const attachments = await this.#ensureTaskAttachments(task);
       const provisional = this.#provisionalWorkers.get(task.threadId);
       if (provisional?.closeTimer) clearTimeout(provisional.closeTimer);
       if (provisional) this.#provisionalWorkers.delete(task.threadId);
@@ -641,7 +759,7 @@ export class SessionWorkerManager {
       active.startTimer.unref();
 
       const nativeTurnId = task.kind === "message"
-        ? await worker.turns.startTextTurn(task.payload)
+        ? await worker.turns.startTextTurn(task.payload, attachments)
         : task.kind === "compact"
         ? await worker.commands.compact()
         : await worker.commands.review();
@@ -658,13 +776,15 @@ export class SessionWorkerManager {
           sessionId: task.threadId,
           taskId: task.id,
           status: "failed",
-          error: error instanceof WorkerManagerError && error.code === "permission_restore_failed"
+          error: (error instanceof WorkerManagerError && error.code === "permission_restore_failed") ||
+              error instanceof CodexAttachmentError
             ? error.message
             : "Worker 无法启动，请查看服务日志。",
         }, this.#now(), { error: errorMessage(error) });
         this.#emit(event, "session");
         await worker?.close().catch(() => {});
         this.#locks.release(task.projectId, ownerId);
+        await this.#releaseTaskAttachmentLease(task.id);
       }
     }
   }
@@ -698,6 +818,9 @@ export class SessionWorkerManager {
     const browserEvent = {
       ...toBrowserStreamEvent(event),
       taskId: active.task.id,
+      ...(event.type === "user_message_started" && active.task.attachments.length > 0
+        ? { attachments: active.task.attachments }
+        : {}),
     };
     if (event.type === "turn_completed") {
       active.finishing = true;
@@ -917,6 +1040,7 @@ export class SessionWorkerManager {
     } catch (error) {
       console.error(`关闭会话 Worker 失败：${errorMessage(error)}`);
     } finally {
+      await this.#releaseTaskAttachmentLease(active.task.id);
       this.#locks.release(active.task.projectId, active.ownerId);
       this.#schedule();
     }
@@ -925,6 +1049,64 @@ export class SessionWorkerManager {
   #clearStartTimer(active: ActiveWorker): void {
     if (active.startTimer) clearTimeout(active.startTimer);
     active.startTimer = null;
+  }
+
+  async #ensureTaskAttachments(task: WorkerTask): Promise<ResolvedAttachment[]> {
+    if (task.attachments.length === 0) return [];
+    if (!this.#uploads) {
+      throw new WorkerManagerError("uploads_unavailable", "附件服务没有启用，任务无法启动。");
+    }
+    const existing = this.#attachmentLeases.get(task.id);
+    if (existing && existing.expiresAtMs > this.#now() + ATTACHMENT_LEASE_RENEW_MARGIN_MS) {
+      return existing.attachments;
+    }
+    if (existing) {
+      try {
+        const renewed = await this.#uploads.renewLease(existing.leaseId, existing.ownerId);
+        existing.expiresAtMs = renewed.expiresAtMs;
+        return existing.attachments;
+      } catch {
+        this.#attachmentLeases.delete(task.id);
+      }
+    }
+    try {
+      const lease = await this.#uploads.createLease(
+        { caller: "codex", projectId: task.projectId, sessionId: task.threadId },
+        task.id,
+        task.attachments.map((attachment) => attachment.id),
+      );
+      this.#attachmentLeases.set(task.id, lease);
+      return lease.attachments;
+    } catch (error) {
+      throw uploadManagerError(error);
+    }
+  }
+
+  async #renewAttachmentLeases(): Promise<void> {
+    if (!this.#uploads || this.#closed) return;
+    for (const [taskId, lease] of this.#attachmentLeases) {
+      try {
+        const renewed = await this.#uploads.renewLease(lease.leaseId, lease.ownerId);
+        lease.expiresAtMs = renewed.expiresAtMs;
+      } catch (error) {
+        console.error(`附件租约 ${taskId} 续期失败：${errorMessage(error)}`);
+      }
+    }
+  }
+
+  async #releaseTaskAttachmentLease(taskId: string): Promise<void> {
+    const lease = this.#attachmentLeases.get(taskId);
+    if (!lease) return;
+    await this.#releaseAttachmentLease(taskId, lease);
+  }
+
+  async #releaseAttachmentLease(taskId: string, lease: AttachmentLease): Promise<void> {
+    if (this.#attachmentLeases.get(taskId) === lease) {
+      this.#attachmentLeases.delete(taskId);
+    }
+    await this.#uploads?.releaseLease(lease.leaseId, lease.ownerId).catch((error: unknown) => {
+      console.error(`释放附件租约 ${taskId} 失败：${errorMessage(error)}`);
+    });
   }
 
   #emit(stored: StoredWorkerEvent, audience: WorkerManagerEvent["audience"]): void {
@@ -1025,6 +1207,18 @@ function publicApproval(approval: ApprovalRequest): Record<string, unknown> {
 
 function publicInteraction(interaction: WorkerInteractionRequest): Record<string, unknown> {
   return structuredClone(interaction) as unknown as Record<string, unknown>;
+}
+
+function publicAttachment(attachment: ResolvedAttachment): PublicAttachment {
+  const { path: _path, ...publicValue } = attachment;
+  return publicValue;
+}
+
+function uploadManagerError(error: unknown): WorkerManagerError {
+  const code = error instanceof Error && "code" in error && typeof error.code === "string"
+    ? error.code
+    : "attachment_failed";
+  return new WorkerManagerError(code, errorMessage(error));
 }
 
 async function readAvailableMemory(): Promise<number> {

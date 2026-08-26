@@ -103,3 +103,37 @@ test("persists Full access selection across state-store reopen", async (context)
   store.setSessionFullAccess("thread-1", false, 200);
   assert.equal(store.sessionFullAccess("thread-1"), false);
 });
+
+test("persists only public attachment metadata with an accepted message", async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-worker-attachments-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const store = await WorkerStateStore.open(path.join(directory, "work.sqlite"));
+  context.after(() => store.close());
+  const attachment = {
+    id: "attachment-1",
+    caller: "codex" as const,
+    projectId: "project-1",
+    sessionId: "thread-1",
+    originalName: "screen.png",
+    declaredMime: "image/png",
+    detectedMime: "image/png",
+    kind: "image" as const,
+    size: 12,
+    sha256: "a".repeat(64),
+    createdAtMs: 1,
+    expiresAtMs: 2,
+  };
+  const stored = store.enqueue({
+    id: "task-attachment",
+    clientMessageId: "message-attachment",
+    projectId: "project-1",
+    threadId: "thread-1",
+    kind: "message",
+    payload: "看图",
+    attachments: [attachment],
+    permissionMode: "manual",
+    createdAtMs: 100,
+  }).task;
+  assert.deepEqual(stored.attachments, [attachment]);
+  assert.equal("path" in stored.attachments[0]!, false);
+});

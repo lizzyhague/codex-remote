@@ -14,6 +14,8 @@ import {
   WorkerStateStore,
 } from "../workers/state-store.ts";
 import { SessionWorkerManager } from "../workers/manager.ts";
+import { SharedUploadClient } from "../shared-upload/client.ts";
+import { resolveSharedUploadPaths } from "../shared-upload/paths.ts";
 
 const TRASH_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 
@@ -27,6 +29,7 @@ export async function main(): Promise<void> {
     path.resolve("config/projects.json");
   const trash = await TrashStore.open(resolveTrashStatePath());
   const workerState = await WorkerStateStore.open(resolveWorkerStatePath());
+  const uploads = new SharedUploadClient(resolveSharedUploadPaths().socket);
 
   const projects = await ProjectCatalog.fromConfigFile(configPath);
   const appServer = new RestartableAppServer({ workingDirectory: process.cwd() });
@@ -45,6 +48,7 @@ export async function main(): Promise<void> {
       projects,
       trash,
       locks,
+      uploads,
       workingDirectory: process.cwd(),
       ...(process.env.CODEX_BIN ? { codexBinary: process.env.CODEX_BIN } : {}),
       ...optionalNumber(
@@ -68,6 +72,7 @@ export async function main(): Promise<void> {
     remote = new RemoteWebSocketServer({
       token,
       allowedOrigins: readAllowedOrigins(process.env.CODEX_REMOTE_ALLOWED_ORIGINS),
+      uploads,
       onWritersIdle: async () => {
         // 理论上 BrowserConnection 已取消自己任务的审批；这里再清一次，避免旧
         // app-server 进程退出后 ApprovalBroker 留下无法回答的请求。
@@ -81,6 +86,7 @@ export async function main(): Promise<void> {
         approvals,
         locks,
         workers,
+        uploads,
       },
     });
     const address = await remote.listen(port);

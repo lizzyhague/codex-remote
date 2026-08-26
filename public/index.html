@@ -8,7 +8,7 @@
     <meta name="description" content="通过私人网络使用 VPS 上的 Codex">
     <link rel="manifest" href="/manifest.webmanifest?v=13">
     <link rel="icon" href="/icon.svg?v=12" type="image/svg+xml">
-    <link rel="stylesheet" href="/styles.css?v=15">
+    <link rel="stylesheet" href="/styles.css?v=16">
     <title>Codex Remote</title>
   </head>
   <body>
@@ -105,6 +105,8 @@
 
         <form id="composer" class="composer">
           <div id="slash-menu" class="slash-menu" role="listbox" hidden></div>
+          <input id="attachment-input" class="visually-hidden" type="file" multiple tabindex="-1">
+          <div id="attachment-list" class="attachment-list" aria-live="polite" hidden></div>
           <textarea
             id="message-input"
             rows="1"
@@ -116,6 +118,14 @@
           <div class="composer-actions">
             <span>电脑可按 Ctrl / ⌘ + Enter 发送</span>
             <div class="composer-action-scroll" aria-label="快捷操作">
+              <button
+                id="attachment-button"
+                class="quiet composer-shortcut"
+                type="button"
+                aria-label="选择附件"
+                title="选择一个或多个附件"
+                disabled
+              >附件</button>
               <button
                 id="command-menu-button"
                 class="quiet composer-shortcut command-menu-button"
@@ -142,6 +152,6 @@
 
     <script src="/boot.js?v=12"></script>
     <script type="module" src="/slash-menu.js?v=12"></script>
-    <script type="module" src="/app.js?v=15"></script>
+    <script type="module" src="/app.js?v=16"></script>
   </body>
 </html>

@@ -60,7 +60,20 @@ export type BrowserRequest =
     argument: string | null;
   }
   | { type: "permissions.full-access.toggle"; requestId: string }
-  | { type: "message.send"; requestId: string; clientMessageId: string; text: string }
+  | {
+    type: "attachment.ticket.create";
+    requestId: string;
+    originalName: string;
+    declaredMime: string;
+    expectedSize: number;
+  }
+  | {
+    type: "message.send";
+    requestId: string;
+    clientMessageId: string;
+    text: string;
+    attachmentIds: string[];
+  }
   | { type: "task.stop"; requestId: string }
   | {
     type: "approval.answer";
@@ -194,7 +207,24 @@ export function parseBrowserRequest(source: string): BrowserRequest {
       };
     case "permissions.full-access.toggle":
       return { type: "permissions.full-access.toggle", requestId };
-    case "message.send":
+    case "attachment.ticket.create":
+      return {
+        type: "attachment.ticket.create",
+        requestId,
+        originalName: requireString(value.originalName, "文件名", requestId, 1_024),
+        declaredMime: readOptionalString(value.declaredMime, "MIME", requestId, 255) ??
+          "application/octet-stream",
+        expectedSize: requireNonnegativeInteger(value.expectedSize, "文件大小", requestId),
+      };
+    case "message.send": {
+      const attachmentIds = readOptionalStringArray(
+        value.attachmentIds,
+        "附件 ID",
+        requestId,
+        100,
+        128,
+      );
+      const text = requireMessageText(value.text, requestId, attachmentIds.length > 0);
       return {
         type: "message.send",
         requestId,
@@ -203,8 +233,10 @@ export function parseBrowserRequest(source: string): BrowserRequest {
         clientMessageId: value.clientMessageId === undefined
           ? requestId
           : requireString(value.clientMessageId, "客户端消息 ID", requestId, 128),
-        text: requireMessageText(value.text, requestId),
+        text,
+        attachmentIds,
       };
+    }
     case "task.stop":
       return { type: "task.stop", requestId };
     case "approval.answer": {
@@ -294,8 +326,14 @@ function readOptionalString(
   return requireString(value, label, requestId, maxLength);
 }
 
-function requireMessageText(value: unknown, requestId: string): string {
-  const text = requireString(value, "消息", requestId, MAX_MESSAGE_TEXT_LENGTH);
+function requireMessageText(value: unknown, requestId: string, allowEmpty: boolean): string {
+  if (typeof value !== "string" || value.length > MAX_MESSAGE_TEXT_LENGTH) {
+    throw new ProtocolError("invalid_field", "消息格式无效或过长。", requestId);
+  }
+  const text = value;
+  if (!allowEmpty && !text.trim()) {
+    throw new ProtocolError("invalid_field", "消息和附件不能同时为空。", requestId);
+  }
   if (Buffer.byteLength(text, "utf8") > MAX_MESSAGE_TEXT_BYTES) {
     throw new ProtocolError(
       "message_too_large",
@@ -304,6 +342,32 @@ function requireMessageText(value: unknown, requestId: string): string {
     );
   }
   return text;
+}
+
+function readOptionalStringArray(
+  value: unknown,
+  label: string,
+  requestId: string,
+  maxItems: number,
+  maxItemLength: number,
+): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > maxItems) {
+    throw new ProtocolError("invalid_field", `${label}列表一次最多 ${maxItems} 项。`, requestId);
+  }
+  const result = value.map((item) => requireString(item, label, requestId, maxItemLength));
+  return [...new Set(result)];
+}
+
+function requireNonnegativeInteger(
+  value: unknown,
+  label: string,
+  requestId: string,
+): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new ProtocolError("invalid_field", `${label}必须是非负整数。`, requestId);
+  }
+  return value;
 }
 
 function requireAnswers(value: unknown, requestId: string): Record<string, string[]> {

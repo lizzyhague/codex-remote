@@ -877,6 +877,58 @@ button.small {
   line-height: 1.45;
 }
 
+.attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.55rem;
+}
+
+.attachment-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.12rem 0.45rem;
+  align-items: center;
+  max-width: min(100%, 28rem);
+  padding: 0.45rem 0.55rem 0.45rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #0f1116;
+}
+
+.attachment-item[data-status="failed"] {
+  border-color: #7f1d1d;
+}
+
+.attachment-name,
+.attachment-meta {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.attachment-name {
+  font-size: 0.82rem;
+}
+
+.attachment-meta {
+  grid-column: 1;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.attachment-item[data-status="failed"] .attachment-meta {
+  color: var(--danger);
+}
+
+.attachment-remove {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-height: 30px;
+  padding: 0.2rem 0.45rem;
+  border: 0;
+  color: var(--muted);
+}
+
 .composer textarea:focus,
 select:focus,
 input:focus,

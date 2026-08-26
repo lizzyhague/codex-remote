@@ -19,6 +19,8 @@
     "src/commands/**/*.ts",
     "src/projects/**/*.ts",
     "src/server/**/*.ts",
-    "src/sessions/**/*.ts"
+    "src/sessions/**/*.ts",
+    "src/shared-upload/**/*.ts",
+    "src/workers/**/*.ts"
   ]
 }

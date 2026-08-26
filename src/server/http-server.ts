@@ -9,6 +9,8 @@ import {
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { SharedUploadClient } from "../shared-upload/client.ts";
+import { MAX_UPLOAD_BYTES, SharedUploadError } from "../shared-upload/types.ts";
 
 import {
   WebSocket,
@@ -38,6 +40,7 @@ export type RemoteWebSocketServerOptions = {
   /** 额外允许的浏览器 Origin。与 Host 同源的请求始终允许。 */
   allowedOrigins?: string[];
   webRoot?: string;
+  uploads?: Pick<SharedUploadClient, "upload">;
 };
 
 const DEFAULT_WEB_ROOT = fileURLToPath(new URL("../../public/", import.meta.url));
@@ -73,6 +76,7 @@ export class RemoteWebSocketServer {
   readonly #heartbeatIntervalMs: number;
   readonly #allowedOrigins: ReadonlySet<string>;
   readonly #webRoot: string;
+  readonly #uploads: RemoteWebSocketServerOptions["uploads"];
   readonly #http: Server;
   readonly #webSockets: WebSocketServer;
   readonly #connections = new Map<WebSocket, BrowserConnection>();
@@ -92,13 +96,9 @@ export class RemoteWebSocketServer {
     this.#heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     this.#allowedOrigins = new Set(options.allowedOrigins ?? []);
     this.#webRoot = options.webRoot ?? DEFAULT_WEB_ROOT;
+    this.#uploads = options.uploads;
     this.#http = createServer((request, response) => {
-      if (request.method === "GET" && request.url === "/healthz") {
-        response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-        response.end('{"status":"ok"}\n');
-        return;
-      }
-      void this.#serveWebFile(request, response);
+      void this.#serveHttp(request, response);
     });
     this.#webSockets = new WebSocketServer({
       noServer: true,
@@ -132,6 +132,72 @@ export class RemoteWebSocketServer {
     this.#webSockets.on("connection", (webSocket) => {
       this.#accept(webSocket);
     });
+  }
+
+  async #serveHttp(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    if (request.method === "GET" && pathname === "/healthz") {
+      response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      response.end('{"status":"ok"}\n');
+      return;
+    }
+    if (pathname === "/attachments/upload") {
+      await this.#receiveUpload(request, response);
+      return;
+    }
+    await this.#serveWebFile(request, response);
+  }
+
+  async #receiveUpload(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    if (request.method !== "POST") {
+      response.writeHead(405, { "content-type": "application/json; charset=utf-8", allow: "POST" });
+      response.end('{"error":{"code":"method_not_allowed","message":"只允许 POST 上传。"}}\n');
+      return;
+    }
+    if (!this.#originAllowed(request)) {
+      response.writeHead(403, { "content-type": "application/json; charset=utf-8" });
+      response.end('{"error":{"code":"origin_forbidden","message":"上传来源不匹配。"}}\n');
+      return;
+    }
+    if (!this.#uploads) {
+      response.writeHead(503, { "content-type": "application/json; charset=utf-8" });
+      response.end('{"error":{"code":"uploads_unavailable","message":"附件服务没有启用。"}}\n');
+      return;
+    }
+    const ticket = request.headers["x-upload-ticket"];
+    const contentLength = parseUploadLength(request.headers["content-length"]);
+    if (typeof ticket !== "string" || !ticket) {
+      sendUploadError(response, new SharedUploadError("missing_ticket", "请求缺少上传票据。", 401));
+      return;
+    }
+    if (contentLength === null) {
+      sendUploadError(response, new SharedUploadError(
+        "invalid_content_length",
+        "上传必须提供有效的 Content-Length。",
+        411,
+      ));
+      return;
+    }
+    if (contentLength > MAX_UPLOAD_BYTES) {
+      sendUploadError(response, new SharedUploadError("file_too_large", "单个文件不能超过 25 MiB。", 413));
+      return;
+    }
+    try {
+      const attachment = await this.#uploads.upload(ticket, contentLength, request);
+      const body = Buffer.from(`${JSON.stringify({ attachment })}\n`);
+      response.writeHead(201, {
+        "content-type": "application/json; charset=utf-8",
+        "content-length": body.byteLength,
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      });
+      response.end(body);
+    } catch (error) {
+      sendUploadError(response, error);
+    }
   }
 
   async #serveWebFile(
@@ -344,6 +410,29 @@ export class RemoteWebSocketServer {
       );
     });
   }
+}
+
+function parseUploadLength(value: string | undefined): number | null {
+  if (value === undefined || !/^\d+$/u.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function sendUploadError(response: ServerResponse, error: unknown): void {
+  const known = error instanceof SharedUploadError
+    ? error
+    : new SharedUploadError("upload_failed", "附件上传失败。", 500);
+  if (!(error instanceof SharedUploadError)) console.error(error);
+  const body = Buffer.from(`${JSON.stringify({
+    error: { code: known.code, message: known.message },
+  })}\n`);
+  response.writeHead(known.status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": body.byteLength,
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+  });
+  response.end(body);
 }
 
 function rawDataToString(data: RawData): string {

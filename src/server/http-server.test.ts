@@ -103,6 +103,64 @@ test("serves health and authenticated WebSocket only on loopback", async () => {
   }
 });
 
+test("streams same-origin uploads through the local attachment adapter", async () => {
+  const transport = new EmptyTransport();
+  const approvals = new ApprovalBroker(transport);
+  const received: Buffer[] = [];
+  const server = new RemoteWebSocketServer({
+    token: "test-secret",
+    services: emptyServices(transport, approvals),
+    uploads: {
+      async upload(ticket, contentLength, source) {
+        assert.equal(ticket, "ticket-secret");
+        for await (const chunk of source) received.push(Buffer.from(chunk));
+        assert.equal(contentLength, 5);
+        return {
+          id: "attachment-1",
+          caller: "codex",
+          projectId: "project-1",
+          sessionId: "thread-1",
+          originalName: "note.txt",
+          declaredMime: "text/plain",
+          detectedMime: "text/plain",
+          kind: "file",
+          size: 5,
+          sha256: "a".repeat(64),
+          createdAtMs: 1,
+          expiresAtMs: 2,
+        };
+      },
+    },
+  });
+  const address = await server.listen(0);
+  const origin = `http://${address.host}:${address.port}`;
+  try {
+    const uploaded = await fetch(`${origin}/attachments/upload`, {
+      method: "POST",
+      headers: { origin, "x-upload-ticket": "ticket-secret" },
+      body: Buffer.from("hello"),
+    });
+    assert.equal(uploaded.status, 201);
+    const body = await uploaded.json() as { attachment: Record<string, unknown> };
+    assert.equal(body.attachment.id, "attachment-1");
+    assert.equal("path" in body.attachment, false);
+    assert.equal(Buffer.concat(received).toString("utf8"), "hello");
+
+    const crossOrigin = await fetch(`${origin}/attachments/upload`, {
+      method: "POST",
+      headers: {
+        origin: "https://attacker.example",
+        "x-upload-ticket": "ticket-secret",
+      },
+      body: Buffer.from("hello"),
+    });
+    assert.equal(crossOrigin.status, 403);
+  } finally {
+    await server.close();
+    approvals.dispose();
+  }
+});
+
 test("releases writers only after the last thread-using browser disconnects", async () => {
   const transport = new EmptyTransport();
   const approvals = new ApprovalBroker(transport);

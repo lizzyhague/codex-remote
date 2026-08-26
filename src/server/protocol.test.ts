@@ -32,6 +32,33 @@ test("parses the small stable browser protocol", () => {
     requestId: "send-1",
     clientMessageId: "018-message",
     text: "后台执行",
+    attachmentIds: [],
+  });
+  assert.deepEqual(parseBrowserRequest(JSON.stringify({
+    type: "attachment.ticket.create",
+    requestId: "ticket-1",
+    originalName: "screen.png",
+    declaredMime: "image/png",
+    expectedSize: 123,
+  })), {
+    type: "attachment.ticket.create",
+    requestId: "ticket-1",
+    originalName: "screen.png",
+    declaredMime: "image/png",
+    expectedSize: 123,
+  });
+  assert.deepEqual(parseBrowserRequest(JSON.stringify({
+    type: "message.send",
+    requestId: "send-attachment",
+    clientMessageId: "message-attachment",
+    text: "",
+    attachmentIds: ["attachment-1", "attachment-1"],
+  })), {
+    type: "message.send",
+    requestId: "send-attachment",
+    clientMessageId: "message-attachment",
+    text: "",
+    attachmentIds: ["attachment-1"],
   });
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "interaction.answer",
@@ -165,4 +192,13 @@ test("rejects a message that is too long instead of dropping the connection", ()
     text: "字".repeat(1_000),
   }));
   assert.equal(accepted.type, "message.send");
+  assert.throws(
+    () => parseBrowserRequest(JSON.stringify({
+      type: "message.send",
+      requestId: "empty",
+      text: "  ",
+      attachmentIds: [],
+    })),
+    (error: unknown) => error instanceof ProtocolError && error.code === "invalid_field",
+  );
 });

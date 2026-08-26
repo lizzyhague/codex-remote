@@ -9,7 +9,11 @@ import type { CodexStreamEvent } from "../app-server/turn-session.ts";
 import type { ProjectCatalog } from "../projects/catalog.ts";
 import type { TrashStore } from "../sessions/trash-store.ts";
 import { ProjectTaskLocks } from "../server/project-locks.ts";
-import { SessionWorkerManager, WorkerManagerError } from "./manager.ts";
+import {
+  SessionWorkerManager,
+  type SessionWorkerManagerOptions,
+  WorkerManagerError,
+} from "./manager.ts";
 import type { SessionWorker, SessionWorkerOptions } from "./session-worker.ts";
 import { WorkerStateStore } from "./state-store.ts";
 
@@ -245,6 +249,157 @@ test("serializes short-lived Workers for the same historical thread", async (con
   assert.equal(createCalls, 2);
 });
 
+test("leases attachment paths only while the persisted task is pending", async (context) => {
+  let released = 0;
+  const uploads: NonNullable<SessionWorkerManagerOptions["uploads"]> = {
+    async createLease(binding, ownerId, attachmentIds) {
+      assert.deepEqual(binding, { caller: "codex", projectId: "project-1", sessionId: "thread-1" });
+      return {
+        leaseId: "lease-1",
+        ownerId,
+        expiresAtMs: Date.now() + 900_000,
+        attachments: attachmentIds.map((id) => ({
+          id,
+          ...binding,
+          originalName: "screen.png",
+          path: "/private/uploads/screen.png",
+          declaredMime: "image/png",
+          detectedMime: "image/png",
+          kind: "image" as const,
+          size: 12,
+          sha256: "a".repeat(64),
+          createdAtMs: 1,
+          expiresAtMs: 2,
+        })),
+      };
+    },
+    async renewLease(leaseId) {
+      return { leaseId, expiresAtMs: Date.now() + 900_000 };
+    },
+    async releaseLease() {
+      released += 1;
+    },
+  };
+  const fixture = await managerFixture(context, { offlineGraceMs: 10, uploads });
+  const prepared = await fixture.manager.prepareMessageAttachments(
+    "project-1",
+    "thread-1",
+    ["attachment-1"],
+  );
+  const accepted = fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-attachment",
+    "看图",
+    prepared,
+  );
+  fixture.manager.start();
+  const worker = await fixture.waitForWorker();
+  assert.equal("path" in fixture.store.require(accepted.taskId).attachments[0]!, false);
+  assert.equal(worker.startedAttachments[0]?.path, "/private/uploads/screen.png");
+  worker.complete("completed");
+  await waitFor(() => released === 1);
+});
+
+test("deduplicates an accepted attachment message before asking for a new lease", async (context) => {
+  let createCalls = 0;
+  const uploads: NonNullable<SessionWorkerManagerOptions["uploads"]> = {
+    async createLease(binding, ownerId, attachmentIds) {
+      createCalls += 1;
+      if (createCalls > 1) throw new Error("附件已经过期，不应再次申请租约");
+      return {
+        leaseId: "lease-idempotent",
+        ownerId,
+        expiresAtMs: Date.now() + 900_000,
+        attachments: attachmentIds.map((id) => ({
+          id,
+          ...binding,
+          originalName: "screen.png",
+          path: "/private/uploads/screen.png",
+          declaredMime: "image/png",
+          detectedMime: "image/png",
+          kind: "image" as const,
+          size: 12,
+          sha256: "a".repeat(64),
+          createdAtMs: 1,
+          expiresAtMs: 2,
+        })),
+      };
+    },
+    async renewLease(leaseId) {
+      return { leaseId, expiresAtMs: Date.now() + 900_000 };
+    },
+    async releaseLease() {},
+  };
+  const fixture = await managerFixture(context, { offlineGraceMs: 10, uploads });
+  const first = await fixture.manager.enqueueMessageWithAttachments(
+    "project-1",
+    "thread-1",
+    "message-idempotent",
+    "看图",
+    ["attachment-1"],
+  );
+  const retried = await fixture.manager.enqueueMessageWithAttachments(
+    "project-1",
+    "thread-1",
+    "message-idempotent",
+    "看图",
+    ["attachment-1"],
+  );
+
+  assert.equal(first.duplicate, false);
+  assert.equal(retried.duplicate, true);
+  assert.equal(retried.taskId, first.taskId);
+  assert.equal(createCalls, 1);
+});
+
+test("rejects an unsupported Codex file before persisting the task", async (context) => {
+  let released = 0;
+  const uploads: NonNullable<SessionWorkerManagerOptions["uploads"]> = {
+    async createLease(binding, ownerId, attachmentIds) {
+      return {
+        leaseId: "lease-pdf",
+        ownerId,
+        expiresAtMs: Date.now() + 900_000,
+        attachments: attachmentIds.map((id) => ({
+          id,
+          ...binding,
+          originalName: "report.pdf",
+          path: "/private/uploads/report.pdf",
+          declaredMime: "application/pdf",
+          detectedMime: "application/pdf",
+          kind: "file" as const,
+          size: 12,
+          sha256: "b".repeat(64),
+          createdAtMs: 1,
+          expiresAtMs: 2,
+        })),
+      };
+    },
+    async renewLease(leaseId) {
+      return { leaseId, expiresAtMs: Date.now() + 900_000 };
+    },
+    async releaseLease() {
+      released += 1;
+    },
+  };
+  const fixture = await managerFixture(context, { offlineGraceMs: 10, uploads });
+
+  await assert.rejects(
+    fixture.manager.enqueueMessageWithAttachments(
+      "project-1",
+      "thread-1",
+      "message-pdf",
+      "看报告",
+      ["attachment-pdf"],
+    ),
+    (error: unknown) => error instanceof WorkerManagerError &&
+      error.code === "unsupported_attachment",
+  );
+  assert.equal(fixture.store.findByClientMessageId("message-pdf"), null);
+  assert.equal(released, 1);
+});
+
 async function managerFixture(
   context: test.TestContext,
   options: {
@@ -254,6 +409,7 @@ async function managerFixture(
     toggleFullAccessFails?: boolean;
     maxWorkers?: number;
     beforeWorkerCreate?: () => Promise<void>;
+    uploads?: SessionWorkerManagerOptions["uploads"];
   },
 ) {
   const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-manager-"));
@@ -282,6 +438,7 @@ async function managerFixture(
       workers.push(worker);
       return worker as unknown as SessionWorker;
     },
+    ...(options.uploads ? { uploads: options.uploads } : {}),
   });
   context.after(async () => {
     await manager.close();
@@ -332,6 +489,7 @@ class FakeWorker {
     cancelThread: () => 0,
   };
   started = false;
+  startedAttachments: Array<{ path: string }> = [];
   interruptCount = 0;
   closeCount = 0;
   cancelledApprovals = 0;
@@ -366,8 +524,9 @@ class FakeWorker {
       get activeTurnId() {
         return thisOwner.#activeTurnId;
       },
-      startTextTurn: async (_text: string) => {
+      startTextTurn: async (_text: string, attachments: Array<{ path: string }> = []) => {
         this.started = true;
+        this.startedAttachments = attachments;
         this.#activeTurnId = "native-turn-1";
         this.#stream({ type: "turn_started", threadId: "thread-1", turnId: "native-turn-1" });
         return "native-turn-1";

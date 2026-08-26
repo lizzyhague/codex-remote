@@ -13,14 +13,18 @@ Codex Remote 固定监听 `127.0.0.1`，systemd 单元不依赖具体入口。
 
 ## systemd 模板
 
-仓库中的 `deploy/codex-remote.service` 和 `deploy/codex-remote.env.example` 是模板，
-不能假设每台主机的用户名、Node.js、Codex CLI 和代码路径相同。安装前至少核对：
+仓库中的 `deploy/ai-remote-upload.service`、`deploy/codex-remote.service` 及对应的
+`.env.example` 是模板，不能假设每台主机的用户名、Node.js、Codex CLI 和代码路径
+相同。安装前至少核对：
 
 - `User`、`Group` 和 `HOME`；
 - `WorkingDirectory` 与 `ExecStart`；
 - Node.js 和 `CODEX_BIN` 的绝对路径；
 - 项目配置、状态目录及其文件权限；
 - 服务账户是否已经登录 Codex，以及是否能读写允许的项目。
+
+共享附件服务和 Codex Remote 必须使用同一个 Unix 账户，才能访问权限为 `0600` 的
+Unix socket 和附件文件。默认 socket 是 `~/.local/share/ai-remote/upload.sock`。
 
 建议使用专用的非 root 系统账户。该账户的 `HOME` 保存 Codex 自己的登录和会话数据，
 因此不能把 `ProtectHome=true` 等会阻断这些目录的 systemd 限制直接照搬进来。
@@ -30,6 +34,8 @@ Codex Remote 固定监听 `127.0.0.1`，systemd 单元不依赖具体入口。
 ```bash
 cp deploy/codex-remote.env.example /etc/codex-remote.env
 chmod 600 /etc/codex-remote.env
+cp deploy/ai-remote-upload.env.example /etc/ai-remote-upload.env
+chmod 600 /etc/ai-remote-upload.env
 ```
 
 把项目配置复制到环境文件中声明的位置，并改为实际绝对路径：
@@ -41,28 +47,41 @@ cp config/projects.example.json /etc/codex-remote-projects.json
 安装并启动单元：
 
 ```bash
+cp deploy/ai-remote-upload.service /etc/systemd/system/ai-remote-upload.service
 cp deploy/codex-remote.service /etc/systemd/system/codex-remote.service
 systemctl daemon-reload
+systemctl enable --now ai-remote-upload.service
 systemctl enable --now codex-remote.service
 ```
 
 这些命令通常需要管理员权限。先编辑模板再启动，不要直接依赖示例中的
 `/opt/codex-remote`、`/usr/bin/node` 或 `/usr/local/bin/codex`。
 
+已有主机如果不覆盖自己的 `codex-remote.service`，可只安装
+`deploy/codex-remote-upload.conf` 为
+`/etc/systemd/system/codex-remote.service.d/20-ai-remote-upload.conf`，再执行
+`systemctl daemon-reload`。这个 drop-in 使用 `Wants` 而不是 `Requires`：共享服务故障
+只会让附件操作明确失败，不会阻止纯文本 Remote 启动。
+
 真实令牌只放在主机环境文件中，不要粘贴进聊天、Issue、日志或 Git 提交。
 
 ## 状态与日志
 
 ```bash
+systemctl status ai-remote-upload.service
 systemctl status codex-remote.service
+systemctl is-enabled ai-remote-upload.service
 systemctl is-enabled codex-remote.service
+systemctl is-active ai-remote-upload.service
 systemctl is-active codex-remote.service
+journalctl -u ai-remote-upload.service -n 100 --no-pager
 journalctl -u codex-remote.service -n 100 --no-pager
 ```
 
 持续查看日志：
 
 ```bash
+journalctl -u ai-remote-upload.service -f
 journalctl -u codex-remote.service -f
 ```
 
@@ -86,7 +105,9 @@ git pull --ff-only
 npm ci
 npm run typecheck
 npm test
+systemctl restart ai-remote-upload.service
 systemctl restart codex-remote.service
+systemctl is-active ai-remote-upload.service
 systemctl is-active codex-remote.service
 curl http://127.0.0.1:8787/healthz
 ```
@@ -118,10 +139,15 @@ curl http://127.0.0.1:8787/healthz
 允许服务账户访问。
 
 `CODEX_REMOTE_WORK_STATE_FILE` 指向 Worker SQLite 状态库。它包含已接受消息、任务
-状态、脱敏后的流事件、工具输出和中断原因，应视作敏感对话数据，只允许服务账户
-访问。SQLite 使用 WAL；不要在服务运行时只复制主数据库文件而漏掉尚未 checkpoint
-的 `-wal`。可靠做法是在无活动任务时停止服务后复制数据库，或使用 SQLite 的在线
-备份能力。
+状态、附件公开元数据、脱敏后的流事件、工具输出和中断原因，应视作敏感对话数据，
+只允许服务账户访问。SQLite 使用 WAL；不要在服务运行时只复制主数据库文件而漏掉
+尚未 checkpoint 的 `-wal`。可靠做法是在无活动任务时停止服务后复制数据库，或使用
+SQLite 的在线备份能力。
+
+`AI_REMOTE_UPLOAD_ROOT` 指向共享附件服务的数据目录，默认是
+`~/.local/share/ai-remote/uploads`。其中同时包含原始附件和索引数据库，属于敏感数据；
+备份时应复制整个目录并保持 `0700`/`0600` 权限，不要只复制数据库，也不要把附件的
+绝对路径写进浏览器状态、公开日志或错误响应。
 
 迁移主机时，如需保留回收站剩余保留天数、排队消息和中断记录，应同时迁移这两个
 状态文件。Codex 原生会话和登录状态仍属于 Codex 自己的数据，应按所用 Codex CLI
@@ -154,7 +180,7 @@ curl http://127.0.0.1:8787/healthz
 网页打不开时分层检查：
 
 1. `curl http://127.0.0.1:8787/healthz` 是否成功；
-2. systemd 服务是否为 `active`；
+2. `codex-remote.service` 和 `ai-remote-upload.service` 是否都为 `active`；
 3. HTTPS 入口是否正确转发到 `127.0.0.1:8787`；
 4. 防火墙、DNS 或 tailnet ACL 是否允许访问；
 5. 浏览器是否使用 `https://`，WebSocket 是否使用 `wss://`。
