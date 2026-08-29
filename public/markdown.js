@@ -38,11 +38,7 @@ export function tokenizeInline(source) {
       continue;
     }
 
-    const strongDelimiter = rest.startsWith("**")
-      ? "**"
-      : rest.startsWith("__")
-      ? "__"
-      : null;
+    const strongDelimiter = rest.startsWith("**") ? "**" : null;
     if (strongDelimiter) {
       const end = text.indexOf(strongDelimiter, index + 2);
       if (end > index + 2) {
@@ -55,9 +51,8 @@ export function tokenizeInline(source) {
       }
     }
 
-    if (rest[0] === "*" || rest[0] === "_") {
-      const delimiter = rest[0];
-      const end = text.indexOf(delimiter, index + 1);
+    if (rest[0] === "*") {
+      const end = text.indexOf("*", index + 1);
       const content = end > index ? text.slice(index + 1, end) : "";
       if (content && !/^\s|\s$/.test(content)) {
         tokens.push({ type: "emphasis", children: tokenizeInline(content) });
@@ -273,12 +268,12 @@ function isBlockStart(lines, index) {
 
 function isHorizontalRule(line) {
   const compact = line.trim().replace(/\s/g, "");
-  return /^(?:\*{3,}|-{3,}|_{3,})$/.test(compact);
+  return /^(?:\*{3,}|-{3,})$/.test(compact);
 }
 
 function findNextInlineSpecial(text, from) {
   for (let index = from; index < text.length; index += 1) {
-    if ("\\`![]*_".includes(text[index])) return index;
+    if ("\\`![]*".includes(text[index])) return index;
   }
   return -1;
 }
