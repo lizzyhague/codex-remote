@@ -130,6 +130,12 @@ App Server 的内部审批对象仍保留原始命令，以便正确对应请求
 
 当前只支持“本次允许”和“拒绝”，不会创建长期授权规则。
 
+`availableDecisions` 是单次审批请求的可用决定子集，不是固定列表。
+`acceptForSession` 虽属于 App Server 协议，但不保证对每次命令审批开放；客户端不得在
+App Server 未提供时强行发送。2026-08-31 实测当前沙箱升级命令未提供该决定。若需
+会话级复用授权，应另行评估 App Server 实际提供的 execpolicy amendment，或
+`request_permissions` 的 session scope。
+
 ## 会话与并发
 
 电脑宽屏默认显示会话侧栏，用户收起后会在当前浏览器记住状态；收起时顶栏
