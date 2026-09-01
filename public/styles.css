@@ -586,7 +586,7 @@ button.small {
 .markdown-body ul,
 .markdown-body ol,
 .markdown-body blockquote,
-.markdown-body pre,
+.markdown-code-block,
 .markdown-table-wrap {
   margin: 0.7rem 0;
 }
@@ -631,13 +631,21 @@ button.small {
   font-size: 0.9em;
 }
 
-.markdown-body pre {
+.markdown-code-block {
+  position: relative;
   max-width: 100%;
-  overflow: auto;
-  padding: 0.75rem;
   border: 1px solid var(--border);
   border-radius: 9px;
   background: #11141a;
+}
+
+.markdown-body pre {
+  max-width: 100%;
+  margin: 0;
+  overflow: auto;
+  padding: 2.7rem 0.75rem 0.75rem;
+  border-radius: inherit;
+  background: transparent;
   white-space: pre;
 }
 
@@ -645,6 +653,30 @@ button.small {
   padding: 0;
   background: none;
   font-size: 0.84rem;
+}
+
+.markdown-code-copy {
+  position: absolute;
+  z-index: 1;
+  top: 0.45rem;
+  right: 0.45rem;
+  min-height: 1.8rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  background: var(--panel-raised);
+  color: #d1d5db;
+  font-size: 0.76rem;
+  line-height: 1.2;
+}
+
+.markdown-code-copy[data-state="success"] {
+  border-color: #3f765e;
+  color: var(--accent);
+}
+
+.markdown-code-copy[data-state="error"] {
+  border-color: #7f1d1d;
+  color: var(--danger);
 }
 
 .markdown-body a {

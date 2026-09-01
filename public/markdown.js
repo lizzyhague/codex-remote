@@ -87,6 +87,32 @@ export function renderMarkdown(source, ownerDocument = document) {
   return root;
 }
 
+export async function copyTextToClipboard(text, ownerDocument = document) {
+  const clipboard = ownerDocument.defaultView?.navigator?.clipboard;
+  if (typeof clipboard?.writeText === "function") {
+    await clipboard.writeText(String(text ?? ""));
+    return;
+  }
+
+  const textarea = ownerDocument.createElement("textarea");
+  textarea.value = String(text ?? "");
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  ownerDocument.body.append(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+
+  try {
+    if (!ownerDocument.execCommand("copy")) {
+      throw new Error("浏览器未能复制代码");
+    }
+  } finally {
+    textarea.remove();
+  }
+}
+
 function parseBlocks(lines) {
   const blocks = [];
   let index = 0;
@@ -301,14 +327,7 @@ function appendBlocks(parent, blocks, ownerDocument) {
     } else if (block.type === "rule") {
       parent.append(ownerDocument.createElement("hr"));
     } else if (block.type === "code") {
-      const pre = ownerDocument.createElement("pre");
-      const code = ownerDocument.createElement("code");
-      if (/^[a-z0-9_+-]+$/i.test(block.language)) {
-        code.dataset.language = block.language;
-      }
-      code.textContent = block.text;
-      pre.append(code);
-      parent.append(pre);
+      parent.append(renderCodeBlock(block, ownerDocument));
     } else if (block.type === "blockquote") {
       const quote = ownerDocument.createElement("blockquote");
       appendBlocks(quote, block.blocks, ownerDocument);
@@ -326,6 +345,54 @@ function appendBlocks(parent, blocks, ownerDocument) {
       parent.append(renderTable(block, ownerDocument));
     }
   }
+}
+
+function renderCodeBlock(block, ownerDocument) {
+  const wrapper = ownerDocument.createElement("div");
+  wrapper.className = "markdown-code-block";
+
+  const button = ownerDocument.createElement("button");
+  button.className = "markdown-code-copy";
+  button.type = "button";
+  button.textContent = "复制";
+  button.title = "复制代码";
+  button.setAttribute("aria-label", "复制代码");
+  button.setAttribute("aria-live", "polite");
+
+  let resetTimer = null;
+  button.addEventListener("click", async () => {
+    const view = ownerDocument.defaultView;
+    if (resetTimer !== null) {
+      view?.clearTimeout(resetTimer);
+      resetTimer = null;
+    }
+
+    try {
+      await copyTextToClipboard(block.text, ownerDocument);
+      button.textContent = "已复制 ✓";
+      button.dataset.state = "success";
+    } catch {
+      button.textContent = "复制失败";
+      button.dataset.state = "error";
+    }
+
+    const reset = () => {
+      button.textContent = "复制";
+      delete button.dataset.state;
+      resetTimer = null;
+    };
+    resetTimer = view?.setTimeout(reset, 1_600) ?? setTimeout(reset, 1_600);
+  });
+
+  const pre = ownerDocument.createElement("pre");
+  const code = ownerDocument.createElement("code");
+  if (/^[a-z0-9_+-]+$/i.test(block.language)) {
+    code.dataset.language = block.language;
+  }
+  code.textContent = block.text;
+  pre.append(code);
+  wrapper.append(button, pre);
+  return wrapper;
 }
 
 function renderTable(block, ownerDocument) {

@@ -1,4 +1,4 @@
-import { renderMarkdown, sanitizeHref } from "./markdown.js?v=13";
+import { renderMarkdown, sanitizeHref } from "./markdown.js?v=14";
 
 const TOKEN_KEY = "codex-remote.token";
 const PROJECT_KEY = "codex-remote.project";

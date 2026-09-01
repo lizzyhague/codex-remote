@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseMarkdown, sanitizeHref, tokenizeInline } from "./markdown.js";
+import { parseMarkdown, renderMarkdown, sanitizeHref, tokenizeInline } from "./markdown.js";
 
 test("parses common chat markdown including tables", () => {
   const blocks = parseMarkdown(`
@@ -50,3 +50,66 @@ test("keeps html as text and rejects unsafe links", () => {
   assert.equal(sanitizeHref("https://example.com"), "https://example.com");
   assert.equal(sanitizeHref("/docs/page"), "/docs/page");
 });
+
+test("renders a copy button that copies the complete fenced code block", async () => {
+  let copiedText = null;
+  let resetFeedback = null;
+  const ownerDocument = createRecordingDocument({
+    async writeText(text) {
+      copiedText = text;
+    },
+  }, (callback) => {
+    resetFeedback = callback;
+    return 1;
+  });
+
+  const root = renderMarkdown("```js\nconst first = 1;\nconst second = 2;\n```", ownerDocument);
+  const wrapper = root.children[0];
+  const button = wrapper.children[0];
+  const code = wrapper.children[1].children[0];
+
+  assert.equal(wrapper.className, "markdown-code-block");
+  assert.equal(button.className, "markdown-code-copy");
+  assert.equal(button.attributes["aria-label"], "复制代码");
+  assert.equal(code.dataset.language, "js");
+  await button.listeners.click();
+  assert.equal(copiedText, "const first = 1;\nconst second = 2;");
+  assert.equal(button.textContent, "已复制 ✓");
+
+  resetFeedback();
+  assert.equal(button.textContent, "复制");
+});
+
+function createRecordingDocument(clipboard, setTimeout) {
+  const ownerDocument = {
+    defaultView: {
+      navigator: { clipboard },
+      clearTimeout() {},
+      setTimeout,
+    },
+    createElement(tagName) {
+      return {
+        tagName: tagName.toUpperCase(),
+        attributes: {},
+        children: [],
+        className: "",
+        dataset: {},
+        listeners: {},
+        textContent: "",
+        append(...children) {
+          this.children.push(...children);
+        },
+        setAttribute(name, value) {
+          this.attributes[name] = String(value);
+        },
+        addEventListener(type, listener) {
+          this.listeners[type] = listener;
+        },
+      };
+    },
+    createTextNode(text) {
+      return { nodeType: 3, textContent: text };
+    },
+  };
+  return ownerDocument;
+}
