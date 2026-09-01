@@ -643,7 +643,7 @@ button.small {
   max-width: 100%;
   margin: 0;
   overflow: auto;
-  padding: 2.7rem 0.75rem 0.75rem;
+  padding: 0.75rem;
   border-radius: inherit;
   background: transparent;
   white-space: pre;
@@ -660,13 +660,18 @@ button.small {
   z-index: 1;
   top: 0.45rem;
   right: 0.45rem;
-  min-height: 1.8rem;
-  padding: 0.2rem 0.55rem;
+  width: 2rem;
+  min-width: 2rem;
+  height: 2rem;
+  min-height: 2rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
   border-radius: 6px;
+  /* 按钮压在代码第一行上，底色必须不透明，阴影用来和下面的字拉开层次。 */
   background: var(--panel-raised);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 45%);
   color: #d1d5db;
-  font-size: 0.76rem;
-  line-height: 1.2;
 }
 
 .markdown-code-copy[data-state="success"] {
@@ -677,6 +682,11 @@ button.small {
 .markdown-code-copy[data-state="error"] {
   border-color: #7f1d1d;
   color: var(--danger);
+}
+
+.markdown-code-copy-icon {
+  width: 1.05rem;
+  height: 1.05rem;
 }
 
 .markdown-body a {

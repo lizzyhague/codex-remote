@@ -354,10 +354,8 @@ function renderCodeBlock(block, ownerDocument) {
   const button = ownerDocument.createElement("button");
   button.className = "markdown-code-copy";
   button.type = "button";
-  button.textContent = "复制";
-  button.title = "复制代码";
-  button.setAttribute("aria-label", "复制代码");
   button.setAttribute("aria-live", "polite");
+  setCopyButtonState(button, "idle", ownerDocument);
 
   let resetTimer = null;
   button.addEventListener("click", async () => {
@@ -369,16 +367,13 @@ function renderCodeBlock(block, ownerDocument) {
 
     try {
       await copyTextToClipboard(block.text, ownerDocument);
-      button.textContent = "已复制 ✓";
-      button.dataset.state = "success";
+      setCopyButtonState(button, "success", ownerDocument);
     } catch {
-      button.textContent = "复制失败";
-      button.dataset.state = "error";
+      setCopyButtonState(button, "error", ownerDocument);
     }
 
     const reset = () => {
-      button.textContent = "复制";
-      delete button.dataset.state;
+      setCopyButtonState(button, "idle", ownerDocument);
       resetTimer = null;
     };
     resetTimer = view?.setTimeout(reset, 1_600) ?? setTimeout(reset, 1_600);
@@ -393,6 +388,48 @@ function renderCodeBlock(block, ownerDocument) {
   pre.append(code);
   wrapper.append(button, pre);
   return wrapper;
+}
+
+function setCopyButtonState(button, state, ownerDocument) {
+  const labels = {
+    idle: "复制代码",
+    success: "已复制",
+    error: "复制失败",
+  };
+  const label = labels[state];
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  if (state === "idle") delete button.dataset.state;
+  else button.dataset.state = state;
+  button.replaceChildren(createCopyStateIcon(state, ownerDocument));
+}
+
+function createCopyStateIcon(state, ownerDocument) {
+  const namespace = "http://www.w3.org/2000/svg";
+  const svg = ownerDocument.createElementNS(namespace, "svg");
+  svg.setAttribute("class", "markdown-code-copy-icon");
+  svg.setAttribute("viewBox", "0 0 20 20");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.6");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+
+  const paths = state === "success"
+    ? ["M4 10.5 8 14.5 16 6.5"]
+    : state === "error"
+    ? ["M6 6l8 8", "M14 6l-8 8"]
+    : [
+      "M7.5 6.5h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z",
+      "M13.5 6.5v-2a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h1",
+    ];
+  for (const pathData of paths) {
+    const path = ownerDocument.createElementNS(namespace, "path");
+    path.setAttribute("d", pathData);
+    svg.append(path);
+  }
+  return svg;
 }
 
 function renderTable(block, ownerDocument) {
