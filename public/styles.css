@@ -148,6 +148,21 @@ button.small {
   height: 48px;
 }
 
+.login-brand {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  margin-bottom: 0.4rem;
+}
+
+.login-brand h1 {
+  margin: 0;
+}
+
+.login-hint {
+  font-size: 0.8rem;
+}
+
 .form-status {
   min-height: 1.4em;
   margin-bottom: 0;

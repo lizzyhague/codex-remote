@@ -65,6 +65,16 @@ test("serves health and authenticated WebSocket only on loopback", async () => {
       assert.match(await response.text(), /\S/);
     }
 
+    for (const asset of ["/icon-192.png", "/icon-512.png", "/icon-512-maskable.png"]) {
+      const response = await fetch("http://" + address.host + ":" + address.port + asset);
+      assert.equal(response.status, 200, asset + " should be served");
+      assert.equal(response.headers.get("content-type"), "image/png");
+      assert.deepEqual(
+        [...new Uint8Array(await response.arrayBuffer()).slice(0, 8)],
+        [137, 80, 78, 71, 13, 10, 26, 10],
+      );
+    }
+
     const missing = await fetch(`http://${address.host}:${address.port}/not-a-file`);
     assert.equal(missing.status, 404);
 

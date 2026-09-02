@@ -64,6 +64,9 @@ const STATIC_FILES: Record<string, { file: string; contentType: string }> = {
     contentType: "application/manifest+json; charset=utf-8",
   },
   "/icon.svg": { file: "icon.svg", contentType: "image/svg+xml; charset=utf-8" },
+  "/icon-192.png": { file: "icon-192.png", contentType: "image/png" },
+  "/icon-512.png": { file: "icon-512.png", contentType: "image/png" },
+  "/icon-512-maskable.png": { file: "icon-512-maskable.png", contentType: "image/png" },
   "/sw.js": { file: "sw.js", contentType: "text/javascript; charset=utf-8" },
 };
 
