@@ -23,7 +23,6 @@ const elements = {
   loginStatus: byId("login-status"),
   appView: byId("app-view"),
   connectionStatus: byId("connection-status"),
-  changeTokenButton: byId("change-token-button"),
   currentSessionTitle: byId("current-session-title"),
   sessionSidebar: byId("session-sidebar"),
   openSidebarButton: byId("open-sidebar-button"),
@@ -139,26 +138,6 @@ elements.tokenForm.addEventListener("submit", (event) => {
   }
   state.reconnectAllowed = true;
   void connect(token);
-});
-
-elements.changeTokenButton.addEventListener("click", () => {
-  const warning = state.backgroundWorkers
-    ? "更换令牌会断开当前页面；后台任务可能继续运行。继续吗？"
-    : "更换令牌会断开连接，并停止当前任务。继续吗？";
-  if (state.running && !window.confirm(warning)) {
-    return;
-  }
-  abortAttachmentUploads();
-  state.reconnectAllowed = false;
-  clearTimeout(state.reconnectTimer);
-  state.socket?.close(1000, "Change token");
-  state.socket = null;
-  state.authenticated = false;
-  state.token = "";
-  removeStored(TOKEN_KEY);
-  elements.tokenInput.value = "";
-  elements.loginStatus.textContent = "";
-  showLogin();
 });
 
 elements.projectSelect.addEventListener("change", () => {
