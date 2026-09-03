@@ -8,7 +8,7 @@
     <meta name="description" content="通过私人网络使用 VPS 上的 Codex">
     <link rel="manifest" href="/manifest.webmanifest?v=14">
     <link rel="icon" href="/icon-192.png?v=13" type="image/png" sizes="192x192">
-    <link rel="stylesheet" href="/styles.css?v=19">
+    <link rel="stylesheet" href="/styles.css?v=20">
     <title>Codex Remote</title>
   </head>
   <body>
@@ -29,7 +29,10 @@
     <div id="app-view" class="app-view" data-sidebar-collapsed="false" data-mobile-sidebar-open="false" hidden>
       <aside id="session-sidebar" class="session-sidebar" aria-label="会话导航">
         <div class="sidebar-heading">
-          <strong>会话</strong>
+          <div class="sidebar-brand">
+            <img class="sidebar-logo" src="/icon-192.png?v=13" alt="">
+            <strong>会话</strong>
+          </div>
           <button id="collapse-sidebar-button" class="quiet small" type="button" aria-label="收起会话列表">收起</button>
         </div>
 
@@ -54,7 +57,10 @@
 
         <div id="selection-heading" class="selection-heading" hidden>
           <button id="cancel-selection-button" class="quiet small" type="button">取消</button>
-          <strong id="selection-count">已选择 0 项</strong>
+          <div class="selection-heading-end">
+            <strong id="selection-count">已选择 0 项</strong>
+            <button id="select-all-sessions-button" class="quiet small" type="button">全选</button>
+          </div>
         </div>
 
         <div id="session-list" class="session-list" role="list" aria-live="polite"></div>
@@ -154,6 +160,6 @@
 
     <script src="/boot.js?v=12"></script>
     <script type="module" src="/slash-menu.js?v=12"></script>
-    <script type="module" src="/app.js?v=19"></script>
+    <script type="module" src="/app.js?v=20"></script>
   </body>
 </html>

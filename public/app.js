@@ -38,6 +38,7 @@ const elements = {
   selectionHeading: byId("selection-heading"),
   cancelSelectionButton: byId("cancel-selection-button"),
   selectionCount: byId("selection-count"),
+  selectAllSessionsButton: byId("select-all-sessions-button"),
   sessionList: byId("session-list"),
   loadMoreSessionsButton: byId("load-more-sessions-button"),
   sessionDestinations: byId("session-destinations"),
@@ -198,6 +199,10 @@ elements.selectSessionsButton.addEventListener("click", () => {
 
 elements.cancelSelectionButton.addEventListener("click", () => {
   setSelectionMode(false);
+});
+
+elements.selectAllSessionsButton.addEventListener("click", () => {
+  toggleSelectAllSessions();
 });
 
 elements.loadMoreSessionsButton.addEventListener("click", () => {
@@ -763,9 +768,30 @@ function createSessionMenu(session) {
   return button;
 }
 
+function selectableSessions() {
+  return state.sessions.filter((session) => session.state !== "active");
+}
+
+function toggleSelectAllSessions() {
+  const ids = selectableSessions().map((session) => session.id);
+  const capped = ids.slice(0, 100);
+  const allSelected = capped.length > 0 && capped.every((id) => state.selectedSessions.has(id));
+  if (allSelected) {
+    state.selectedSessions.clear();
+  } else {
+    state.selectedSessions = new Set(capped);
+    if (ids.length > 100) showNotice("一次最多整理 100 个会话。");
+  }
+  renderSessionList();
+}
+
 function updateSelectionControls() {
   const count = state.selectedSessions.size;
+  const cappedIds = selectableSessions().map((session) => session.id).slice(0, 100);
+  const allSelected = cappedIds.length > 0 &&
+    cappedIds.every((id) => state.selectedSessions.has(id));
   elements.selectionCount.textContent = `已选择 ${count} 项`;
+  elements.selectAllSessionsButton.textContent = allSelected ? "取消全选" : "全选";
   elements.bulkPrimaryButton.disabled = count === 0 || state.sessionLoading;
   elements.bulkTrashButton.disabled = count === 0 || state.sessionLoading;
   elements.bulkPrimaryButton.textContent = state.sessionView === "active" ? "归档" : "恢复";
@@ -2218,7 +2244,9 @@ function updateControls() {
     state.selectionMode || !state.projectId;
   elements.selectSessionsButton.disabled = !connected || navigationLocked ||
     projectHasActiveTask ||
-    !state.sessions.some((session) => session.state !== "active");
+    selectableSessions().length === 0;
+  elements.selectAllSessionsButton.disabled = !connected || navigationBusy || busy ||
+    selectableSessions().length === 0;
   elements.loadMoreSessionsButton.disabled = !connected || navigationBusy;
   elements.sessionViewBackButton.disabled = !connected || navigationBusy;
   elements.archivedSessionsButton.disabled = !connected || navigationBusy;
