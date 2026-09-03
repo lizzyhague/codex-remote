@@ -11,6 +11,9 @@ coverage/
 
 deploy/*.env
 !deploy/*.env.example
+deploy/*.service.local
+
+docs/deployment.*.local.md
 
 config/projects.json
 config/projects.local.json

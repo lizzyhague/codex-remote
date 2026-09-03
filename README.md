@@ -35,7 +35,7 @@ Codex/Claude Code 在同一项目中并行执行。
 ```text
 手机或电脑浏览器
   -> HTTPS 入口（Tailscale Serve 或公网反向代理）
-  -> 127.0.0.1:8787 上的 Codex Remote
+  -> 127.0.0.1:<CODEX_REMOTE_PORT> 上的 Codex Remote
   -> Unix socket 上的共享上传服务（附件路径）
   -> 后端队列与 SQLite 事件日志
   -> 每个活动会话独立的 stdio / JSONL codex app-server Worker
@@ -50,6 +50,9 @@ Codex/Claude Code 在同一项目中并行执行。
 - npm；
 - 已安装并登录 Codex CLI；
 - `codex app-server --stdio` 可用。
+
+常驻服务应以已经安装并登录 Codex、且能访问允许项目的非 root Unix 用户运行。部署者
+可以使用现有用户，也可以为服务准备独立用户；仓库不假定固定账户、HOME 或安装路径。
 
 初始开源版本针对 Codex CLI `0.147.0` 开发和测试。App Server 中部分会话设置接口
 仍属于实验能力；升级 Codex CLI 后应重新运行测试并做浏览器验收。
@@ -127,8 +130,11 @@ npm start
 本机健康检查：
 
 ```bash
-curl http://127.0.0.1:8787/healthz
+curl http://127.0.0.1:3000/healthz
 ```
+
+`3000` 是本地开发默认值。正式部署应显式设置回环端口；HTTPS 入口端口由
+Tailscale Serve 或其它反向代理单独选择，两者不要求使用相同数字。
 
 然后选择一种 HTTPS 入口：
 
@@ -146,14 +152,14 @@ Codex 配置决定；登录后可以通过 `/permissions` 查看和切换 App Se
 权限 profile。
 
 选择 full access 会扩大令牌泄露后的影响范围。公网部署尤其应保留受限权限，并让
-Codex 运行在专用的非 root 系统账户下。
+Codex 运行在权限边界明确的非 root Unix 用户下。
 
 ## 配置
 
 | 环境变量 | 说明 |
 | --- | --- |
 | `CODEX_REMOTE_TOKEN` | 浏览器 WebSocket 登录令牌，至少 32 个字符 |
-| `CODEX_REMOTE_PORT` | 回环监听端口，默认 `8787` |
+| `CODEX_REMOTE_PORT` | 回环监听端口；未设置时默认 `3000`，正式部署建议显式设置 |
 | `CODEX_REMOTE_ALLOWED_ORIGINS` | 额外允许的浏览器 Origin，逗号分隔；通常留空 |
 | `CODEX_REMOTE_PROJECTS_CONFIG` | 项目根目录配置文件，默认 `config/projects.json` |
 | `CODEX_REMOTE_STATE_FILE` | 回收站登记文件路径 |

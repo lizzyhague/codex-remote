@@ -24,7 +24,7 @@ export async function main(): Promise<void> {
   if (!token || token.length < 32) {
     throw new Error("请设置至少 32 个字符的 CODEX_REMOTE_TOKEN。");
   }
-  const port = readPort(process.env.CODEX_REMOTE_PORT ?? "8787");
+  const port = readPort(process.env.CODEX_REMOTE_PORT ?? "3000");
   const configPath = process.env.CODEX_REMOTE_PROJECTS_CONFIG ??
     path.resolve("config/projects.json");
   const trash = await TrashStore.open(resolveTrashStatePath());

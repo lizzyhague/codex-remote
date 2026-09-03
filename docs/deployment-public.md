@@ -9,7 +9,7 @@ Tailscale。它不把 Codex Remote 变成多人服务：所有浏览器仍共用
 也没有账户、MFA、分用户吊销或审计系统。
 
 公网入口只应由 HTTPS 反向代理提供。不要修改源码让 Node.js 监听 `0.0.0.0`，也不要
-在防火墙中开放 `8787`。
+在防火墙中开放所选的后端回环端口。
 
 ## 风险
 
@@ -26,9 +26,10 @@ Tailscale。它不把 Codex Remote 变成多人服务：所有浏览器仍共用
 
 ## 最低要求
 
-- 使用专用、非 root 的系统账户运行 Codex 和 Codex Remote；
+- 使用权限边界明确的非 root Unix 用户运行 Codex 和 Codex Remote；如选择专用用户，
+  应在该用户身份下单独安装、登录 Codex，并配置项目访问权限；
 - 使用 `openssl rand -hex 32` 或等强度方式生成独立令牌；
-- 只开放公网 `80/443`，后端保持 `127.0.0.1:8787`；
+- 只开放公网 `80/443`，后端保持监听 `127.0.0.1:<CODEX_REMOTE_PORT>`；
 - 为域名启用有效 HTTPS，禁止明文远程访问；
 - 项目根目录尽量窄，并保留 Codex 的受限权限；
 - 在云防火墙、CDN 或反向代理层设置合理的连接和请求限制；
@@ -37,17 +38,18 @@ Tailscale。它不把 Codex Remote 变成多人服务：所有浏览器仍共用
 ## Caddy 示例
 
 准备一个解析到 VPS 的域名，并确保公网可以访问 `80` 和 `443`。确认 Codex Remote
-已经在回环地址运行：
+已经在回环地址运行。以下用默认开发端口 `3000` 举例；正式部署应替换为环境文件中的
+实际 `CODEX_REMOTE_PORT`：
 
 ```bash
-curl http://127.0.0.1:8787/healthz
+curl --fail --show-error http://127.0.0.1:3000/healthz
 ```
 
 Caddyfile 的最小配置如下：
 
 ```caddyfile
 codex.example.com {
-    reverse_proxy 127.0.0.1:8787
+    reverse_proxy 127.0.0.1:3000
 }
 ```
 
@@ -89,7 +91,7 @@ curl https://codex.example.com/healthz
 2. 错误令牌无法登录；
 3. 正确令牌可以加载项目列表；
 4. 浏览器开发者工具中 WebSocket 使用 `wss://`；
-5. VPS 公网地址无法直接访问 `8787`；
+5. VPS 公网地址无法直接访问实际后端回环端口；
 6. 当前 Codex 权限不是无意设置成 full access。
 
 公开 DNS 名称本身不是秘密。真正需要保护的是应用令牌、Codex 登录状态、项目内容和
