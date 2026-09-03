@@ -134,15 +134,21 @@ button.small {
 }
 
 .login-card input {
-  width: 100%;
+  width: auto;
   padding: 0.75rem;
   background: #0f1116;
   color: #fff;
 }
 
 .login-card button {
-  width: 100%;
+  width: auto;
   margin-top: 0.8rem;
+}
+
+.login-card > :not(.login-brand) {
+  /* The mark inside the icon sits ~12px in from the image edge. */
+  margin-inline: 0.75rem;
+  align-self: stretch;
 }
 
 .login-icon {
