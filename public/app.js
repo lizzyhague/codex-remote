@@ -193,7 +193,7 @@ elements.bulkPrimaryButton.addEventListener("click", () => {
 });
 
 elements.bulkTrashButton.addEventListener("click", () => {
-  void moveSelectedToTrash();
+  void runBulkDangerAction();
 });
 
 elements.noticeActionButton.addEventListener("click", () => {
@@ -774,8 +774,8 @@ function updateSelectionControls() {
   elements.bulkPrimaryButton.disabled = count === 0 || state.sessionLoading;
   elements.bulkTrashButton.disabled = count === 0 || state.sessionLoading;
   elements.bulkPrimaryButton.textContent = state.sessionView === "active" ? "归档" : "恢复";
-  elements.bulkTrashButton.hidden = state.sessionView === "trash";
-  elements.bulkSessionActions.dataset.single = String(state.sessionView === "trash");
+  elements.bulkTrashButton.textContent = state.sessionView === "trash" ? "永久删除" : "删除";
+  delete elements.bulkSessionActions.dataset.single;
 }
 
 async function runBulkPrimaryAction() {
@@ -787,11 +787,21 @@ async function runBulkPrimaryAction() {
   await mutateSessions(action, [...state.selectedSessions]);
 }
 
-async function moveSelectedToTrash() {
+async function runBulkDangerAction() {
   const sessionIds = [...state.selectedSessions];
   if (sessionIds.length === 0) return;
+  if (state.sessionView === "trash") {
+    const selected = state.sessions.filter((session) => state.selectedSessions.has(session.id));
+    if (!window.confirm(
+      selected.length === 1
+        ? `立刻永久删除「${selected[0].title || "新会话"}」。这一步无法撤销，会话原文会一并删除。继续吗？`
+        : `立刻永久删除 ${selected.length} 个会话。这一步无法撤销，会话原文会一并删除。继续吗？`,
+    )) return;
+    await mutateSessions("delete-trash", sessionIds);
+    return;
+  }
   if (sessionIds.length > 1 && !window.confirm(
-    `将 ${sessionIds.length} 个会话移入回收站，并在 30 天后自动删除。继续吗？`,
+    `删除 ${sessionIds.length} 个会话。30 天内可以在回收站里还原，到期后自动永久删除。继续吗？`,
   )) return;
   const action = state.sessionView === "archived" ? "trash-archived" : "trash-active";
   await mutateSessions(action, sessionIds);
@@ -808,7 +818,7 @@ async function mutateSessions(action, sessionIds) {
     const failed = Array.isArray(result?.failed) ? result.failed : [];
     if (
       state.sessionId && succeeded.includes(state.sessionId) &&
-      (action === "archive" || action.startsWith("trash-"))
+      (action === "archive" || action.startsWith("trash-") || action === "delete-trash")
     ) {
       resetCurrentSession();
       showEmpty("选择以前的会话，或者新建一个会话。");
@@ -825,7 +835,9 @@ async function mutateSessions(action, sessionIds) {
       const label = action === "archive"
         ? `已归档 ${succeeded.length} 个会话。`
         : action.startsWith("trash-")
-        ? `已将 ${succeeded.length} 个会话移入回收站，30 天后自动删除。`
+        ? `已删除 ${succeeded.length} 个会话，30 天后自动永久删除。`
+        : action === "delete-trash"
+        ? `已永久删除 ${succeeded.length} 个会话。`
         : `已恢复 ${succeeded.length} 个会话。`;
       const failureNote = failed.length > 0
         ? ` 另有 ${failed.length} 个未能处理：${failed[0]?.message || "操作失败。"}`

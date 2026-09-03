@@ -183,6 +183,11 @@ class FakeSessions implements SessionsApi {
     this.#emit({ projectId, sessionIds, change: "restore" });
     return { succeeded: sessionIds, failed: [] };
   }
+
+  async deleteTrash(projectId: string, sessionIds: string[]) {
+    this.#emit({ projectId, sessionIds, change: "delete" });
+    return { succeeded: sessionIds, failed: [] };
+  }
 }
 
 function openedSession(id: string): OpenedSession {

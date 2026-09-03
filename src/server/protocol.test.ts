@@ -87,6 +87,19 @@ test("parses the small stable browser protocol", () => {
     action: "trash-active",
   });
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
+    type: "sessions.mutate",
+    requestId: "sessions-3",
+    projectId: "projects/demo",
+    sessionIds: ["session-1"],
+    action: "delete-trash",
+  })), {
+    type: "sessions.mutate",
+    requestId: "sessions-3",
+    projectId: "projects/demo",
+    sessionIds: ["session-1"],
+    action: "delete-trash",
+  });
+  assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "history.older",
     requestId: "history-1",
   })), {

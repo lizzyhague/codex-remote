@@ -6,7 +6,8 @@ export type BrowserSessionMutationAction =
   | "unarchive"
   | "trash-active"
   | "trash-archived"
-  | "restore-trash";
+  | "restore-trash"
+  | "delete-trash";
 
 /**
  * WebSocket 帧上限。它必须明显大于单条消息正文的上限，否则超长正文会在 ws 层
@@ -282,7 +283,7 @@ function requireSessionMutationAction(
   if (
     value === "archive" || value === "unarchive" ||
     value === "trash-active" || value === "trash-archived" ||
-    value === "restore-trash"
+    value === "restore-trash" || value === "delete-trash"
   ) {
     return value;
   }

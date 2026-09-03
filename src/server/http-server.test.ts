@@ -266,6 +266,9 @@ function emptyServices(
       async restoreTrash(_projectId: string, sessionIds: string[]) {
         return { succeeded: sessionIds, failed: [] };
       },
+      async deleteTrash(_projectId: string, sessionIds: string[]) {
+        return { succeeded: sessionIds, failed: [] };
+      },
     },
     turnTransport: transport,
     approvals,

@@ -211,6 +211,39 @@ test("moves an active session to trash and restores it to the active list", asyn
   ]);
 });
 
+test("permanently deletes selected trash sessions immediately", async (context) => {
+  const { catalog, trash } = await createFixture(context);
+  await trash.put({
+    threadId: "thread-old",
+    projectId: "workspace/alpha",
+    deletedAt: 1_000,
+    origin: "active",
+  });
+  const transport = new FakeTransport();
+  transport.results.push({});
+  const service = new CodexSessionService(transport, catalog, trash);
+
+  assert.deepEqual(await service.deleteTrash("workspace/alpha", ["thread-old"]), {
+    succeeded: ["thread-old"],
+    failed: [],
+  });
+  assert.equal(trash.has("thread-old"), false);
+  assert.deepEqual(transport.requests, [{
+    method: "thread/delete",
+    params: { threadId: "thread-old" },
+  }]);
+});
+
+test("refuses to permanently delete a session that is not in trash", async (context) => {
+  const { catalog, trash } = await createFixture(context);
+  const transport = new FakeTransport();
+  const service = new CodexSessionService(transport, catalog, trash);
+  const result = await service.deleteTrash("workspace/alpha", ["thread-old"]);
+  assert.equal(result.succeeded.length, 0);
+  assert.match(result.failed[0]?.message ?? "", /只能永久删除回收站里的会话/u);
+  assert.deepEqual(transport.requests, []);
+});
+
 test("permanently deletes trash entries after thirty days", async (context) => {
   const { catalog, trash } = await createFixture(context);
   await trash.put({

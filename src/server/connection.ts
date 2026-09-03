@@ -73,6 +73,7 @@ export interface SessionsApi {
     origin: "active" | "archived",
   ): Promise<SessionMutationResult>;
   restoreTrash(projectId: string, sessionIds: string[]): Promise<SessionMutationResult>;
+  deleteTrash(projectId: string, sessionIds: string[]): Promise<SessionMutationResult>;
   onChange?(listener: (event: SessionChangeEvent) => void): () => void;
 }
 
@@ -388,11 +389,14 @@ export class BrowserConnection {
           request.sessionIds,
           "archived",
         )
+        : request.action === "delete-trash"
+        ? await this.#services.sessions.deleteTrash(request.projectId, request.sessionIds)
         : await this.#services.sessions.restoreTrash(request.projectId, request.sessionIds);
 
       const openSessionId = this.#currentSessionId();
       const removesOpenSession = request.action === "archive" ||
-        request.action === "trash-active" || request.action === "trash-archived";
+        request.action === "trash-active" || request.action === "trash-archived" ||
+        request.action === "delete-trash";
       if (
         removesOpenSession && openSessionId &&
         result.succeeded.includes(openSessionId)

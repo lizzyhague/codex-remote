@@ -322,6 +322,18 @@ export class CodexSessionService {
     });
   }
 
+  deleteTrash(projectId: string, threadIds: string[]): Promise<SessionMutationResult> {
+    return this.#mutateMany(projectId, threadIds, "delete", async (_projectPath, threadId) => {
+      const entry = this.#trash.get(threadId);
+      if (!entry || entry.projectId !== projectId) {
+        throw new Error("只能永久删除回收站里的会话。");
+      }
+      const params: ThreadDeleteParams = { threadId };
+      await this.#transport.request<ThreadDeleteResponse>("thread/delete", params);
+      await this.#trash.remove(threadId);
+    });
+  }
+
   purgeExpired(): Promise<TrashCleanupResult> {
     return this.#serializeMutation(async () => {
       const threshold = this.#now() - TRASH_RETENTION_SECONDS;
