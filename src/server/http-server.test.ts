@@ -293,6 +293,7 @@ function openedSession(id: string): OpenedSession {
     activeTurnId: null,
     runtime: {
       cwd: "/projects/demo",
+      historyMode: "legacy",
       model: "gpt-test",
       reasoningEffort: "medium",
       approvalPolicy: "on-request",

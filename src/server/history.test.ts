@@ -16,6 +16,8 @@ test("marks only ordinary user turns for input restoration", () => {
         text: "回复",
         phase: null,
         memoryCitation: null,
+        delivery: null,
+        questions: null,
       },
     ]),
     turn("review", [
@@ -33,6 +35,8 @@ test("marks only ordinary user turns for input restoration", () => {
         text: "系统消息",
         phase: null,
         memoryCitation: null,
+        delivery: null,
+        questions: null,
       },
     ]),
   ]);

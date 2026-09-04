@@ -202,7 +202,7 @@ npm test
 后端，因此只在本机环境变量、项目配置和 Codex 登录状态都准备好时运行。
 
 `src/generated/` 中的 TypeScript 类型由 Codex CLI 生成，并与生成时使用的 Codex
-版本绑定。官方生成命令为：
+版本绑定。当前绑定使用 Codex CLI 0.153.2 生成。官方生成命令为：
 
 ```bash
 codex app-server generate-ts --out ./schemas

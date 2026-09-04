@@ -227,9 +227,16 @@ Codex Remote 不在 `thread/start` 或 `thread/resume` 上覆盖默认权限。�
 
 `/compact` 和 `/review` 与普通消息一样进入持久化任务队列，可使用同一个“停止”按钮，页面断开后也能继续。第一版 `/usage` 不兑换 rate-limit reset credit，避免只读查看意外变成账户写操作。
 
-`/rewind` 每次固定调用 `thread/rollback` 回退一个底层 turn；完成后用 App Server 返回的 turns 重建最近 20 轮和更早分页，所以再次执行会继续回退前一个 turn。浏览器历史快照会标记该 turn 是否包含可恢复的普通用户原文：回退普通对话后把原文放回输入框，回退 `/compact`、`/review` 等特殊 turn 后输入框保持空白。它只改变对话历史，不撤销该轮已经造成的文件改动。执行前必须确认，活动任务期间不能执行。
+`/rewind` 每次回退一个底层 turn。旧的 `legacy` 历史调用 `thread/rollback`；新的
+`paginated` 历史先用 `thread/turns/list` 找到最后一个 turn，再以该 ID 调用
+`thread/revert`，最后分页读取保留下来的 turns。完成后统一重建最近 20 轮和更早分页，
+所以再次执行会继续回退前一个 turn。浏览器历史快照会标记该 turn 是否包含可恢复的
+普通用户原文：回退普通对话后把原文放回输入框，回退 `/compact`、`/review` 等特殊
+turn 后输入框保持空白。它只改变对话历史，不撤销该轮已经造成的文件改动。执行前
+必须确认，活动任务期间不能执行。
 
-`thread/rollback` 在当前 App Server 中已经标记为 deprecated，因此调用集中在命令适配器里；接口被移除时需要替换实现，不能把它当作长期稳定协议。
+`thread/rollback` 已被 App Server 标记为 deprecated，只用于兼容 legacy thread；
+paginated thread 必须使用 `thread/revert`，不能把两个接口互换。
 
 ## 历史与缓冲
 

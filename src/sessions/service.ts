@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises";
 
 import type { Thread } from "../generated/v2/Thread.ts";
+import type { ThreadHistoryMode } from "../generated/v2/ThreadHistoryMode.ts";
 import type { ThreadArchiveParams } from "../generated/v2/ThreadArchiveParams.ts";
 import type { ThreadArchiveResponse } from "../generated/v2/ThreadArchiveResponse.ts";
 import type { ThreadDeleteParams } from "../generated/v2/ThreadDeleteParams.ts";
@@ -93,6 +94,7 @@ export type OpenedSession = {
 /** 只在后端保存的当前会话运行设置；cwd 不会通过浏览器历史接口泄露。 */
 export type SessionRuntime = {
   cwd: string;
+  historyMode: ThreadHistoryMode;
   model: string;
   reasoningEffort: string | null;
   approvalPolicy: unknown;
@@ -473,6 +475,7 @@ function toOpenedSession(
     activeTurnId: findActiveTurnId(thread),
     runtime: {
       cwd: response.cwd,
+      historyMode: thread.historyMode,
       model: response.model,
       reasoningEffort: response.reasoningEffort,
       approvalPolicy: response.approvalPolicy,

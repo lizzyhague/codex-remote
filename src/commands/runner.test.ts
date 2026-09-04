@@ -3,6 +3,7 @@ import test from "node:test";
 
 import type { AppServerMessageListener, JsonObject } from "../app-server/client.ts";
 import type { AppServerTransport } from "../app-server/turn-session.ts";
+import type { ThreadHistoryMode } from "../generated/v2/ThreadHistoryMode.ts";
 import { COMMAND_CATALOG } from "./catalog.ts";
 import { CommandRunner } from "./runner.ts";
 
@@ -10,6 +11,11 @@ class FakeTransport implements AppServerTransport {
   readonly requests: Array<{ method: string; params: unknown }> = [];
   readonly #listeners = new Set<AppServerMessageListener>();
   fullAccessAllowed = false;
+  paginatedTurns = [
+    completedTurn("paginated-kept"),
+    completedTurn("paginated-removed"),
+  ];
+  reverted = false;
 
   async request<Result>(method: string, params: unknown): Promise<Result> {
     this.requests.push({ method, params });
@@ -96,6 +102,23 @@ class FakeTransport implements AppServerTransport {
         },
       } as Result;
     }
+    if (method === "thread/turns/list") {
+      const values = params as JsonObject;
+      const turns = this.reverted ? this.paginatedTurns.slice(0, -1) : this.paginatedTurns;
+      return {
+        data: values.sortDirection === "desc" ? turns.slice(-1) : turns,
+        nextCursor: null,
+        backwardsCursor: null,
+      } as Result;
+    }
+    if (method === "thread/revert") {
+      this.reverted = true;
+      return {
+        thread: { id: "thread-1", turns: [] },
+        turnsBackwardsCursor: null,
+        itemsBackwardsCursor: null,
+      } as Result;
+    }
     return {} as Result;
   }
 
@@ -109,15 +132,32 @@ class FakeTransport implements AppServerTransport {
   }
 }
 
-function createRunner(transport: FakeTransport): CommandRunner {
+function createRunner(
+  transport: FakeTransport,
+  historyMode: ThreadHistoryMode = "legacy",
+): CommandRunner {
   return new CommandRunner(transport, "thread-1", {
     cwd: "/projects/demo",
+    historyMode,
     model: "gpt-old",
     reasoningEffort: "low",
     approvalPolicy: "on-request",
     sandboxPolicy: { type: "workspaceWrite" },
     activePermissionProfile: { id: ":workspace", extends: null },
   });
+}
+
+function completedTurn(id: string) {
+  return {
+    id,
+    items: [],
+    itemsView: "summary" as const,
+    status: "completed" as const,
+    error: null,
+    startedAt: null,
+    completedAt: null,
+    durationMs: null,
+  };
 }
 
 test("publishes the nine commands in alphabetical order", () => {
@@ -217,6 +257,25 @@ test("runs all nine commands through app-server methods", async () => {
       params: { threadId: "thread-1", model: "gpt-test", effort: "high" },
     },
   );
+  runner.dispose();
+});
+
+test("rewinds paginated history with thread/revert and reloads retained turns", async () => {
+  const transport = new FakeTransport();
+  const runner = createRunner(transport, "paginated");
+
+  assert.deepEqual(
+    (await runner.rewind()).map((turn) => turn.id),
+    ["paginated-kept"],
+  );
+  assert.deepEqual(
+    transport.requests.map((request) => request.method),
+    ["thread/turns/list", "thread/revert", "thread/turns/list"],
+  );
+  assert.deepEqual(transport.requests[1], {
+    method: "thread/revert",
+    params: { threadId: "thread-1", beforeTurnId: "paginated-removed" },
+  });
   runner.dispose();
 });
 

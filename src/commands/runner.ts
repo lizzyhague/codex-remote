@@ -1,6 +1,9 @@
 import type { AppServerMessageListener, JsonObject } from "../app-server/client.ts";
 import type { AppServerTransport } from "../app-server/turn-session.ts";
 import type { Turn } from "../generated/v2/Turn.ts";
+import type { ThreadRevertResponse } from "../generated/v2/ThreadRevertResponse.ts";
+import type { ThreadRollbackResponse } from "../generated/v2/ThreadRollbackResponse.ts";
+import type { ThreadTurnsListResponse } from "../generated/v2/ThreadTurnsListResponse.ts";
 import type { SessionRuntime } from "../sessions/service.ts";
 import type { CommandName } from "./catalog.ts";
 
@@ -36,6 +39,8 @@ export type CommandMessageLine = string | {
 type RuntimeState = SessionRuntime & {
   collaborationMode: "default" | "plan";
 };
+
+const THREAD_HISTORY_PAGE_SIZE = 100;
 
 /**
  * 当前浏览器连接所打开会话的斜杠命令适配器。
@@ -367,10 +372,17 @@ export class CommandRunner {
   }
 
   async rewind(): Promise<Turn[]> {
-    const response = asObject(await this.#transport.request("thread/rollback", {
-      threadId: this.#threadId,
-      numTurns: 1,
-    }));
+    if (this.#runtime.historyMode === "paginated") {
+      return this.#rewindPaginated();
+    }
+
+    const response = asObject(await this.#transport.request<ThreadRollbackResponse>(
+      "thread/rollback",
+      {
+        threadId: this.#threadId,
+        numTurns: 1,
+      },
+    ));
     const thread = asObject(response?.thread);
     if (
       !thread ||
@@ -380,6 +392,69 @@ export class CommandRunner {
       throw new Error("Codex 返回了无法识别的回退结果。");
     }
     return thread.turns as Turn[];
+  }
+
+  async #rewindPaginated(): Promise<Turn[]> {
+    const latest = asObject(await this.#transport.request<ThreadTurnsListResponse>(
+      "thread/turns/list",
+      {
+        threadId: this.#threadId,
+        limit: 1,
+        sortDirection: "desc",
+        itemsView: "summary",
+      },
+    ));
+    if (!latest || !Array.isArray(latest.data)) {
+      throw new Error("Codex 返回了无法识别的分页历史。");
+    }
+    const latestTurn = asObject(latest.data[0]);
+    if (!latestTurn || typeof latestTurn.id !== "string") {
+      throw new Error("当前会话没有可以回退的轮次。");
+    }
+
+    const reverted = asObject(await this.#transport.request<ThreadRevertResponse>(
+      "thread/revert",
+      { threadId: this.#threadId, beforeTurnId: latestTurn.id },
+    ));
+    const thread = asObject(reverted?.thread);
+    if (!thread || thread.id !== this.#threadId) {
+      throw new Error("Codex 返回了无法识别的回退结果。");
+    }
+
+    return this.#readPaginatedTurns();
+  }
+
+  async #readPaginatedTurns(): Promise<Turn[]> {
+    const turns: Turn[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+
+    while (true) {
+      const page = asObject(await this.#transport.request<ThreadTurnsListResponse>(
+        "thread/turns/list",
+        {
+          threadId: this.#threadId,
+          cursor,
+          limit: THREAD_HISTORY_PAGE_SIZE,
+          sortDirection: "asc",
+          itemsView: "summary",
+        },
+      ));
+      if (
+        !page ||
+        !Array.isArray(page.data) ||
+        !(page.nextCursor === null || typeof page.nextCursor === "string")
+      ) {
+        throw new Error("Codex 返回了无法识别的分页历史。");
+      }
+      turns.push(...page.data as Turn[]);
+      if (page.nextCursor === null) return turns;
+      if (seenCursors.has(page.nextCursor)) {
+        throw new Error("Codex 返回了重复的分页标记。");
+      }
+      seenCursors.add(page.nextCursor);
+      cursor = page.nextCursor;
+    }
   }
 
   async #rateLimits(): Promise<CommandMessage> {

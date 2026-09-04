@@ -207,6 +207,7 @@ function openedSession(id: string): OpenedSession {
     activeTurnId: null,
     runtime: {
       cwd: "/projects/demo",
+      historyMode: "legacy",
       model: "gpt-test",
       reasoningEffort: "medium",
       approvalPolicy: "on-request",
@@ -422,7 +423,7 @@ test("sends only the latest 20 turns and loads older history in pages", async ()
   approvals.dispose();
 });
 
-test("rewinds one turn per request and replaces paginated history", async () => {
+test("rewinds one turn per request and replaces browser history", async () => {
   const { appServer, approvals, services } = setup();
   const socket = new FakeSocket();
   const connection = new BrowserConnection("phone", socket, "test-secret", services);
