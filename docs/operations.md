@@ -1,6 +1,8 @@
 # 运维说明
 
-本文说明 Linux 主机上的常驻运行、更新、日志和迁移。网络入口请分别参阅：
+本文说明 Linux 主机上的 systemd 常驻运行、更新和日志。macOS 请参阅
+[macOS 常驻部署](deployment-macos.md)，跨主机切换和状态迁移请参阅
+[实例迁移与多主机部署](migration.md)。网络入口请分别参阅：
 
 - [Tailscale Serve 私网部署](deployment-tailscale.md)
 - [公网 HTTPS 部署](deployment-public.md)

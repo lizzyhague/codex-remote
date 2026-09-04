@@ -298,7 +298,7 @@ if (typeof window.codexRemoteMarkReady === "function") {
 const savedToken = stateGet(TOKEN_KEY);
 if (savedToken) {
   elements.tokenInput.value = savedToken;
-  elements.loginStatus.textContent = "正在连接 VPS……";
+  elements.loginStatus.textContent = "正在连接主机……";
   void connect(savedToken);
 } else {
   showLogin();
@@ -317,7 +317,7 @@ async function connect(token) {
   state.token = token;
   state.authenticated = false;
   elements.connectButton.disabled = true;
-  elements.loginStatus.textContent = "正在连接 VPS……";
+  elements.loginStatus.textContent = "正在连接主机……";
   setConnectionStatus("connecting", "正在连接");
 
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -357,7 +357,7 @@ async function connect(token) {
 
   socket.addEventListener("error", () => {
     if (generation === state.generation && !state.authenticated) {
-      elements.loginStatus.textContent = "现在无法连接 VPS。";
+      elements.loginStatus.textContent = "现在无法连接主机。";
       elements.connectButton.disabled = false;
     }
   });
@@ -381,8 +381,8 @@ async function connect(token) {
     if (state.reconnectAllowed && state.token) {
       if (!elements.appView.hidden) {
         showNotice(backgroundWorkers
-          ? "连接中断；已接受的任务会由 VPS 后台继续处理。正在重新连接……"
-          : "连接中断，VPS 会停止正在进行的任务。正在重新连接……");
+          ? "连接中断；已接受的任务会由主机后台继续处理。正在重新连接……"
+          : "连接中断，主机会停止正在进行的任务。正在重新连接……");
       }
       state.reconnectTimer = setTimeout(() => {
         void connect(state.token);
@@ -396,7 +396,7 @@ function handleSocketMessage(source) {
   try {
     message = JSON.parse(String(source));
   } catch {
-    showNotice("VPS 返回了一条无法识别的消息。");
+    showNotice("主机返回了一条无法识别的消息。");
     return;
   }
 
@@ -428,7 +428,7 @@ function handleSocketMessage(source) {
 function request(type, payload = {}) {
   const socket = state.socket;
   if (!socket || socket.readyState !== WebSocket.OPEN) {
-    return Promise.reject(new Error("尚未连接 VPS。"));
+    return Promise.reject(new Error("尚未连接主机。"));
   }
 
   const requestId = `${Date.now().toString(36)}-${++state.requestNumber}`;
@@ -437,7 +437,7 @@ function request(type, payload = {}) {
       const pending = state.pendingRequests.get(requestId);
       if (!pending) return;
       state.pendingRequests.delete(requestId);
-      const error = new Error("VPS 请求超时，正在重新连接。");
+      const error = new Error("主机请求超时，正在重新连接。");
       error.code = "request_timeout";
       reject(error);
       if (state.socket === socket) {
@@ -1249,7 +1249,7 @@ async function toggleFullAccess() {
     !state.sessionId || !state.authenticated || state.running || state.commandBusy
   ) return;
   if (!state.fullAccessEnabled && !window.confirm(
-    "Full access 会让 Codex 不受项目沙箱限制地操作 VPS。确定只为当前会话打开吗？",
+    "Full access 会让 Codex 不受项目沙箱限制地操作主机。确定只为当前会话打开吗？",
   )) return;
 
   state.commandBusy = true;

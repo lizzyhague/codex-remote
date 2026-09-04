@@ -1,13 +1,13 @@
-const CACHE_NAME = "codex-remote-shell-v27";
+const CACHE_NAME = "codex-remote-shell-v28";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/styles.css?v=21",
   "/boot.js?v=12",
-  "/app.js?v=22",
+  "/app.js?v=23",
   "/markdown.js?v=15",
-  "/slash-menu.js?v=12",
-  "/manifest.webmanifest?v=14",
+  "/slash-menu.js?v=13",
+  "/manifest.webmanifest?v=15",
   "/icon-192.png?v=13",
   "/icon-512.png?v=13",
   "/icon-512-maskable.png?v=13",
@@ -47,7 +47,7 @@ self.addEventListener("fetch", (event) => {
         return response;
       })
       .catch(() => caches.match(event.request).then((cached) =>
-        cached ?? new Response("当前无法连接 VPS。", {
+        cached ?? new Response("当前无法连接主机。", {
           status: 503,
           headers: { "content-type": "text/plain; charset=utf-8" },
         })

@@ -777,7 +777,7 @@ test("releases the project lock when the open session goes away", async () => {
   approvals.dispose();
 });
 
-test("keeps VPS paths out of the errors sent to the browser", () => {
+test("keeps host paths out of the errors sent to the browser", () => {
   const systemError = Object.assign(
     new Error("ENOENT: no such file or directory, scandir '/home/example/projects'"),
     { code: "ENOENT", syscall: "scandir" },

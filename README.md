@@ -1,6 +1,6 @@
 # Codex Remote
 
-Codex Remote 是一个面向单用户、自托管场景的 PWA，用手机或电脑控制远程 Linux
+Codex Remote 是一个面向单用户、自托管场景的 PWA，用手机或电脑控制远程 Linux 或 macOS
 主机上的 Codex CLI。消息在浏览器本地编辑，完整发送后才经过网络，因此不会受到
 SSH 逐键输入延迟的影响。
 
@@ -45,7 +45,7 @@ Codex/Claude Code 在同一项目中并行执行。
 
 ## 要求
 
-- Linux 主机；
+- Linux 或 macOS 主机；
 - Node.js 24 或更新版本；
 - npm；
 - 已安装并登录 Codex CLI；
@@ -143,7 +143,9 @@ Tailscale Serve 或其它反向代理单独选择，两者不要求使用相同�
 - [公网 HTTPS 部署](docs/deployment-public.md)：普通浏览器可直接访问，但需要承担额外
   的公网攻击面。
 
-常驻运行、更新和日志说明见 [运维说明](docs/operations.md)。
+Linux 常驻运行、更新和日志说明见 [运维说明](docs/operations.md)，Mac mini 等 macOS
+主机见 [macOS 常驻部署](docs/deployment-macos.md)。多台主机并存或切换见
+[实例迁移与多主机部署](docs/migration.md)。
 
 ## 权限默认值
 
@@ -166,7 +168,7 @@ Codex 运行在权限边界明确的非 root Unix 用户下。
 | `CODEX_REMOTE_WORK_STATE_FILE` | 已接受任务与事件日志的 SQLite 路径 |
 | `AI_REMOTE_UPLOAD_SOCKET` | 共享上传服务 Unix socket；默认 `~/.local/share/ai-remote/upload.sock` |
 | `CODEX_REMOTE_MAX_WORKERS` | 最大活动 Worker 数，默认 `2` |
-| `CODEX_REMOTE_MIN_AVAILABLE_MEMORY_MIB` | 启动 Worker 所需最低可用内存，默认 `1024` MiB |
+| `CODEX_REMOTE_MIN_AVAILABLE_MEMORY_MIB` | 启动 Worker 所需保守可用内存预算，默认 `1024` MiB；设为 `0` 会关闭启动前保护 |
 | `CODEX_REMOTE_OFFLINE_GRACE_MS` | 最后一个客户端离线后的审批宽限期，默认 `10000` 毫秒 |
 | `CODEX_BIN` | Codex 可执行文件；默认从 `PATH` 查找 |
 

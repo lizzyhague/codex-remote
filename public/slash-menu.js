@@ -202,7 +202,7 @@ export class SlashCommandMenu {
       button.dataset.danger = item.danger === true ? "true" : "false";
       button.addEventListener("click", () => {
         if (item.danger === true && !window.confirm(
-          "完全访问会让 Codex 不受项目沙箱限制地操作 VPS。确定只为当前会话选择吗？",
+          "完全访问会让 Codex 不受项目沙箱限制地操作主机。确定只为当前会话选择吗？",
         )) return;
         onSelect(item);
       });

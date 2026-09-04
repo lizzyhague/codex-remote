@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 
 import {
   CodexAttachmentError,
@@ -12,6 +11,7 @@ import type { CommandOptions } from "../commands/runner.ts";
 import type { ProjectCatalog } from "../projects/catalog.ts";
 import type { OpenedSession } from "../sessions/service.ts";
 import type { TrashStore } from "../sessions/trash-store.ts";
+import { readAvailableMemory } from "../platform/system-resources.ts";
 import type { SharedUploadClient } from "../shared-upload/client.ts";
 import type {
   AttachmentLease,
@@ -271,7 +271,7 @@ export class SessionWorkerManager {
     let worker: SessionWorker;
     try {
       if (!await this.#hasAvailableMemory()) {
-        throw new WorkerManagerError("worker_memory_low", "VPS 可用内存不足，暂时不能新建会话。");
+        throw new WorkerManagerError("worker_memory_low", "主机可用内存不足，暂时不能新建会话。");
       }
       worker = await this.#createWorker(projectId);
     } finally {
@@ -645,7 +645,7 @@ export class SessionWorkerManager {
     let worker: SessionWorker | null = null;
     try {
       if (!await this.#hasAvailableMemory()) {
-        throw new WorkerManagerError("worker_memory_low", "VPS 可用内存不足，暂时不能打开新 Worker。");
+        throw new WorkerManagerError("worker_memory_low", "主机可用内存不足，暂时不能打开新 Worker。");
       }
       worker = await this.#createWorker(projectId, threadId);
       await this.#reconcileFullAccess(worker, threadId ? this.#knownFullAccess(threadId) : undefined);
@@ -1219,17 +1219,6 @@ function uploadManagerError(error: unknown): WorkerManagerError {
     ? error.code
     : "attachment_failed";
   return new WorkerManagerError(code, errorMessage(error));
-}
-
-async function readAvailableMemory(): Promise<number> {
-  try {
-    const source = await readFile("/proc/meminfo", "utf8");
-    const match = /^MemAvailable:\s+(\d+)\s+kB$/mu.exec(source);
-    if (match?.[1]) return Number(match[1]) * 1_024;
-  } catch {
-    // 非 Linux 环境由调用者注入；这里保守返回 0，避免内存未知时启动新 Worker。
-  }
-  return 0;
 }
 
 function terminalReplayTask(task: WorkerTask | null): WorkerTask | null {

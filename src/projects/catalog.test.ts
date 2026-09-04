@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -28,7 +28,7 @@ test("只列出根目录下一层的普通项目文件夹", async (context) => {
   ]);
 
   const alpha = await catalog.resolve("workspace/alpha");
-  assert.equal(alpha.path, path.join(root, "alpha"));
+  assert.equal(alpha.path, await realpath(path.join(root, "alpha")));
 
   await assert.rejects(
     catalog.resolve("workspace/..%2Foutside"),

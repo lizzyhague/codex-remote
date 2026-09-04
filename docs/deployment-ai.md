@@ -3,7 +3,7 @@
 ## 文档用途
 
 本文是给协助用户部署 Codex Remote 的 AI 阅读的执行规范。目标用户可能不熟悉代码、
-Linux、systemd、Tailscale 或反向代理，因此 AI 必须把事实、推测、建议和执行结果
+Linux、macOS、服务管理器、Tailscale 或反向代理，因此 AI 必须把事实、推测、建议和执行结果
 分开说明，不能让用户根据一串没有解释的命令自行判断风险。
 
 本文中的“必须”和“不得”是部署约束，不是可选建议。用户对部署方式和主机用途的
@@ -15,10 +15,12 @@ Linux、systemd、Tailscale 或反向代理，因此 AI 必须把事实、推测
 
 1. 仓库根目录的 `README.md`；
 2. 本文；
-3. 用户选择的 [Tailscale 私网部署](deployment-tailscale.md) 或
+3. 目标为 macOS 时阅读 [macOS 常驻部署](deployment-macos.md)，目标为 Linux 时阅读
+   [运维说明](operations.md)；
+4. 用户选择的 [Tailscale 私网部署](deployment-tailscale.md) 或
    [公网 HTTPS 部署](deployment-public.md)；
-4. [运维说明](operations.md)；
-5. [安全策略](../SECURITY.md)。
+5. [实例迁移与多主机部署](migration.md)；
+6. [安全策略](../SECURITY.md)。
 
 需要解释实现行为时再阅读 [架构说明](architecture.md) 和源码。示例配置只是模板；
 实际路径、账户、二进制位置和网络入口必须以目标主机的检查结果为准。

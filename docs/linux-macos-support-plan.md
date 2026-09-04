@@ -2,7 +2,8 @@
 
 ## 文档状态
 
-本文是供维护者评审的实现方案，不代表相关代码、部署模板或平台验收已经完成。
+本文最初是供维护者评审的实现方案。平台资源适配、双平台 CI 和 launchd 模板现已实现；
+真实 Mac 硬件上的完整浏览器与服务生命周期验收仍需在发布前完成。
 内容只描述开源项目本身，不记录任何具体部署主机的账户、路径、端口、网络拓扑或运行状态。
 
 ## 目标与边界
@@ -78,15 +79,15 @@ JSONL。App Server 及部分实验 API 不应被视为跨版本稳定接口，�
 | --- | --- | --- |
 | Node.js | `package.json` 要求 Node.js 24 或更新版本 | 两个平台统一使用 Node.js 24，并在 CI 固定主版本 |
 | Codex App Server | 通过 `codex app-server --stdio` 启动 | 传输方式可共用；每个平台都要用实际 CLI 做 smoke test |
-| Worker 内存门槛 | `src/workers/manager.ts` 只读取 Linux `/proc/meminfo` | macOS 上会保守返回 0，阻止新建或恢复 Worker；这是明确阻塞项 |
+| Worker 内存门槛 | 已提取到 `src/platform/system-resources.ts` | Linux 读取 `/proc/meminfo`，macOS 使用 `os.freemem()`；仍需真实压力验收 |
 | 子进程清理 | 使用 detached 进程组和负 PID 发送信号 | Linux、macOS 都是 POSIX，但必须在两端运行后代进程清理测试 |
 | 共享附件 | 使用 Unix socket、`chmod`、原子重命名和 `statfs` | 原语可跨平台；需要验证 socket 路径长度、权限、配额和磁盘门槛 |
 | SQLite | 使用 Node.js 内置 SQLite | 预计可共用；由 macOS CI 和真实运行环境验证 |
 | 状态目录 | 默认使用 `~/.local/state` 与 `~/.local/share` | macOS 上可用；首轮不迁移到 `~/Library`，避免制造跨版本状态迁移 |
 | 信号退出 | 监听 `SIGINT` 和 `SIGTERM` | 两个平台可共用，但要验证服务管理器停止时能够完整清理进程树 |
-| 常驻服务 | 目前只有 systemd 模板和命令 | Linux 保留 systemd；macOS 新增系统级 LaunchDaemon 模板 |
-| CI | 目前只运行 `ubuntu-latest` | 改为 Ubuntu 与 macOS 矩阵 |
-| 文档措辞 | README、架构、错误提示中多处把主机称为 Linux 或 VPS | 面向用户的通用位置改成“主机”；平台专属文档保留准确名称 |
+| 常驻服务 | systemd 与 LaunchDaemon 模板均已提供 | 仍需在真实主机验证开机启动、停止和失败重启 |
+| CI | 已配置 Ubuntu 与 macOS 矩阵 | 合并后由 GitHub Actions 验证两个 runner |
+| 文档措辞 | 通用界面和主要文档已改称“主机” | 公网 VPS 专属段落保留准确名称 |
 
 ## 代码修改方案
 

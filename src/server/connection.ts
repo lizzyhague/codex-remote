@@ -1046,7 +1046,7 @@ function tokensEqual(received: string, expected: string): boolean {
 
 /**
  * 发给浏览器的错误文字。本仓库自己写的提示会原样保留，但操作系统和
- * app-server 抛出的错误常常带着 VPS 上的绝对路径，那些只应该留在服务端日志里。
+ * app-server 抛出的错误常常带着主机上的绝对路径，那些只应该留在服务端日志里。
  */
 export function publicErrorMessage(error: unknown): string {
   if (!(error instanceof Error)) {

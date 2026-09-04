@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -30,10 +30,12 @@ async function createFixture(context: TestContext) {
   const temporaryDirectory = await mkdtemp(path.join(tmpdir(), "codex-remote-sessions-"));
   context.after(() => rm(temporaryDirectory, { recursive: true, force: true }));
   const root = path.join(temporaryDirectory, "projects");
-  const project = path.join(root, "alpha");
-  const outside = path.join(temporaryDirectory, "outside");
-  await mkdir(project, { recursive: true });
-  await mkdir(outside);
+  const projectPath = path.join(root, "alpha");
+  const outsidePath = path.join(temporaryDirectory, "outside");
+  await mkdir(projectPath, { recursive: true });
+  await mkdir(outsidePath);
+  const project = await realpath(projectPath);
+  const outside = await realpath(outsidePath);
   const catalog = await ProjectCatalog.fromRoots([{ id: "workspace", path: root }]);
   const trash = await TrashStore.open(path.join(temporaryDirectory, "trash.json"));
   return { catalog, project, outside, trash };

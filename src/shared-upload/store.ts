@@ -473,7 +473,7 @@ export class SharedUploadStore {
     if (available - expectedSize < this.#minFreeBytes) {
       throw new SharedUploadError(
         "disk_low",
-        "VPS 可用磁盘空间低于安全门槛，暂时停止新上传。",
+        "主机可用磁盘空间低于安全门槛，暂时停止新上传。",
         507,
       );
     }

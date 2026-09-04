@@ -588,7 +588,7 @@ function permissionLabel(id: string): string {
 function permissionDescription(id: string): string {
   const normalized = id.toLowerCase();
   if (normalized.includes("read")) return "可以阅读和分析；修改文件或执行高权限操作前会受限。";
-  if (isFullAccessProfile(id)) return "可以不受沙箱限制地操作 VPS；请谨慎选择。";
+  if (isFullAccessProfile(id)) return "可以不受沙箱限制地操作主机；请谨慎选择。";
   if (normalized.includes("workspace") || normalized.includes("auto")) {
     return "可在项目目录内工作，超出范围或敏感操作仍会询问。";
   }

@@ -49,7 +49,7 @@ export type SessionListOptions = {
   searchTerm?: string | null;
 };
 
-/** 浏览器可见的会话摘要；有意不包含 VPS 上的绝对路径。 */
+/** 浏览器可见的会话摘要；有意不包含主机上的绝对路径。 */
 export type SessionSummary = {
   id: string;
   sessionId: string;
