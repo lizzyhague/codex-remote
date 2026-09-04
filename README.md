@@ -168,7 +168,7 @@ Codex 运行在权限边界明确的非 root Unix 用户下。
 | `CODEX_REMOTE_WORK_STATE_FILE` | 已接受任务与事件日志的 SQLite 路径 |
 | `AI_REMOTE_UPLOAD_SOCKET` | 共享上传服务 Unix socket；默认 `~/.local/share/ai-remote/upload.sock` |
 | `CODEX_REMOTE_MAX_WORKERS` | 最大活动 Worker 数，默认 `2` |
-| `CODEX_REMOTE_MIN_AVAILABLE_MEMORY_MIB` | 启动 Worker 所需保守可用内存预算，默认 `1024` MiB；设为 `0` 会关闭启动前保护 |
+| `CODEX_REMOTE_MIN_AVAILABLE_MEMORY_MIB` | 启动 Worker 所需保守可用内存预算，默认 `1024` MiB；Linux 与 macOS 读数语义一致，可共用同一个值，设为 `0` 会关闭启动前保护 |
 | `CODEX_REMOTE_OFFLINE_GRACE_MS` | 最后一个客户端离线后的审批宽限期，默认 `10000` 毫秒 |
 | `CODEX_BIN` | Codex 可执行文件；默认从 `PATH` 查找 |
 

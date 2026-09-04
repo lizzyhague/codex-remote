@@ -546,6 +546,7 @@ async function startSession() {
     upsertSession(opened.session);
     renderSessionList();
     closeMobileSidebar();
+    if (opened.notice) showNotice(opened.notice);
   } catch (error) {
     showNotice(errorMessage(error));
   } finally {
@@ -564,6 +565,7 @@ async function resumeSession(sessionId) {
       sessionId,
     });
     applyOpenedSession(opened);
+    if (opened.notice) showNotice(opened.notice);
   } catch (error) {
     showNotice(errorMessage(error));
   } finally {

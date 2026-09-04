@@ -11,7 +11,12 @@ import type { CommandOptions } from "../commands/runner.ts";
 import type { ProjectCatalog } from "../projects/catalog.ts";
 import type { OpenedSession } from "../sessions/service.ts";
 import type { TrashStore } from "../sessions/trash-store.ts";
-import { readAvailableMemory } from "../platform/system-resources.ts";
+import {
+  memoryDegradedMessage,
+  memoryLowMessage,
+  readAvailableMemory,
+  type MemoryReading,
+} from "../platform/system-resources.ts";
 import type { SharedUploadClient } from "../shared-upload/client.ts";
 import type {
   AttachmentLease,
@@ -53,6 +58,8 @@ export class WorkerManagerError extends Error {
 
 export type ManagedSessionOpen = {
   opened: OpenedSession;
+  /** 会话已经打开，但有需要转给浏览器的说明（目前只有内存读数降级）。 */
+  notice?: string;
   activeTaskId: string | null;
   controlsActiveTask: boolean;
   fullAccessEnabled: boolean;
@@ -79,7 +86,7 @@ export type SessionWorkerManagerOptions = {
   queueRetryMs?: number;
   now?: () => number;
   workerFactory?: WorkerFactory;
-  availableMemory?: () => Promise<number>;
+  availableMemory?: () => Promise<MemoryReading>;
   uploads?: Pick<
     SharedUploadClient,
     "createLease" | "renewLease" | "releaseLease"
@@ -122,7 +129,7 @@ export class SessionWorkerManager {
   readonly #queueRetryMs: number;
   readonly #now: () => number;
   readonly #workerFactory: WorkerFactory;
-  readonly #availableMemory: () => Promise<number>;
+  readonly #availableMemory: () => Promise<MemoryReading>;
   readonly #uploads: SessionWorkerManagerOptions["uploads"];
   readonly #listeners = new Set<(event: WorkerManagerEvent) => void>();
   readonly #workers = new Map<string, ActiveWorker>();
@@ -269,10 +276,16 @@ export class SessionWorkerManager {
     }
     this.#workerReservations += 1;
     let worker: SessionWorker;
+    let notice: string | null;
     try {
-      if (!await this.#hasAvailableMemory()) {
-        throw new WorkerManagerError("worker_memory_low", "主机可用内存不足，暂时不能新建会话。");
+      const gate = await this.#memoryGate();
+      if (gate.blocked) {
+        throw new WorkerManagerError(
+          "worker_memory_low",
+          memoryLowMessage("暂时不能新建会话。", gate.blocked, this.#minAvailableMemoryBytes),
+        );
       }
+      notice = gate.notice;
       worker = await this.#createWorker(projectId);
     } finally {
       this.#workerReservations -= 1;
@@ -286,6 +299,7 @@ export class SessionWorkerManager {
       controlsActiveTask: false,
       fullAccessEnabled,
       replayEvents: [],
+      ...(notice ? { notice } : {}),
     };
   }
 
@@ -309,9 +323,12 @@ export class SessionWorkerManager {
         "这个会话的后台 Worker 正在启动，请稍后重新打开。",
       );
     }
-    return this.#withTransientWorker(projectId, threadId, async (worker) => {
+    return this.#withTransientWorker(projectId, threadId, async (worker, notice) => {
       this.#sessionSnapshots.set(threadId, worker.opened);
-      return this.#managedOpen(worker.opened, worker.fullAccessEnabled);
+      return {
+        ...this.#managedOpen(worker.opened, worker.fullAccessEnabled),
+        ...(notice ? { notice } : {}),
+      };
     });
   }
 
@@ -618,7 +635,7 @@ export class SessionWorkerManager {
   async #withTransientWorker<Result>(
     projectId: string,
     threadId: string | undefined,
-    operation: (worker: SessionWorker) => Promise<Result> | Result,
+    operation: (worker: SessionWorker, notice: string | null) => Promise<Result> | Result,
   ): Promise<Result> {
     if (threadId) {
       return this.#serializeThreadOperation(threadId, () =>
@@ -630,26 +647,30 @@ export class SessionWorkerManager {
   async #withTransientWorkerUnlocked<Result>(
     projectId: string,
     threadId: string | undefined,
-    operation: (worker: SessionWorker) => Promise<Result> | Result,
+    operation: (worker: SessionWorker, notice: string | null) => Promise<Result> | Result,
   ): Promise<Result> {
     if (this.#closed) throw new WorkerManagerError("worker_manager_closed", "后端正在停止。");
     if (threadId && this.#workers.has(threadId)) {
       throw new WorkerManagerError("task_already_running", "这个会话已有任务正在运行。");
     }
     const provisional = threadId ? this.#provisionalWorkers.get(threadId) : null;
-    if (provisional) return await operation(provisional.worker);
+    if (provisional) return await operation(provisional.worker, null);
     if (this.#workerCount() >= this.#maxWorkers) {
       throw new WorkerManagerError("worker_capacity", "活动 Worker 已达到上限，请稍后再试。");
     }
     this.#transientWorkers += 1;
     let worker: SessionWorker | null = null;
     try {
-      if (!await this.#hasAvailableMemory()) {
-        throw new WorkerManagerError("worker_memory_low", "主机可用内存不足，暂时不能打开新 Worker。");
+      const gate = await this.#memoryGate();
+      if (gate.blocked) {
+        throw new WorkerManagerError(
+          "worker_memory_low",
+          memoryLowMessage("暂时不能打开新 Worker。", gate.blocked, this.#minAvailableMemoryBytes),
+        );
       }
       worker = await this.#createWorker(projectId, threadId);
       await this.#reconcileFullAccess(worker, threadId ? this.#knownFullAccess(threadId) : undefined);
-      return await operation(worker);
+      return await operation(worker, gate.notice);
     } finally {
       await worker?.close().catch(() => {});
       this.#transientWorkers -= 1;
@@ -710,7 +731,7 @@ export class SessionWorkerManager {
       if (this.#workers.has(task.threadId)) continue;
       const ownerId = `worker:${task.threadId}`;
       if (!this.#locks.acquire(task.projectId, ownerId, task.threadId)) continue;
-      if (!provisional && !await this.#hasAvailableMemory()) {
+      if (!provisional && (await this.#memoryGate()).blocked) {
         this.#locks.release(task.projectId, ownerId);
         capacityBlocked = true;
         break;
@@ -1190,8 +1211,20 @@ export class SessionWorkerManager {
     this.#schedule();
   }
 
-  async #hasAvailableMemory(): Promise<boolean> {
-    return await this.#availableMemory() >= this.#minAvailableMemoryBytes;
+  /**
+   * 启动 Worker 前的内存判断。`blocked` 是拦截用的可信读数，`notice` 是降级放行时
+   * 要转给浏览器的说明；两者不会同时出现。
+   */
+  async #memoryGate(): Promise<{ blocked: MemoryReading | null; notice: string | null }> {
+    const reading = await this.#availableMemory();
+    if (reading.degradedReason) {
+      return {
+        blocked: null,
+        notice: memoryDegradedMessage(reading, this.#minAvailableMemoryBytes),
+      };
+    }
+    const blocked = reading.availableBytes >= this.#minAvailableMemoryBytes ? null : reading;
+    return { blocked, notice: null };
   }
 }
 

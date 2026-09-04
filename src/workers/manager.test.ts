@@ -138,6 +138,46 @@ test("fails before starting a turn when Full access cannot be restored", async (
   const completed = events.at(-1)?.event;
   assert.match(String(completed?.error), /权限/u);
 });
+test("blocks a new session when a trusted reading is below the memory threshold", async (context) => {
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 5,
+    minAvailableMemoryBytes: 1_073_741_824,
+    availableMemory: async () => ({
+      availableBytes: 512 * 1_048_576,
+      platform: "darwin" as const,
+      source: "darwin-vm-stat" as const,
+    }),
+  });
+  fixture.manager.start();
+  await assert.rejects(
+    fixture.manager.startSession("project-1"),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, "worker_memory_low");
+      assert.match(String((error as Error).message), /当前可用 512 MiB/u);
+      return true;
+    },
+  );
+  assert.equal(fixture.workers.length, 0);
+});
+
+test("opens the session with a notice when the memory reading degrades", async (context) => {
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 5,
+    minAvailableMemoryBytes: 1_073_741_824,
+    availableMemory: async () => ({
+      availableBytes: 216 * 1_048_576,
+      platform: "darwin" as const,
+      source: "os-freemem" as const,
+      degradedReason: "vm_stat 输出缺少 Pages occupied by compressor（压缩器占用页）",
+    }),
+  });
+  fixture.manager.start();
+  const opened = await fixture.manager.startSession("project-1");
+  assert.equal(fixture.workers.length, 1);
+  assert.match(String(opened.notice), /已经放行/u);
+  assert.match(String(opened.notice), /compressor/u);
+});
+
 test("keeps a brand-new empty thread only while a browser is attached", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 5 });
   fixture.manager.start();
@@ -408,6 +448,8 @@ async function managerFixture(
     persistedFullAccess?: boolean;
     toggleFullAccessFails?: boolean;
     maxWorkers?: number;
+    minAvailableMemoryBytes?: number;
+    availableMemory?: SessionWorkerManagerOptions["availableMemory"];
     beforeWorkerCreate?: () => Promise<void>;
     uploads?: SessionWorkerManagerOptions["uploads"];
   },
@@ -426,8 +468,12 @@ async function managerFixture(
     ...(options.maxWorkers ? { maxWorkers: options.maxWorkers } : {}),
     offlineGraceMs: options.offlineGraceMs,
     queueRetryMs: 5,
-    minAvailableMemoryBytes: 0,
-    availableMemory: async () => Number.MAX_SAFE_INTEGER,
+    minAvailableMemoryBytes: options.minAvailableMemoryBytes ?? 0,
+    availableMemory: options.availableMemory ?? (async () => ({
+      availableBytes: Number.MAX_SAFE_INTEGER,
+      platform: "linux" as const,
+      source: "linux-meminfo" as const,
+    })),
     workerFactory: async (workerOptions) => {
       await options.beforeWorkerCreate?.();
       const worker = new FakeWorker(

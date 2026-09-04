@@ -498,6 +498,7 @@ export class BrowserConnection {
       activeTaskId: managed.activeTaskId,
       controlsActiveTask: managed.controlsActiveTask,
       fullAccessEnabled: managed.fullAccessEnabled,
+      ...(managed.notice ? { notice: managed.notice } : {}),
       replayEvents: managed.replayEvents.map((stored) => ({
         ...stored.event,
         sequence: stored.sequence,
