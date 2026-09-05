@@ -246,7 +246,7 @@ function emptyServices(
     },
     sessions: {
       async list(): Promise<SessionPage> {
-        return { sessions: [], nextCursor: null };
+        return { sessions: [], marked: [], nextCursor: null };
       },
       async start(): Promise<OpenedSession> {
         throw new Error("未使用");
@@ -269,6 +269,21 @@ function emptyServices(
       async deleteTrash(_projectId: string, sessionIds: string[]) {
         return { succeeded: sessionIds, failed: [] };
       },
+      async setMarked(projectId: string, sessionId: string, marked: boolean) {
+        return {
+          id: sessionId,
+          sessionId,
+          title: "测试会话",
+          preview: "",
+          createdAt: 1,
+          updatedAt: 1,
+          state: "idle" as const,
+          projectId,
+          marked,
+          deletedAt: null,
+          purgeAt: null,
+        };
+      },
     },
     turnTransport: transport,
     approvals,
@@ -286,6 +301,8 @@ function openedSession(id: string): OpenedSession {
       createdAt: 1,
       updatedAt: 1,
       state: "idle",
+      projectId: "projects/demo",
+      marked: false,
       deletedAt: null,
       purgeAt: null,
     },

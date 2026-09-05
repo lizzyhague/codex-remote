@@ -21,6 +21,7 @@ import {
   TrashStore,
   type TrashOrigin,
 } from "./trash-store.ts";
+import { MarkStore } from "./mark-store.ts";
 
 const PAGE_SIZE = 50;
 
@@ -59,12 +60,16 @@ export type SessionSummary = {
   createdAt: number;
   updatedAt: number;
   state: SessionState;
+  projectId: string;
+  marked: boolean;
   deletedAt: number | null;
   purgeAt: number | null;
 };
 
 export type SessionPage = {
   sessions: SessionSummary[];
+  /** 「最近会话」里跨项目置顶；不算进分页。归档 / 回收站为空数组。 */
+  marked: SessionSummary[];
   nextCursor: string | null;
 };
 
@@ -81,7 +86,7 @@ export type TrashCleanupResult = {
 export type SessionChangeEvent = {
   projectId: string;
   sessionIds: string[];
-  change: "archive" | "unarchive" | "trash" | "restore" | "delete";
+  change: "archive" | "unarchive" | "trash" | "restore" | "delete" | "mark" | "unmark";
 };
 
 export type OpenedSession = {
@@ -110,6 +115,7 @@ export class CodexSessionService {
   readonly #transport: AppServerRequester;
   readonly #projects: ProjectCatalog;
   readonly #trash: TrashStore;
+  readonly #marks: MarkStore | null;
   readonly #now: () => number;
   readonly #changeListeners = new Set<(event: SessionChangeEvent) => void>();
   #mutationQueue: Promise<void> = Promise.resolve();
@@ -118,11 +124,12 @@ export class CodexSessionService {
     transport: AppServerRequester,
     projects: ProjectCatalog,
     trash: TrashStore,
-    options: { now?: () => number } = {},
+    options: { now?: () => number; marks?: MarkStore } = {},
   ) {
     this.#transport = transport;
     this.#projects = projects;
     this.#trash = trash;
+    this.#marks = options.marks ?? null;
     this.#now = options.now ?? (() => Math.floor(Date.now() / 1_000));
   }
 
@@ -137,12 +144,13 @@ export class CodexSessionService {
     if (view === "trash") {
       // resolve() 既验证项目白名单，也避免旧项目 ID 借列表接口泄露摘要。
       const project = await this.#projects.resolve(projectId);
-      return this.#listTrash(
+      const page = await this.#listTrash(
         projectId,
         project.path,
         options.cursor ?? null,
         searchTerm,
       );
+      return { ...page, marked: [] };
     }
 
     const project = await this.#projects.resolve(projectId);
@@ -156,6 +164,9 @@ export class CodexSessionService {
       archived: view === "archived",
       ...(searchTerm ? { searchTerm } : {}),
     };
+    const markedIds = new Set(
+      view === "active" ? this.#marks?.list().map((entry) => entry.threadId) ?? [] : [],
+    );
 
     // 归档页需要排除回收站条目。若一整页都被过滤，继续向后找，避免
     // 浏览器看到一个“空列表但还能加载更多”的中间状态。翻页次数要有上限，
@@ -172,18 +183,27 @@ export class CodexSessionService {
         // app-server 本身会按 cwd 过滤；这里再检查一次，守住白名单边界。
         if (
           !this.#trash.has(thread.id) &&
+          !markedIds.has(thread.id) &&
           await threadBelongsToProject(thread, project.path)
         ) {
-          sessions.push(toSessionSummary(thread));
+          sessions.push(toSessionSummary(thread, projectId, false));
         }
       }
       if (sessions.length > 0 || response.nextCursor === null) {
-        return { sessions, nextCursor: response.nextCursor };
+        return {
+          sessions,
+          marked: view === "active" ? await this.#listMarked(searchTerm) : [],
+          nextCursor: response.nextCursor,
+        };
       }
       params.cursor = response.nextCursor;
     }
     // 到这里说明连续多页都被过滤空了。交回游标，让浏览器用“加载更多”继续。
-    return { sessions: [], nextCursor: params.cursor ?? null };
+    return {
+      sessions: [],
+      marked: view === "active" ? await this.#listMarked(searchTerm) : [],
+      nextCursor: params.cursor ?? null,
+    };
   }
 
   async start(projectId: string): Promise<OpenedSession> {
@@ -200,7 +220,7 @@ export class CodexSessionService {
     );
     assertOpenedThreadResponse(response);
     await assertThreadBelongsToProject(response.thread, project.path);
-    return toOpenedSession(response);
+    return toOpenedSession(response, projectId);
   }
 
   async resume(projectId: string, threadId: string): Promise<OpenedSession> {
@@ -237,7 +257,31 @@ export class CodexSessionService {
       throw new Error("Codex 返回了错误的会话。");
     }
     await assertThreadBelongsToProject(response.thread, project.path);
-    return toOpenedSession(response);
+    return toOpenedSession(response, projectId);
+  }
+
+  setMarked(projectId: string, threadId: string, marked: boolean): Promise<SessionSummary> {
+    return this.#serializeMutation(async () => {
+      if (!this.#marks) {
+        throw new Error("当前后端没有启用会话钉住。");
+      }
+      if (!threadId.trim()) {
+        throw new Error("Codex 会话 ID 不能为空。");
+      }
+      if (!marked) {
+        await this.#marks.remove(threadId);
+        this.#emitChange({ projectId, sessionIds: [threadId], change: "unmark" });
+        return this.#markedSummary(projectId, threadId, false);
+      }
+      const project = await this.#projects.resolve(projectId);
+      const thread = await this.#readOwnedThread(project.path, threadId);
+      if (this.#trash.has(threadId)) {
+        throw new Error("回收站里的会话不能钉住，请先恢复。");
+      }
+      await this.#marks.put({ threadId, projectId });
+      this.#emitChange({ projectId, sessionIds: [threadId], change: "mark" });
+      return toSessionSummary(thread, projectId, true);
+    });
   }
 
   archive(projectId: string, threadIds: string[]): Promise<SessionMutationResult> {
@@ -384,7 +428,7 @@ export class CodexSessionService {
       reads += 1;
       try {
         const thread = await this.#readOwnedThread(projectPath, entry.threadId);
-        const summary = toSessionSummary(thread);
+        const summary = toSessionSummary(thread, projectId, this.#marks?.has(thread.id) ?? false);
         if (
           query &&
           !summary.title.toLocaleLowerCase().includes(query) &&
@@ -405,7 +449,111 @@ export class CodexSessionService {
     }
     return {
       sessions,
+      marked: [],
       nextCursor: index < entries.length ? `trash:${index}` : null,
+    };
+  }
+
+  async #listMarked(searchTerm: string): Promise<SessionSummary[]> {
+    if (!this.#marks) return [];
+    const query = searchTerm.toLocaleLowerCase();
+    const entries = this.#marks.list();
+    const archivedIds = await this.#archivedThreadIds(entries);
+    const summaries: SessionSummary[] = [];
+    for (const entry of entries) {
+      if (this.#trash.has(entry.threadId) || archivedIds.has(entry.threadId)) continue;
+      try {
+        const params: ThreadReadParams = { threadId: entry.threadId, includeTurns: false };
+        const response = await this.#transport.request<ThreadReadResponse>("thread/read", params);
+        assertOpenedThreadResponse(response);
+        if (response.thread.id !== entry.threadId) continue;
+        const summary = toSessionSummary(response.thread, entry.projectId, true);
+        if (
+          query &&
+          !summary.title.toLocaleLowerCase().includes(query) &&
+          !summary.preview.toLocaleLowerCase().includes(query)
+        ) {
+          continue;
+        }
+        summaries.push(summary);
+      } catch {
+        // 会话可能已被其他客户端删掉；钉住名单先留着，列表里跳过这一条。
+      }
+    }
+    summaries.sort((left, right) =>
+      right.updatedAt - left.updatedAt || right.id.localeCompare(left.id)
+    );
+    return summaries;
+  }
+
+  async #archivedThreadIds(entries: Array<{ threadId: string; projectId: string }>): Promise<Set<string>> {
+    const archived = new Set<string>();
+    const byProject = new Map<string, string[]>();
+    for (const entry of entries) {
+      const ids = byProject.get(entry.projectId) ?? [];
+      ids.push(entry.threadId);
+      byProject.set(entry.projectId, ids);
+    }
+    for (const [projectId, threadIds] of byProject) {
+      let projectPath: string;
+      try {
+        projectPath = (await this.#projects.resolve(projectId)).path;
+      } catch {
+        continue;
+      }
+      const wanted = new Set(threadIds);
+      const params: ThreadListParams = {
+        cursor: null,
+        limit: PAGE_SIZE,
+        sortKey: "recency_at",
+        sortDirection: "desc",
+        sourceKinds: [...VISIBLE_SOURCE_KINDS],
+        cwd: projectPath,
+        archived: true,
+      };
+      for (let page = 0; page < MAX_LIST_PAGES_PER_REQUEST && wanted.size > 0; page += 1) {
+        const response = await this.#transport.request<ThreadListResponse>("thread/list", params);
+        assertThreadListResponse(response);
+        for (const thread of response.data) {
+          if (wanted.has(thread.id)) {
+            archived.add(thread.id);
+            wanted.delete(thread.id);
+          }
+        }
+        if (response.nextCursor === null) break;
+        params.cursor = response.nextCursor;
+      }
+    }
+    return archived;
+  }
+
+  async #markedSummary(
+    projectId: string,
+    threadId: string,
+    marked: boolean,
+  ): Promise<SessionSummary> {
+    try {
+      const params: ThreadReadParams = { threadId, includeTurns: false };
+      const response = await this.#transport.request<ThreadReadResponse>("thread/read", params);
+      assertOpenedThreadResponse(response);
+      if (response.thread.id === threadId) {
+        return toSessionSummary(response.thread, projectId, marked);
+      }
+    } catch {
+      // 取消钉住时目录或线程可能已经没了，仍要把状态回给页面。
+    }
+    return {
+      id: threadId,
+      sessionId: threadId,
+      title: "新会话",
+      preview: "",
+      createdAt: 0,
+      updatedAt: 0,
+      state: "not_loaded",
+      projectId,
+      marked,
+      deletedAt: null,
+      purgeAt: null,
     };
   }
 
@@ -464,13 +612,14 @@ export class CodexSessionService {
 
 function toOpenedSession(
   response: ThreadStartResponse | ThreadResumeResponse,
+  projectId: string,
 ): OpenedSession {
   const thread = response.thread;
   const experimental = response as typeof response & {
     activePermissionProfile?: { id: string; extends: string | null } | null;
   };
   return {
-    session: toSessionSummary(thread),
+    session: toSessionSummary(thread, projectId, false),
     turns: thread.turns,
     activeTurnId: findActiveTurnId(thread),
     runtime: {
@@ -485,7 +634,7 @@ function toOpenedSession(
   };
 }
 
-function toSessionSummary(thread: Thread): SessionSummary {
+function toSessionSummary(thread: Thread, projectId: string, marked: boolean): SessionSummary {
   const preview = thread.preview.trim();
   const name = thread.name?.trim();
   return {
@@ -500,6 +649,8 @@ function toSessionSummary(thread: Thread): SessionSummary {
       : thread.status.type === "systemError"
       ? "error"
       : thread.status.type,
+    projectId,
+    marked,
     deletedAt: null,
     purgeAt: null,
   };

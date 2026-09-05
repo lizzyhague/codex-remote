@@ -75,6 +75,7 @@ export interface SessionsApi {
   ): Promise<SessionMutationResult>;
   restoreTrash(projectId: string, sessionIds: string[]): Promise<SessionMutationResult>;
   deleteTrash(projectId: string, sessionIds: string[]): Promise<SessionMutationResult>;
+  setMarked(projectId: string, sessionId: string, marked: boolean): Promise<OpenedSession["session"]>;
   onChange?(listener: (event: SessionChangeEvent) => void): () => void;
 }
 
@@ -259,6 +260,15 @@ export class BrowserConnection {
         return this.#listSessions(request);
       case "sessions.mutate":
         return this.#mutateSessions(request);
+      case "session.mark": {
+        const session = await this.#services.sessions.setMarked(
+          request.projectId,
+          request.sessionId,
+          request.marked,
+        );
+        const { sessionId: _engineSessionId, ...summary } = session;
+        return { session: summary };
+      }
       case "session.start":
         this.#assertCanSwitchSession();
         if (this.#services.workers) {

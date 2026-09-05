@@ -47,6 +47,9 @@ const elements = {
   bulkSessionActions: byId("bulk-session-actions"),
   bulkPrimaryButton: byId("bulk-primary-button"),
   bulkTrashButton: byId("bulk-trash-button"),
+  appAlertDialog: byId("app-alert-dialog"),
+  appAlertTitle: byId("app-alert-title"),
+  appAlertMessage: byId("app-alert-message"),
   timeline: byId("timeline"),
   historyLoader: byId("history-loader"),
   loadOlderButton: byId("load-older-button"),
@@ -75,11 +78,13 @@ const state = {
   backgroundWorkers: false,
   token: "",
   projectId: null,
+  projects: [],
   sessionId: null,
   sessionTitle: "",
   metrics: null,
   sessionView: "active",
   sessions: [],
+  markedSessions: [],
   sessionCursor: null,
   sessionLoading: false,
   navigationBusy: false,
@@ -447,6 +452,7 @@ async function loadProjects() {
   try {
     const data = await request("projects.list");
     const projects = Array.isArray(data?.projects) ? data.projects : [];
+    state.projects = projects;
     elements.projectSelect.replaceChildren();
 
     for (const project of projects) {
@@ -489,6 +495,7 @@ async function loadSessions({ append = false } = {}) {
   updateControls();
   if (!append) {
     state.sessions = [];
+    state.markedSessions = [];
     state.sessionCursor = null;
     renderSessionList();
   }
@@ -505,9 +512,11 @@ async function loadSessions({ append = false } = {}) {
       projectId !== state.projectId || view !== state.sessionView
     ) return;
     const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
+    const marked = Array.isArray(data?.marked) ? data.marked : [];
     state.sessions = append
       ? mergeSessions(state.sessions, sessions)
       : sessions;
+    state.markedSessions = view === "active" ? marked : [];
     state.sessionCursor = typeof data?.nextCursor === "string" ? data.nextCursor : null;
     renderSessionList();
   } catch (error) {
@@ -542,6 +551,18 @@ async function startSession() {
 }
 
 async function resumeSession(sessionId) {
+  const selected = findSessionSummary(sessionId);
+  if (selected && !directoryAvailable(selected.projectId)) {
+    showAlert("这个会话的工作目录已经不在了。", "无法打开会话");
+    return;
+  }
+  if (selected?.projectId && selected.projectId !== state.projectId) {
+    if (state.running && !state.backgroundWorkers) return;
+    state.projectId = selected.projectId;
+    stateSet(PROJECT_KEY, state.projectId);
+    elements.projectSelect.value = state.projectId;
+    await loadSessions();
+  }
   if (!state.projectId || (state.running && !state.backgroundWorkers)) return;
   setNavigationBusy(true);
   hideNotice();
@@ -601,6 +622,7 @@ function applyOpenedSession(opened) {
 function setSessionView(view, load = true) {
   state.sessionView = view;
   state.sessions = [];
+  state.markedSessions = [];
   state.sessionCursor = null;
   setSelectionMode(false, false);
   elements.sessionViewTitle.textContent = view === "active"
@@ -628,23 +650,35 @@ function setSelectionMode(enabled, render = true) {
 
 function renderSessionList() {
   elements.sessionList.replaceChildren();
-  if (state.sessionLoading && state.sessions.length === 0) {
+  const marked = state.sessionView === "active" ? state.markedSessions : [];
+  if (marked.length > 0) {
+    const group = document.createElement("div");
+    group.className = "session-mark-group";
+    for (const session of marked) group.append(createSessionItem(session));
+    const divider = document.createElement("hr");
+    divider.className = "session-mark-divider";
+    elements.sessionList.append(group, divider);
+  }
+  const listEmpty = state.sessions.length === 0 && marked.length === 0;
+  if (state.sessionLoading && listEmpty) {
     const loading = document.createElement("p");
     loading.className = "session-list-empty";
     loading.textContent = "正在加载会话……";
     elements.sessionList.append(loading);
   } else if (state.sessions.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "session-list-empty";
-    const searching = Boolean(elements.sessionSearchInput.value.trim());
-    empty.textContent = searching
-      ? "没有找到匹配的会话。"
-      : state.sessionView === "active"
-      ? "这个项目还没有会话。"
-      : state.sessionView === "archived"
-      ? "还没有归档会话。"
-      : "回收站是空的。";
-    elements.sessionList.append(empty);
+    if (marked.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "session-list-empty";
+      const searching = Boolean(elements.sessionSearchInput.value.trim());
+      empty.textContent = searching
+        ? "没有找到匹配的会话。"
+        : state.sessionView === "active"
+        ? "这个项目还没有会话。"
+        : state.sessionView === "archived"
+        ? "还没有归档会话。"
+        : "回收站是空的。";
+      elements.sessionList.append(empty);
+    }
   } else {
     for (const session of state.sessions) {
       elements.sessionList.append(createSessionItem(session));
@@ -700,7 +734,7 @@ function createSessionItem(session) {
       else closeMobileSidebar();
     });
   }
-  item.append(open, createSessionMenu(session));
+  item.append(open, createSessionMark(session));
   return item;
 }
 
@@ -725,22 +759,104 @@ function appendSessionText(container, session) {
   container.append(title, preview, meta);
 }
 
-function createSessionMenu(session) {
+function createSessionMark(session) {
   const button = document.createElement("button");
-  button.className = "session-menu-trigger quiet";
+  button.className = "session-mark-trigger quiet";
   button.type = "button";
-  button.setAttribute("aria-label", `选择并整理 ${session.title || "新会话"}`);
-  button.textContent = "⋯";
-  button.addEventListener("click", () => {
-    setSelectionMode(true, false);
-    state.selectedSessions.add(session.id);
-    renderSessionList();
+  button.setAttribute("aria-pressed", String(Boolean(session.marked)));
+  button.setAttribute(
+    "aria-label",
+    session.marked
+      ? `取消钉住 ${session.title || "新会话"}`
+      : `钉住 ${session.title || "新会话"}`,
+  );
+  button.title = session.marked ? "取消钉住" : "钉住后会一直显示在最近会话顶部";
+  button.append(sessionMarkIcon(Boolean(session.marked)));
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    void toggleSessionMark(session);
   });
   return button;
 }
 
+function sessionMarkIcon(pinned) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.5");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("session-mark-icon");
+  const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  if (pinned) group.setAttribute("transform", "rotate(-34 8 13.4)");
+  const head = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  head.setAttribute("cx", "8");
+  head.setAttribute("cy", "5");
+  head.setAttribute("r", "3");
+  if (pinned) head.setAttribute("fill", "currentColor");
+  const collar = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  collar.setAttribute("d", "M5.2 8.2h5.6");
+  const needle = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  needle.setAttribute("d", "M8 8.2v5.2");
+  group.append(head, collar, needle);
+  svg.append(group);
+  return svg;
+}
+
+async function toggleSessionMark(session) {
+  const projectId = session.projectId || state.projectId;
+  if (!projectId) return;
+  try {
+    const data = await request("session.mark", {
+      projectId,
+      sessionId: session.id,
+      marked: !session.marked,
+    });
+    if (data?.session) upsertSession(data.session);
+    renderSessionList();
+  } catch (error) {
+    showNotice(errorMessage(error));
+  }
+}
+
+function findSessionSummary(sessionId) {
+  return state.markedSessions.find((session) => session.id === sessionId) ??
+    state.sessions.find((session) => session.id === sessionId) ??
+    null;
+}
+
+function directoryAvailable(projectId) {
+  return Boolean(projectId) && state.projects.some((project) => project.id === projectId);
+}
+
+function showAlert(message, title = "提示") {
+  elements.appAlertTitle.textContent = title;
+  elements.appAlertMessage.textContent = message;
+  if (!elements.appAlertDialog.open) elements.appAlertDialog.showModal();
+}
+
+function visibleSessionSummaries() {
+  const seen = new Set();
+  const items = [];
+  if (state.sessionView === "active") {
+    for (const session of state.markedSessions) {
+      if (seen.has(session.id)) continue;
+      seen.add(session.id);
+      items.push(session);
+    }
+  }
+  for (const session of state.sessions) {
+    if (seen.has(session.id)) continue;
+    seen.add(session.id);
+    items.push(session);
+  }
+  return items;
+}
+
 function selectableSessions() {
-  return state.sessions.filter((session) => session.state !== "active");
+  return visibleSessionSummaries().filter((session) => session.state !== "active");
 }
 
 function toggleSelectAllSessions() {
@@ -783,7 +899,7 @@ async function runBulkDangerAction() {
   const sessionIds = [...state.selectedSessions];
   if (sessionIds.length === 0) return;
   if (state.sessionView === "trash") {
-    const selected = state.sessions.filter((session) => state.selectedSessions.has(session.id));
+    const selected = visibleSessionSummaries().filter((session) => state.selectedSessions.has(session.id));
     if (!window.confirm(
       selected.length === 1
         ? `立刻永久删除「${selected[0].title || "新会话"}」。这一步无法撤销，会话原文会一并删除。继续吗？`
@@ -866,8 +982,20 @@ function mergeSessions(existing, incoming) {
 
 function upsertSession(session) {
   if (!session?.id || state.sessionView !== "active") return;
-  const index = state.sessions.findIndex((candidate) => candidate.id === session.id);
-  if (index >= 0) state.sessions[index] = { ...state.sessions[index], ...session };
+  const markedIndex = state.markedSessions.findIndex((candidate) => candidate.id === session.id);
+  const listIndex = state.sessions.findIndex((candidate) => candidate.id === session.id);
+  if (session.marked) {
+    if (listIndex >= 0) state.sessions.splice(listIndex, 1);
+    if (markedIndex >= 0) state.markedSessions[markedIndex] = { ...state.markedSessions[markedIndex], ...session };
+    else state.markedSessions.unshift(session);
+    state.markedSessions.sort((left, right) =>
+      (right.updatedAt || 0) - (left.updatedAt || 0) || String(right.id).localeCompare(String(left.id))
+    );
+    return;
+  }
+  if (markedIndex >= 0) state.markedSessions.splice(markedIndex, 1);
+  if (session.projectId && session.projectId !== state.projectId) return;
+  if (listIndex >= 0) state.sessions[listIndex] = { ...state.sessions[listIndex], ...session };
   else state.sessions.unshift(session);
 }
 
@@ -1267,7 +1395,12 @@ function handleServerEvent(event, replay = false) {
         resetCurrentSession();
         showEmpty("这个会话已经移出当前列表。请选择其他会话。");
       }
-      if (event.projectId === state.projectId) void loadSessions();
+      if (
+        event.change === "mark" || event.change === "unmark" ||
+        event.projectId === state.projectId
+      ) {
+        void loadSessions();
+      }
       break;
     case "task.started":
       state.rewindText = null;
@@ -1344,7 +1477,7 @@ function handleServerEvent(event, replay = false) {
 }
 
 function setCurrentSessionState(sessionState) {
-  const session = state.sessions.find((candidate) => candidate.id === state.sessionId);
+  const session = findSessionSummary(state.sessionId);
   if (!session) return;
   session.state = sessionState;
   if (sessionState === "active") session.updatedAt = Math.floor(Date.now() / 1_000);
@@ -1798,7 +1931,7 @@ function addCommandResult(result) {
   elements.timeline.append(article);
   if (typeof result.sessionName === "string") {
     state.sessionTitle = result.sessionName;
-    const session = state.sessions.find((candidate) => candidate.id === state.sessionId);
+    const session = findSessionSummary(state.sessionId);
     if (session) session.title = result.sessionName;
     renderSessionList();
     updateConversationTitle();
@@ -1830,7 +1963,7 @@ function addApproval(approval, sessionId = null) {
     ? "Codex 请求为本轮增加权限。"
     : "Codex 请求修改文件。");
   const detail = document.createElement("small");
-  const session = state.sessions.find((candidate) => candidate.id === sessionId);
+  const session = findSessionSummary(sessionId);
   const sessionLabel = sessionId && sessionId !== state.sessionId
     ? `${session?.title || "另一个会话"} · `
     : "";
@@ -1994,7 +2127,7 @@ function addInteraction(interaction, sessionId = null) {
   const card = document.createElement("section");
   card.className = "approval-card";
   card.dataset.interactionId = interaction.id;
-  const session = state.sessions.find((candidate) => candidate.id === sessionId);
+  const session = findSessionSummary(sessionId);
   const heading = document.createElement("p");
   heading.textContent = sessionId && sessionId !== state.sessionId
     ? `${session?.title || "另一个会话"}需要你的输入。`
@@ -2204,7 +2337,7 @@ function updateControls() {
   const navigationBusy = state.navigationBusy || state.sessionLoading;
   const navigationLocked = state.commandBusy || navigationBusy || uploading ||
     (state.running && !state.backgroundWorkers);
-  const projectHasActiveTask = state.sessions.some((session) => session.state === "active");
+  const projectHasActiveTask = visibleSessionSummaries().some((session) => session.state === "active");
   elements.projectSelect.disabled = !connected || navigationLocked || state.selectionMode;
   elements.newSessionButton.disabled = !connected || navigationLocked ||
     state.selectionMode || !state.projectId;

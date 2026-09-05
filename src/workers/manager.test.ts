@@ -512,6 +512,8 @@ class FakeWorker {
       createdAt: 1,
       updatedAt: 1,
       state: "idle" as const,
+      projectId: "workspace/alpha",
+      marked: false,
       deletedAt: null,
       purgeAt: null,
     },

@@ -46,6 +46,13 @@ export type BrowserRequest =
     projectId: string;
     sessionId: string;
   }
+  | {
+    type: "session.mark";
+    requestId: string;
+    projectId: string;
+    sessionId: string;
+    marked: boolean;
+  }
   | { type: "session.metrics"; requestId: string }
   | { type: "history.older"; requestId: string }
   | { type: "commands.list"; requestId: string }
@@ -190,6 +197,14 @@ export function parseBrowserRequest(source: string): BrowserRequest {
         requestId,
         projectId: requireString(value.projectId, "项目 ID", requestId, 1_024),
         sessionId: requireString(value.sessionId, "会话 ID", requestId, 1_024),
+      };
+    case "session.mark":
+      return {
+        type: "session.mark",
+        requestId,
+        projectId: requireString(value.projectId, "项目 ID", requestId, 1_024),
+        sessionId: requireString(value.sessionId, "会话 ID", requestId, 1_024),
+        marked: requireBoolean(value.marked, "钉住", requestId),
       };
     case "history.older":
       return { type: "history.older", requestId };
@@ -387,6 +402,13 @@ function requireAnswers(value: unknown, requestId: string): Record<string, strin
       requireString(entry, "回答", requestId, 4_096));
   }
   return result;
+}
+
+function requireBoolean(value: unknown, label: string, requestId: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new ProtocolError("invalid_field", `${label}必须是布尔值。`, requestId);
+  }
+  return value;
 }
 
 function requireString(

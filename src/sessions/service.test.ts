@@ -12,6 +12,7 @@ import {
   type AppServerRequester,
 } from "./service.ts";
 import { TrashStore } from "./trash-store.ts";
+import { MarkStore } from "./mark-store.ts";
 
 class FakeTransport implements AppServerRequester {
   readonly requests: Array<{ method: string; params: unknown }> = [];
@@ -38,7 +39,8 @@ async function createFixture(context: TestContext) {
   const outside = await realpath(outsidePath);
   const catalog = await ProjectCatalog.fromRoots([{ id: "workspace", path: root }]);
   const trash = await TrashStore.open(path.join(temporaryDirectory, "trash.json"));
-  return { catalog, project, outside, trash };
+  const marks = await MarkStore.open(path.join(temporaryDirectory, "marks.json"));
+  return { catalog, project, outside, trash, marks };
 }
 
 function thread(
@@ -80,9 +82,12 @@ test("lists only sessions in the selected allowlisted project", async (context) 
       createdAt: 10,
       updatedAt: 20,
       state: "not_loaded",
+      projectId: "workspace/alpha",
+      marked: false,
       deletedAt: null,
       purgeAt: null,
     }],
+    marked: [],
     nextCursor: "next-page",
   });
   assert.deepEqual(transport.requests[0], {
@@ -194,9 +199,12 @@ test("moves an active session to trash and restores it to the active list", asyn
       createdAt: 10,
       updatedAt: 20,
       state: "idle",
+      projectId: "workspace/alpha",
+      marked: false,
       deletedAt: now,
       purgeAt: now + TRASH_RETENTION_SECONDS,
     }],
+    marked: [],
     nextCursor: null,
   });
 
@@ -281,3 +289,57 @@ test("does not archive a session while its task is active", async (context) => {
   assert.match(result.failed[0]?.message ?? "", /仍有任务正在运行/u);
   assert.deepEqual(transport.requests.map((request) => request.method), ["thread/read"]);
 });
+
+test("pins marked sessions across projects and omits them from the directory page", async (context) => {
+  const { catalog, project, trash, marks } = await createFixture(context);
+  const betaDirectory = path.join(path.dirname(project), "beta");
+  await mkdir(betaDirectory, { recursive: true });
+  const beta = await realpath(betaDirectory);
+  const transport = new FakeTransport();
+  const service = new CodexSessionService(transport, catalog, trash, { marks });
+
+  transport.results.push({
+    thread: thread("thread-beta", beta, { status: { type: "idle" }, name: "别的项目" }),
+  });
+  const pinned = await service.setMarked("workspace/beta", "thread-beta", true);
+  assert.equal(pinned.marked, true);
+  assert.equal(pinned.projectId, "workspace/beta");
+  assert.equal(marks.has("thread-beta"), true);
+
+  transport.results.push(
+    { data: [thread("thread-alpha", project)], nextCursor: null },
+    { data: [], nextCursor: null },
+    { thread: thread("thread-beta", beta, { status: { type: "idle" }, name: "别的项目" }) },
+  );
+  const page = await service.list("workspace/alpha");
+  assert.deepEqual(page.sessions.map((session) => session.id), ["thread-alpha"]);
+  assert.deepEqual(page.marked.map((session) => session.id), ["thread-beta"]);
+  assert.equal(page.marked[0]?.projectId, "workspace/beta");
+  assert.equal(page.marked[0]?.marked, true);
+
+  transport.results.push({
+    thread: thread("thread-beta", beta, { status: { type: "idle" }, name: "别的项目" }),
+  });
+  const unmarked = await service.setMarked("workspace/beta", "thread-beta", false);
+  assert.equal(unmarked.marked, false);
+  assert.equal(marks.has("thread-beta"), false);
+});
+
+test("keeps archived marked sessions out of the recent-session pin group", async (context) => {
+  const { catalog, project, trash, marks } = await createFixture(context);
+  const transport = new FakeTransport();
+  const service = new CodexSessionService(transport, catalog, trash, { marks });
+  transport.results.push({
+    thread: thread("thread-home", project, { status: { type: "idle" } }),
+  });
+  await service.setMarked("workspace/alpha", "thread-home", true);
+
+  transport.results.push(
+    { data: [thread("thread-other", project)], nextCursor: null },
+    { data: [thread("thread-home", project)], nextCursor: null },
+  );
+  const page = await service.list("workspace/alpha");
+  assert.deepEqual(page.sessions.map((session) => session.id), ["thread-other"]);
+  assert.deepEqual(page.marked, []);
+});
+

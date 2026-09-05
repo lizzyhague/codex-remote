@@ -74,6 +74,19 @@ test("parses the small stable browser protocol", () => {
     answers: { choice: ["A"] },
   });
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
+    type: "session.mark",
+    requestId: "mark-1",
+    projectId: "projects/demo",
+    sessionId: "session-1",
+    marked: true,
+  })), {
+    type: "session.mark",
+    requestId: "mark-1",
+    projectId: "projects/demo",
+    sessionId: "session-1",
+    marked: true,
+  });
+  assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "sessions.mutate",
     requestId: "sessions-2",
     projectId: "projects/demo",

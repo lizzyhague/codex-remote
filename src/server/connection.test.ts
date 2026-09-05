@@ -153,7 +153,7 @@ class FakeSessions implements SessionsApi {
   }
 
   async list(_projectId: string): Promise<SessionPage> {
-    return { sessions: [], nextCursor: null };
+    return { sessions: [], marked: [], nextCursor: null };
   }
 
   async start(_projectId: string): Promise<OpenedSession> {
@@ -188,6 +188,11 @@ class FakeSessions implements SessionsApi {
     this.#emit({ projectId, sessionIds, change: "delete" });
     return { succeeded: sessionIds, failed: [] };
   }
+
+  async setMarked(projectId: string, sessionId: string, marked: boolean) {
+    this.#emit({ projectId, sessionIds: [sessionId], change: marked ? "mark" : "unmark" });
+    return { ...openedSession(sessionId).session, projectId, marked };
+  }
 }
 
 function openedSession(id: string): OpenedSession {
@@ -200,6 +205,8 @@ function openedSession(id: string): OpenedSession {
       createdAt: 1,
       updatedAt: 1,
       state: "idle",
+      projectId: "projects/demo",
+      marked: false,
       deletedAt: null,
       purgeAt: null,
     },

@@ -29,10 +29,12 @@ export type BrowserOpenedSession = {
 
 export function toBrowserSessionPage(page: SessionPage): {
   sessions: BrowserSessionSummary[];
+  marked: BrowserSessionSummary[];
   nextCursor: string | null;
 } {
   return {
     sessions: page.sessions.map(toBrowserSessionSummary),
+    marked: page.marked.map(toBrowserSessionSummary),
     nextCursor: page.nextCursor,
   };
 }

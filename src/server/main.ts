@@ -7,6 +7,7 @@ import { ApprovalBroker } from "../approvals/broker.ts";
 import { ProjectCatalog } from "../projects/catalog.ts";
 import { CodexSessionService } from "../sessions/service.ts";
 import { resolveTrashStatePath, TrashStore } from "../sessions/trash-store.ts";
+import { resolveMarkStatePath, MarkStore } from "../sessions/mark-store.ts";
 import { RemoteWebSocketServer } from "./http-server.ts";
 import { ProjectTaskLocks } from "./project-locks.ts";
 import {
@@ -28,6 +29,7 @@ export async function main(): Promise<void> {
   const configPath = process.env.CODEX_REMOTE_PROJECTS_CONFIG ??
     path.resolve("config/projects.json");
   const trash = await TrashStore.open(resolveTrashStatePath());
+  const marks = await MarkStore.open(resolveMarkStatePath());
   const workerState = await WorkerStateStore.open(resolveWorkerStatePath());
   const uploads = new SharedUploadClient(resolveSharedUploadPaths().socket);
 
@@ -41,7 +43,7 @@ export async function main(): Promise<void> {
   try {
     await appServer.initialize(codexRemoteInitializeParams());
     approvals = new ApprovalBroker(appServer);
-    const sessions = new CodexSessionService(appServer, projects, trash);
+    const sessions = new CodexSessionService(appServer, projects, trash, { marks });
     const locks = new ProjectTaskLocks();
     workers = new SessionWorkerManager({
       store: workerState,
