@@ -742,21 +742,23 @@ function appendSessionText(container, session) {
   const title = document.createElement("span");
   title.className = "session-item-title";
   title.textContent = session.title || "新会话";
-  const preview = document.createElement("span");
-  preview.className = "session-item-preview";
-  preview.textContent = session.preview || "暂无内容";
+  const project = document.createElement("span");
+  project.className = "session-item-project";
+  project.textContent = projectDirectoryName(session.projectId);
   const meta = document.createElement("span");
   meta.className = "session-item-meta";
   if (state.sessionView === "trash") {
     meta.dataset.warning = "true";
     meta.textContent = trashRemainingText(session.purgeAt);
   } else {
-    const date = formatDate(session.updatedAt || session.createdAt);
-    meta.textContent = session.state === "active"
-      ? `运行中${date ? ` · ${date}` : ""}`
-      : date;
+    const date = formatLastReplyDate(session.lastReplyAt);
+    meta.textContent = date ? `last reply at ${date}` : "no replies yet";
   }
-  container.append(title, preview, meta);
+  container.append(title, project, meta);
+}
+
+function projectDirectoryName(projectId) {
+  return state.projects.find((project) => project.id === projectId)?.name || "目录不可用";
 }
 
 function createSessionMark(session) {
@@ -2556,6 +2558,15 @@ function formatDate(value) {
   }).format(new Date(milliseconds));
 }
 
+function formatLastReplyDate(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "";
+  const milliseconds = value < 1_000_000_000_000 ? value * 1_000 : value;
+  const date = new Date(milliseconds);
+  if (Number.isNaN(date.getTime())) return "";
+  const twoDigits = (part) => String(part).padStart(2, "0");
+  return `${twoDigits(date.getMonth() + 1)}-${twoDigits(date.getDate())} ${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}`;
+}
+
 function errorMessage(error) {
   return error instanceof Error ? error.message : "请求失败。";
 }
@@ -2639,6 +2650,15 @@ async function refreshSessionMetrics() {
     const data = await request("session.metrics");
     if (state.sessionId !== sessionId || state.generation !== generation) return;
     state.metrics = data.sessionId === sessionId ? data.metrics : null;
+    const session = findSessionSummary(sessionId);
+    if (
+      session &&
+      typeof state.metrics?.lastReplyAt === "number" &&
+      Number.isFinite(state.metrics.lastReplyAt)
+    ) {
+      session.lastReplyAt = state.metrics.lastReplyAt;
+      renderSessionList();
+    }
   } catch {
     if (state.sessionId !== sessionId || state.generation !== generation) return;
     state.metrics = null;

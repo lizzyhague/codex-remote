@@ -511,6 +511,7 @@ class FakeWorker {
       preview: "",
       createdAt: 1,
       updatedAt: 1,
+      lastReplyAt: null,
       state: "idle" as const,
       projectId: "workspace/alpha",
       marked: false,

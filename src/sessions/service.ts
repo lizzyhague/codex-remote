@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises";
 
 import type { Thread } from "../generated/v2/Thread.ts";
+import type { Turn } from "../generated/v2/Turn.ts";
 import type { ThreadHistoryMode } from "../generated/v2/ThreadHistoryMode.ts";
 import type { ThreadArchiveParams } from "../generated/v2/ThreadArchiveParams.ts";
 import type { ThreadArchiveResponse } from "../generated/v2/ThreadArchiveResponse.ts";
@@ -14,6 +15,8 @@ import type { ThreadResumeParams } from "../generated/v2/ThreadResumeParams.ts";
 import type { ThreadResumeResponse } from "../generated/v2/ThreadResumeResponse.ts";
 import type { ThreadStartParams } from "../generated/v2/ThreadStartParams.ts";
 import type { ThreadStartResponse } from "../generated/v2/ThreadStartResponse.ts";
+import type { ThreadTurnsListParams } from "../generated/v2/ThreadTurnsListParams.ts";
+import type { ThreadTurnsListResponse } from "../generated/v2/ThreadTurnsListResponse.ts";
 import type { ThreadUnarchiveParams } from "../generated/v2/ThreadUnarchiveParams.ts";
 import type { ThreadUnarchiveResponse } from "../generated/v2/ThreadUnarchiveResponse.ts";
 import type { ProjectCatalog } from "../projects/catalog.ts";
@@ -24,6 +27,9 @@ import {
 import { MarkStore } from "./mark-store.ts";
 
 const PAGE_SIZE = 50;
+const REPLY_LOOKUP_PAGE_SIZE = 20;
+const REPLY_LOOKUP_CONCURRENCY = 8;
+const REPLY_LOOKUP_CACHE_SIZE = 500;
 
 /** 一次浏览器请求最多向 app-server 翻多少页，避免整页被过滤时无限翻下去。 */
 const MAX_LIST_PAGES_PER_REQUEST = 10;
@@ -59,6 +65,7 @@ export type SessionSummary = {
   preview: string;
   createdAt: number;
   updatedAt: number;
+  lastReplyAt: number | null;
   state: SessionState;
   projectId: string;
   marked: boolean;
@@ -118,6 +125,10 @@ export class CodexSessionService {
   readonly #marks: MarkStore | null;
   readonly #now: () => number;
   readonly #changeListeners = new Set<(event: SessionChangeEvent) => void>();
+  readonly #replyLookups = new Map<
+    string,
+    { updatedAt: number; result: Promise<number | null> }
+  >();
   #mutationQueue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -190,18 +201,22 @@ export class CodexSessionService {
         }
       }
       if (sessions.length > 0 || response.nextCursor === null) {
+        const marked = view === "active" ? await this.#listMarked(searchTerm) : [];
+        await this.#populateLastReplyTimes([...sessions, ...marked]);
         return {
           sessions,
-          marked: view === "active" ? await this.#listMarked(searchTerm) : [],
+          marked,
           nextCursor: response.nextCursor,
         };
       }
       params.cursor = response.nextCursor;
     }
     // 到这里说明连续多页都被过滤空了。交回游标，让浏览器用“加载更多”继续。
+    const marked = view === "active" ? await this.#listMarked(searchTerm) : [];
+    await this.#populateLastReplyTimes(marked);
     return {
       sessions: [],
-      marked: view === "active" ? await this.#listMarked(searchTerm) : [],
+      marked,
       nextCursor: params.cursor ?? null,
     };
   }
@@ -549,12 +564,88 @@ export class CodexSessionService {
       preview: "",
       createdAt: 0,
       updatedAt: 0,
+      lastReplyAt: null,
       state: "not_loaded",
       projectId,
       marked,
       deletedAt: null,
       purgeAt: null,
     };
+  }
+
+  async #populateLastReplyTimes(sessions: SessionSummary[]): Promise<void> {
+    let nextIndex = 0;
+    const populate = async () => {
+      while (nextIndex < sessions.length) {
+        const session = sessions[nextIndex++];
+        if (!session) continue;
+        try {
+          session.lastReplyAt = await this.#lastReplyAt(session.id, session.updatedAt);
+        } catch {
+          // 回复时间只是列表辅助信息；读取失败不能让整个会话列表消失。
+        }
+      }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(REPLY_LOOKUP_CONCURRENCY, sessions.length) },
+        populate,
+      ),
+    );
+  }
+
+  #lastReplyAt(threadId: string, updatedAt: number): Promise<number | null> {
+    const cached = this.#replyLookups.get(threadId);
+    if (cached?.updatedAt === updatedAt) return cached.result;
+
+    const result = this.#readLastReplyAt(threadId).catch((error) => {
+      if (this.#replyLookups.get(threadId)?.result === result) {
+        this.#replyLookups.delete(threadId);
+      }
+      throw error;
+    });
+    this.#replyLookups.delete(threadId);
+    this.#replyLookups.set(threadId, { updatedAt, result });
+    while (this.#replyLookups.size > REPLY_LOOKUP_CACHE_SIZE) {
+      const oldest = this.#replyLookups.keys().next().value;
+      if (typeof oldest !== "string") break;
+      this.#replyLookups.delete(oldest);
+    }
+    return result;
+  }
+
+  async #readLastReplyAt(threadId: string): Promise<number | null> {
+    let cursor: string | null = null;
+    const seenCursors = new Set<string>();
+
+    while (true) {
+      const params: ThreadTurnsListParams = {
+        threadId,
+        cursor,
+        limit: REPLY_LOOKUP_PAGE_SIZE,
+        sortDirection: "desc",
+        itemsView: "summary",
+      };
+      const response = await this.#transport.request<ThreadTurnsListResponse>(
+        "thread/turns/list",
+        params,
+      );
+      if (!response || !Array.isArray(response.data)) {
+        throw new Error("Codex 返回了无法识别的会话轮次列表。");
+      }
+
+      const lastReplyAt = replyTimeFromTurns(response.data);
+      if (lastReplyAt !== null) return lastReplyAt;
+      if (response.nextCursor === null) return null;
+      if (
+        typeof response.nextCursor !== "string" ||
+        seenCursors.has(response.nextCursor)
+      ) {
+        throw new Error("Codex 返回了无法识别的会话轮次游标。");
+      }
+      seenCursors.add(response.nextCursor);
+      cursor = response.nextCursor;
+    }
   }
 
   async #mutateMany(
@@ -644,6 +735,7 @@ function toSessionSummary(thread: Thread, projectId: string, marked: boolean): S
     preview,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
+    lastReplyAt: replyTimeFromTurns(thread.turns),
     state: thread.status.type === "notLoaded"
       ? "not_loaded"
       : thread.status.type === "systemError"
@@ -654,6 +746,20 @@ function toSessionSummary(thread: Thread, projectId: string, marked: boolean): S
     deletedAt: null,
     purgeAt: null,
   };
+}
+
+function replyTimeFromTurns(turns: Turn[]): number | null {
+  let lastReplyAt: number | null = null;
+  for (const turn of turns) {
+    if (
+      typeof turn.completedAt === "number" &&
+      Array.isArray(turn.items) &&
+      turn.items.some((item) => item.type === "agentMessage")
+    ) {
+      lastReplyAt = Math.max(lastReplyAt ?? 0, turn.completedAt);
+    }
+  }
+  return lastReplyAt;
 }
 
 function assertThreadCanBeManaged(thread: Thread): void {

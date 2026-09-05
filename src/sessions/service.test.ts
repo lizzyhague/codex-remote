@@ -65,10 +65,19 @@ function thread(
 test("lists only sessions in the selected allowlisted project", async (context) => {
   const { catalog, project, outside, trash } = await createFixture(context);
   const transport = new FakeTransport();
-  transport.results.push({
-    data: [thread("thread-good", project), thread("thread-outside", outside)],
-    nextCursor: "next-page",
-  });
+  transport.results.push(
+    {
+      data: [thread("thread-good", project), thread("thread-outside", outside)],
+      nextCursor: "next-page",
+    },
+    {
+      data: [
+        { completedAt: null, items: [{ type: "agentMessage" }] },
+        { completedAt: 19, items: [{ type: "agentMessage" }] },
+      ],
+      nextCursor: null,
+    },
+  );
   const service = new CodexSessionService(transport, catalog, trash);
 
   const page = await service.list("workspace/alpha");
@@ -81,6 +90,7 @@ test("lists only sessions in the selected allowlisted project", async (context) 
       preview: "修复测试",
       createdAt: 10,
       updatedAt: 20,
+      lastReplyAt: 19,
       state: "not_loaded",
       projectId: "workspace/alpha",
       marked: false,
@@ -102,6 +112,27 @@ test("lists only sessions in the selected allowlisted project", async (context) 
       archived: false,
     },
   });
+  assert.deepEqual(transport.requests[1], {
+    method: "thread/turns/list",
+    params: {
+      threadId: "thread-good",
+      cursor: null,
+      limit: 20,
+      sortDirection: "desc",
+      itemsView: "summary",
+    },
+  });
+
+  transport.results.push({
+    data: [thread("thread-good", project)],
+    nextCursor: null,
+  });
+  const refreshed = await service.list("workspace/alpha");
+  assert.equal(refreshed.sessions[0]?.lastReplyAt, 19);
+  assert.equal(
+    transport.requests.filter((request) => request.method === "thread/turns/list").length,
+    1,
+  );
 });
 
 test("starts a persistent session with a catalog-resolved cwd", async (context) => {
@@ -198,6 +229,7 @@ test("moves an active session to trash and restores it to the active list", asyn
       preview: "修复测试",
       createdAt: 10,
       updatedAt: 20,
+      lastReplyAt: null,
       state: "idle",
       projectId: "workspace/alpha",
       marked: false,
@@ -342,4 +374,3 @@ test("keeps archived marked sessions out of the recent-session pin group", async
   assert.deepEqual(page.sessions.map((session) => session.id), ["thread-other"]);
   assert.deepEqual(page.marked, []);
 });
-

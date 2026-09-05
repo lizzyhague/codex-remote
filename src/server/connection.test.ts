@@ -204,6 +204,7 @@ function openedSession(id: string): OpenedSession {
       preview: "",
       createdAt: 1,
       updatedAt: 1,
+      lastReplyAt: null,
       state: "idle",
       projectId: "projects/demo",
       marked: false,

@@ -369,7 +369,7 @@ button.small {
 }
 
 .session-item-title,
-.session-item-preview,
+.session-item-project,
 .session-item-meta {
   display: block;
   overflow: hidden;
@@ -383,7 +383,7 @@ button.small {
   font-weight: 650;
 }
 
-.session-item-preview,
+.session-item-project,
 .session-item-meta {
   margin-top: 0.2rem;
   color: var(--muted);
