@@ -62,9 +62,6 @@ const elements = {
   messageInput: byId("message-input"),
   attachmentInput: byId("attachment-input"),
   attachmentList: byId("attachment-list"),
-  attachmentButton: byId("attachment-button"),
-  rewindShortcut: byId("rewind-shortcut"),
-  fullAccessShortcut: byId("full-access-shortcut"),
   commandMenuButton: byId("command-menu-button"),
   taskButton: byId("task-button"),
 };
@@ -115,7 +112,12 @@ const slashCommandOptions = {
   input: elements.messageInput,
   element: elements.slashMenu,
   request,
-  onResult: addCommandResult,
+  onResult: (result) => { addCommandResult(result); void refreshPickerLabels(); },
+  onRename: openRenameDialog,
+  actions: [
+    { label: "添加附件", description: "上传图片、PDF 或文本，可一次选择多个文件。", disabled: () => state.pendingAttachments.length >= MAX_MESSAGE_ATTACHMENTS, onSelect: () => elements.attachmentInput.click() },
+    { label: "重命名", description: "修改当前会话的名称。", onSelect: () => openRenameDialog() },
+  ],
   onError: (error) => showNotice(errorMessage(error)),
   onBusy: (busy) => {
     state.commandBusy = busy;
@@ -225,16 +227,8 @@ elements.composer.addEventListener("submit", (event) => {
 });
 
 elements.commandMenuButton.addEventListener("click", () => {
-  if (elements.messageInput.value.trim()) return;
-  elements.messageInput.value = "/";
-  resizeComposer();
-  slashCommands.handleInput();
-  updateControls();
-  elements.messageInput.focus();
-});
-
-elements.attachmentButton.addEventListener("click", () => {
-  elements.attachmentInput.click();
+  closeComposerPicker();
+  slashCommands.toggleAll();
 });
 
 elements.attachmentInput.addEventListener("change", () => {
@@ -243,17 +237,9 @@ elements.attachmentInput.addEventListener("change", () => {
   void uploadFiles(files);
 });
 
-elements.rewindShortcut.addEventListener("click", () => {
-  void slashCommands.runShortcut("rewind");
-});
-
-
-elements.fullAccessShortcut.addEventListener("click", () => {
-  void toggleFullAccess();
-});
-
 elements.messageInput.addEventListener("input", () => {
   resizeComposer();
+  closeComposerPicker();
   slashCommands.handleInput();
   updateControls();
 });
@@ -577,6 +563,7 @@ async function resumeSession(sessionId) {
 function applyOpenedSession(opened) {
   state.metrics = null;
   state.sessionId = opened.session.id;
+  void refreshPickerLabels();
   renderSessionMetrics();
   state.sessionTitle = opened.session.title || "新会话";
   state.running = Boolean(opened.activeTaskId);
@@ -895,6 +882,9 @@ function trashRemainingText(purgeAt) {
 function resetCurrentSession() {
   abortAttachmentUploads();
   state.sessionId = null;
+  closeComposerPicker();
+  document.getElementById("model-picker-label").textContent = "默认";
+  document.getElementById("permission-picker-label").textContent = "默认";
   state.metrics = null;
   renderSessionMetrics();
   state.sessionTitle = "";
@@ -1247,27 +1237,6 @@ async function stopTask() {
   } catch (error) {
     showNotice(errorMessage(error));
   } finally {
-    updateControls();
-  }
-}
-
-async function toggleFullAccess() {
-  if (
-    !state.sessionId || !state.authenticated || state.running || state.commandBusy
-  ) return;
-  if (!state.fullAccessEnabled && !window.confirm(
-    "Full access 会让 Codex 不受项目沙箱限制地操作主机。确定只为当前会话打开吗？",
-  )) return;
-
-  state.commandBusy = true;
-  updateControls();
-  try {
-    const result = await request("permissions.full-access.toggle");
-    addCommandResult(result);
-  } catch (error) {
-    showNotice(errorMessage(error));
-  } finally {
-    state.commandBusy = false;
     updateControls();
   }
 }
@@ -2270,22 +2239,11 @@ function updateControls() {
     : state.commandBusy
     ? "快捷操作执行中，可以继续写"
     : "在浏览器里写好，再发送给 Codex";
-  const confirmLocked = state.composerLocksConfirms;
-  elements.attachmentButton.disabled = !connected || !hasSession || navigationBusy ||
-    state.selectionMode ||
-    state.pendingAttachments.length >= MAX_MESSAGE_ATTACHMENTS;
-  elements.commandMenuButton.disabled = !connected || !hasSession || busy || hasText || hasAttachments;
-  elements.rewindShortcut.disabled = !connected || !hasSession || busy || confirmLocked;
-  elements.rewindShortcut.title = confirmLocked
-    ? "请先点开输入框再回退"
-    : "";
-  elements.fullAccessShortcut.disabled = !connected || !hasSession || busy || confirmLocked;
-  elements.fullAccessShortcut.setAttribute("aria-pressed", String(state.fullAccessEnabled));
-  elements.fullAccessShortcut.title = confirmLocked
-    ? "请先点开输入框再切换权限"
-    : state.fullAccessEnabled
-    ? "关闭 Full access，恢复当前会话的默认权限"
-    : "仅为当前会话打开 Full access";
+  const controlsDisabled = !connected || !hasSession || busy || navigationBusy || state.selectionMode;
+  elements.commandMenuButton.disabled = controlsDisabled;
+  document.getElementById("model-picker-button").disabled = controlsDisabled;
+  document.getElementById("permission-picker-button").disabled = controlsDisabled;
+  if (controlsDisabled) { closeComposerPicker(); slashCommands.close(); }
   elements.taskButton.textContent = state.running ? "停止" : "发送";
   elements.taskButton.classList.toggle("primary", !state.running);
   elements.taskButton.classList.toggle("danger", state.running);
@@ -2496,6 +2454,7 @@ function removeStored(key) {
 function unavailableSlashCommands() {
   return {
     async load() {},
+    toggleAll() { showNotice("命令菜单当前不可用，请刷新页面。"); },
     close() {
       elements.slashMenu.hidden = true;
       elements.slashMenu.replaceChildren();
@@ -2604,3 +2563,176 @@ const headerHeightObserver = new ResizeObserver(() => {
   }
 });
 headerHeightObserver.observe(conversationHeader);
+
+// 两个选择入口共用菜单；数据和变更都沿用现有命令接口。
+function closeComposerPicker() {
+  const menu = document.getElementById("composer-picker-menu");
+  menu.hidden = true;
+  menu.dataset.requestId = String(Number(menu.dataset.requestId || 0) + 1);
+  for (const kind of ["model", "permission"]) {
+    document.getElementById(`${kind}-picker-button`).setAttribute("aria-expanded", "false");
+  }
+}
+
+async function refreshPickerLabels() {
+  const sessionId = state.sessionId;
+  if (!sessionId || !state.authenticated) return;
+  await Promise.all(["model", "permissions"].map(async command => {
+    try {
+      const data = await request("command.options", { command });
+      if (state.sessionId !== sessionId) return;
+      const selected = data.items?.find(item => item.label?.startsWith("✓"));
+      const label = selected?.label.replace(/^✓\s*/, "") || "默认";
+      const kind = command === "model" ? "model" : "permission";
+      document.getElementById(`${kind}-picker-label`).textContent = label;
+      document.getElementById(`${kind}-picker-button`).title = label;
+    } catch { /* 会话忙碌时后端可能拒绝查询，下次打开时重新读取。 */ }
+  }));
+}
+
+function renderComposerPicker(title, items, onSelect, onBack) {
+  const menu = document.getElementById("composer-picker-menu");
+  const heading = document.createElement("div");
+  heading.className = "composer-picker-heading";
+  if (onBack) {
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "composer-picker-back";
+    back.textContent = "‹ 返回";
+    back.addEventListener("click", onBack);
+    heading.append(back);
+  }
+  const label = document.createElement("strong");
+  label.textContent = title;
+  heading.append(label);
+  menu.replaceChildren(heading);
+  for (const item of items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "composer-picker-option";
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", String(item.label?.startsWith("✓") === true));
+    button.disabled = item.disabled === true;
+    const name = document.createElement("strong");
+    name.textContent = item.label || item.id;
+    const detail = document.createElement("span");
+    detail.className = "composer-picker-description";
+    detail.textContent = item.description || "";
+    button.append(name, detail);
+    button.addEventListener("click", () => onSelect(item));
+    menu.append(button);
+  }
+  menu.hidden = false;
+  menu.querySelector('button[aria-selected="true"]:not(:disabled), button:not(:disabled)')?.focus();
+}
+
+async function openComposerPicker(command) {
+  const kind = command === "model" ? "model" : "permission";
+  const trigger = document.getElementById(`${kind}-picker-button`);
+  if (trigger.disabled) return;
+  const wasOpen = trigger.getAttribute("aria-expanded") === "true";
+  closeComposerPicker();
+  slashCommands.close();
+  if (wasOpen) return;
+  trigger.setAttribute("aria-expanded", "true");
+  const menu = document.getElementById("composer-picker-menu");
+  const requestId = menu.dataset.requestId;
+  const sessionId = state.sessionId;
+  try {
+    const data = await request("command.options", { command });
+    if (state.sessionId !== sessionId || menu.dataset.requestId !== requestId) return;
+    const items = data.items || [];
+    const selected = items.find(item => item.label?.startsWith("✓"));
+    document.getElementById(`${kind}-picker-label`).textContent = selected?.label.replace(/^✓\s*/, "") || "默认";
+    const choose = async (item, argument = null) => {
+      if (state.sessionId !== sessionId || trigger.disabled) return;
+      if (item.danger && !window.confirm("完全访问会让 Codex 不受项目沙箱限制地操作主机。确定只为当前会话选择吗？")) return;
+      closeComposerPicker();
+      state.commandBusy = true;
+      updateControls();
+      try {
+        const result = await request("command.run", { command, option: item.id, argument });
+        if (state.sessionId === sessionId) addCommandResult(result);
+        await refreshPickerLabels();
+      } catch (error) { showNotice(errorMessage(error)); }
+      finally { state.commandBusy = false; updateControls(); trigger.focus(); }
+    };
+    const root = () => {
+      const rows = [...items];
+      if (command === "model") rows.push({ id: "__effort", label: "Effort ›", description: selected?.items?.find(item => item.label?.startsWith("✓"))?.label.replace(/^✓\s*/, "") || "选择当前模型的思考强度", disabled: !selected?.items?.length });
+      renderComposerPicker(command === "model" ? "选择模型" : "权限模式", rows, item => {
+        if (item.id === "__effort") {
+          renderComposerPicker("Effort", selected.items, effort => void choose(selected, effort.id), root);
+        } else { void choose(item); }
+      });
+    };
+    root();
+  } catch (error) {
+    if (menu.dataset.requestId !== requestId) return;
+    closeComposerPicker();
+    showNotice(errorMessage(error));
+  }
+}
+
+for (const [kind, command] of [["model", "model"], ["permission", "permissions"]]) {
+  document.getElementById(`${kind}-picker-button`).addEventListener("click", () => void openComposerPicker(command));
+}
+
+document.addEventListener("click", event => {
+  const path = event.composedPath();
+  const inside = selector => path.some(node => node instanceof Element && node.matches(selector));
+  if (!inside(".composer-picker-menu, .composer-select-button")) closeComposerPicker();
+  if (!inside("#slash-menu, #command-menu-button, #message-input")) slashCommands.close();
+});
+document.addEventListener("keydown", event => {
+  const menu = document.getElementById("composer-picker-menu");
+  if (menu.hidden) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    const trigger = document.querySelector('.composer-select-button[aria-expanded="true"]');
+    closeComposerPicker();
+    trigger?.focus();
+  } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+    event.preventDefault();
+    const buttons = [...menu.querySelectorAll("button:not(:disabled)")];
+    const index = buttons.indexOf(document.activeElement);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+    buttons[next]?.focus();
+  }
+});
+
+function openRenameDialog(initialTitle) {
+  if (!state.sessionId || state.commandBusy || state.running) return;
+  const dialog = document.getElementById("rename-dialog");
+  dialog.dataset.sessionId = state.sessionId;
+  const input = document.getElementById("rename-input");
+  input.value = initialTitle ?? state.sessionTitle ?? "";
+  document.getElementById("rename-status").textContent = "";
+  closeComposerPicker();
+  dialog.showModal();
+  input.focus();
+  input.select();
+}
+document.getElementById("rename-cancel").addEventListener("click", () => document.getElementById("rename-dialog").close());
+document.getElementById("rename-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const dialog = document.getElementById("rename-dialog");
+  const status = document.getElementById("rename-status");
+  const title = document.getElementById("rename-input").value.trim();
+  if (!title) { status.textContent = "会话名称不能为空。"; return; }
+  if (dialog.dataset.sessionId !== state.sessionId) { status.textContent = "当前会话已切换，请关闭后重试。"; return; }
+  if (state.commandBusy) return;
+  state.commandBusy = true;
+  document.getElementById("rename-save").disabled = true;
+  updateControls();
+  try {
+    const result = await request("command.run", { command: "rename", argument: title });
+    addCommandResult(result);
+    dialog.close();
+  } catch (error) { status.textContent = errorMessage(error); }
+  finally {
+    state.commandBusy = false;
+    document.getElementById("rename-save").disabled = false;
+    updateControls();
+  }
+});

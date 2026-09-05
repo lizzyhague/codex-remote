@@ -7,6 +7,9 @@ export class SlashCommandMenu {
     this._onError = options.onError;
     this._onBusy = options.onBusy;
     this._onInputChanged = options.onInputChanged;
+    this._actions = options.actions ?? [];
+    this._onRename = options.onRename;
+    this._fromButton = false;
     this._commands = [];
     this._visibleItems = [];
     this._selectedIndex = 0;
@@ -17,7 +20,7 @@ export class SlashCommandMenu {
     try {
       const data = await this._request("commands.list");
       this._commands = Array.isArray(data?.commands)
-        ? data.commands.filter(command => !["usage", "status"].includes(command.name)) : [];
+        ? data.commands.filter(command => !["usage", "status", "review", "model", "permissions"].includes(command.name)) : [];
       this.handleInput();
     } catch (error) {
       this._onError(error);
@@ -31,7 +34,15 @@ export class SlashCommandMenu {
     this._selectedIndex = 0;
   }
 
+  toggleAll() {
+    if (this._busy) return;
+    if (!this._element.hidden) { this.close(); return; }
+    this._fromButton = true;
+    this._renderCommands(this._commands.filter(command => command.name !== "rename"), true);
+  }
+
   handleInput() {
+    this._fromButton = false;
     if (this._busy) return;
     const value = this._input.value;
     const match = /^\/([^\s/]*)$/.exec(value);
@@ -68,6 +79,7 @@ export class SlashCommandMenu {
 
   async submit(text) {
     if (!text.startsWith("/")) return false;
+    this._fromButton = false;
     const match = /^\/([a-z-]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
     if (!match) {
       this._onError(new Error("无法识别这个斜杠命令。输入 / 可以查看列表。"));
@@ -79,6 +91,12 @@ export class SlashCommandMenu {
       return true;
     }
     const argument = match[2]?.trim() || null;
+    if (command.name === "rename" && this._onRename) {
+      this.close();
+      this._setInput("");
+      this._onRename(argument);
+      return true;
+    }
     if (command.action === "options" && !argument) {
       await this._openOptions(command);
       return true;
@@ -109,13 +127,20 @@ export class SlashCommandMenu {
     await this._execute(command, option, null, false);
   }
 
-  _renderCommands(commands) {
+  _renderCommands(commands, includeActions = false) {
     const fragment = document.createDocumentFragment();
     const heading = document.createElement("div");
     heading.className = "slash-heading";
     heading.textContent = "Codex 命令";
     fragment.append(heading);
 
+    const actionButtons = includeActions ? this._actions.map(action => {
+      const button = commandButton(action.label, action.description);
+      button.disabled = action.disabled?.() === true;
+      button.addEventListener("click", () => { this.close(); action.onSelect(); });
+      fragment.append(button);
+      return button;
+    }) : [];
     const buttons = commands.map((command) => {
       const button = commandButton(`/${command.name}`, command.description);
       button.addEventListener("click", () => void this._chooseCommand(command));
@@ -128,10 +153,16 @@ export class SlashCommandMenu {
       empty.textContent = "没有匹配的命令。";
       fragment.append(empty);
     }
-    this._show(fragment, buttons);
+    this._show(fragment, [...actionButtons, ...buttons]);
   }
 
   async _chooseCommand(command) {
+    if (command.name === "rename" && this._onRename) {
+      this.close();
+      if (!this._fromButton) this._setInput("");
+      this._onRename();
+      return;
+    }
     if (command.action === "options") {
       await this._openOptions(command);
       return;
@@ -158,8 +189,8 @@ export class SlashCommandMenu {
       data?.title || `/${command.name}`,
       items,
       () => {
-        this._setInput("/");
-        this.handleInput();
+        if (this._fromButton) this._renderCommands(this._commands.filter(command => command.name !== "rename"), true);
+        else { this._setInput("/"); this.handleInput(); }
       },
       (item) => {
         if (Array.isArray(item.items) && item.items.length) {
@@ -213,7 +244,7 @@ export class SlashCommandMenu {
     this._show(fragment, buttons);
   }
 
-  async _execute(command, option, argument, clearInput = true) {
+  async _execute(command, option, argument, clearInput = !this._fromButton) {
     await this._withBusy(async () => {
       this.close();
       if (clearInput) this._setInput("");
