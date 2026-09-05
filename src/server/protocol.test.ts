@@ -120,14 +120,14 @@ test("parses the small stable browser protocol", () => {
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "command.run",
     requestId: "command-1",
-    command: "usage",
-    option: "daily",
+    command: "model",
+    option: "gpt-test",
     argument: null,
   })), {
     type: "command.run",
     requestId: "command-1",
-    command: "usage",
-    option: "daily",
+    command: "model",
+    option: "gpt-test",
     argument: null,
   });
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
@@ -214,4 +214,15 @@ test("rejects a message that is too long instead of dropping the connection", ()
     })),
     (error: unknown) => error instanceof ProtocolError && error.code === "invalid_field",
   );
+});
+
+
+test("rejects removed usage and status commands", () => {
+  for (const command of ["usage", "status"]) {
+    for (const type of ["command.run", "command.options"]) {
+      assert.throws(() => parseBrowserRequest(JSON.stringify({
+        type, requestId: "removed-command", command,
+      })));
+    }
+  }
 });

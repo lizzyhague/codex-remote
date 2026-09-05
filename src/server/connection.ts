@@ -1,3 +1,4 @@
+import { SessionMetricsStore } from "../sessions/metrics.ts";
 import { timingSafeEqual } from "node:crypto";
 
 import type { CodexStreamEvent, AppServerTransport } from "../app-server/turn-session.ts";
@@ -113,6 +114,8 @@ export class BrowserConnection {
   readonly #unsubscribeSessionChanges: () => void;
   readonly #unsubscribeWorkerEvents: () => void;
   readonly #completionWaiters = new Map<string, () => void>();
+  readonly #unsubscribeMetrics: () => void;
+  readonly #metrics = new SessionMetricsStore();
   #authenticated = false;
   #disconnected = false;
   #queue: Promise<void> = Promise.resolve();
@@ -139,6 +142,7 @@ export class BrowserConnection {
       throw new Error("WebSocket 访问令牌不能为空。");
     }
     this.#taskClaimTimeoutMs = options.taskClaimTimeoutMs ?? TASK_CLAIM_TIMEOUT_MS;
+    this.#unsubscribeMetrics = services.turnTransport.onNotification(message => this.#metrics.observe(message));
     this.#id = id;
     this.#socket = socket;
     this.#expectedToken = expectedToken;
@@ -279,6 +283,12 @@ export class BrowserConnection {
           request.projectId,
           await this.#services.sessions.resume(request.projectId, request.sessionId),
         );
+      case "session.metrics": {
+        const sessionId = this.#services.workers
+          ? this.#requireManagedSession().sessionId : this.#requireOpenSession().threadId;
+        const store = this.#services.workers?.metrics ?? this.#metrics;
+        return { sessionId, metrics: await store.read(sessionId, this.#services.turnTransport) };
+      }
       case "history.older":
         return this.#loadOlderHistory();
       case "commands.list":
@@ -435,6 +445,7 @@ export class BrowserConnection {
   }
 
   #openSession(projectId: string, opened: OpenedSession): unknown {
+    this.#metrics.seed(opened.session.id, opened.turns);
     this.#assertCanSwitchSession();
     this.#disposeTurnSession();
     this.#usedThreadWriter = true;
@@ -561,13 +572,6 @@ export class BrowserConnection {
           );
         }
         return runner.rename(request.argument);
-      case "status":
-        return runner.status();
-      case "usage":
-        if (!request.option) {
-          throw new BrowserRequestError("command_option_required", "请先选择要查看的用量。");
-        }
-        return runner.usage(request.option);
     }
   }
 
@@ -879,6 +883,7 @@ export class BrowserConnection {
   async #handleDisconnect(): Promise<BrowserDisconnectResult> {
     this.#unsubscribeApprovals();
     this.#unsubscribeSessionChanges();
+    this.#unsubscribeMetrics();
     this.#unsubscribeWorkerEvents();
     await this.#queue;
     if (this.#services.workers) {

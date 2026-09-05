@@ -8,7 +8,7 @@
     <meta name="description" content="通过私人网络使用远程主机上的 Codex">
     <link rel="manifest" href="/manifest.webmanifest?v=15">
     <link rel="icon" href="/icon-192.png?v=13" type="image/png" sizes="192x192">
-    <link rel="stylesheet" href="/styles.css?v=21">
+    <link rel="stylesheet" href="/styles.css?v=24">
     <title>Codex Remote</title>
   </head>
   <body>
@@ -84,8 +84,11 @@
           <div class="conversation-heading">
             <button id="open-sidebar-button" class="quiet sidebar-open-button" type="button" aria-label="打开会话列表">☰</button>
             <div>
-              <strong id="current-session-title">Codex Remote</strong>
+              <div class="conversation-title-row">
+                <strong id="current-session-title">Codex Remote</strong>
               <span id="connection-status" class="connection-status" data-state="connecting">正在连接</span>
+              </div>
+              <div id="session-metrics" class="session-metrics" hidden></div>
             </div>
           </div>
         </header>
@@ -142,7 +145,6 @@
                 disabled
               >/</button>
               <button id="rewind-shortcut" class="quiet composer-shortcut" type="button" disabled>rewind</button>
-              <button id="usage-shortcut" class="quiet composer-shortcut" type="button" disabled>usage</button>
               <button
                 id="full-access-shortcut"
                 class="quiet composer-shortcut full-access-shortcut"
@@ -158,7 +160,7 @@
     </div>
 
     <script src="/boot.js?v=12"></script>
-    <script type="module" src="/slash-menu.js?v=13"></script>
-    <script type="module" src="/app.js?v=23"></script>
+    <script type="module" src="/slash-menu.js?v=14"></script>
+    <script type="module" src="/app.js?v=27"></script>
   </body>
 </html>

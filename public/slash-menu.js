@@ -16,7 +16,8 @@ export class SlashCommandMenu {
   async load() {
     try {
       const data = await this._request("commands.list");
-      this._commands = Array.isArray(data?.commands) ? data.commands : [];
+      this._commands = Array.isArray(data?.commands)
+        ? data.commands.filter(command => !["usage", "status"].includes(command.name)) : [];
       this.handleInput();
     } catch (error) {
       this._onError(error);

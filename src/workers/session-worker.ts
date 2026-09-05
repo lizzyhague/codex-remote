@@ -27,6 +27,7 @@ export type SessionWorkerOptions = {
   trash: TrashStore;
   codexBinary?: string;
   workingDirectory?: string;
+  onMetricsNotification?: (message: import("../app-server/client.ts").JsonObject) => void;
   onStreamEvent?: (event: CodexStreamEvent) => void;
   onApprovalEvent?: (event: ApprovalEvent) => void;
   onInteractionEvent?: (event: WorkerInteractionEvent) => void;
@@ -77,6 +78,7 @@ export class SessionWorker {
       ...(options.codexBinary ? { codexBinary: options.codexBinary } : {}),
       ...(options.workingDirectory ? { workingDirectory: options.workingDirectory } : {}),
       processGroup: true,
+      onNotification: options.onMetricsNotification ?? (() => {}),
     });
     try {
       await client.initialize(codexRemoteInitializeParams());

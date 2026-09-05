@@ -6,8 +6,6 @@ export const COMMAND_NAMES = [
   "rename",
   "review",
   "rewind",
-  "status",
-  "usage",
 ] as const;
 
 export type CommandName = typeof COMMAND_NAMES[number];
@@ -64,18 +62,6 @@ export const COMMAND_CATALOG: readonly CommandDescriptor[] = [
     description: "从对话上下文移除最近一轮；不会撤销文件改动。",
     action: "confirm",
     confirmation: "回退会从当前会话移除最近一轮对话，但不会撤销这一轮已经造成的文件改动。确定继续吗？",
-  },
-  {
-    name: "status",
-    title: "查看状态",
-    description: "显示当前模型、模式、权限和上下文用量。",
-    action: "immediate",
-  },
-  {
-    name: "usage",
-    title: "查看用量",
-    description: "查看账户限额或 Token 使用情况。",
-    action: "options",
   },
 ];
 

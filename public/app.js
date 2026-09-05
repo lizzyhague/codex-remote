@@ -23,6 +23,7 @@ const elements = {
   loginStatus: byId("login-status"),
   appView: byId("app-view"),
   connectionStatus: byId("connection-status"),
+  sessionMetrics: byId("session-metrics"),
   currentSessionTitle: byId("current-session-title"),
   sessionSidebar: byId("session-sidebar"),
   openSidebarButton: byId("open-sidebar-button"),
@@ -63,7 +64,6 @@ const elements = {
   attachmentList: byId("attachment-list"),
   attachmentButton: byId("attachment-button"),
   rewindShortcut: byId("rewind-shortcut"),
-  usageShortcut: byId("usage-shortcut"),
   fullAccessShortcut: byId("full-access-shortcut"),
   commandMenuButton: byId("command-menu-button"),
   taskButton: byId("task-button"),
@@ -80,6 +80,7 @@ const state = {
   projectId: null,
   sessionId: null,
   sessionTitle: "",
+  metrics: null,
   sessionView: "active",
   sessions: [],
   sessionCursor: null,
@@ -246,9 +247,6 @@ elements.rewindShortcut.addEventListener("click", () => {
   void slashCommands.runShortcut("rewind");
 });
 
-elements.usageShortcut.addEventListener("click", () => {
-  void slashCommands.runShortcut("usage", "rate-limits");
-});
 
 elements.fullAccessShortcut.addEventListener("click", () => {
   void toggleFullAccess();
@@ -365,6 +363,8 @@ async function connect(token) {
   socket.addEventListener("close", () => {
     if (generation !== state.generation) return;
     const backgroundWorkers = state.backgroundWorkers;
+    state.metrics = null;
+    renderSessionMetrics();
     state.socket = null;
     state.authenticated = false;
     state.backgroundWorkers = false;
@@ -575,7 +575,9 @@ async function resumeSession(sessionId) {
 }
 
 function applyOpenedSession(opened) {
+  state.metrics = null;
   state.sessionId = opened.session.id;
+  renderSessionMetrics();
   state.sessionTitle = opened.session.title || "新会话";
   state.running = Boolean(opened.activeTaskId);
   state.controlsTask = Boolean(opened.controlsActiveTask);
@@ -591,8 +593,9 @@ function applyOpenedSession(opened) {
     opened.hasOlder === true,
   );
   for (const event of Array.isArray(opened.replayEvents) ? opened.replayEvents : []) {
-    handleServerEvent(event);
+    handleServerEvent(event, true);
   }
+  void refreshSessionMetrics();
 
   if (state.running) {
     showThinking();
@@ -892,6 +895,8 @@ function trashRemainingText(purgeAt) {
 function resetCurrentSession() {
   abortAttachmentUploads();
   state.sessionId = null;
+  state.metrics = null;
+  renderSessionMetrics();
   state.sessionTitle = "";
   state.running = false;
   state.controlsTask = false;
@@ -943,7 +948,7 @@ function updateConversationTitle() {
   elements.currentSessionTitle.textContent = privateTitle
     ? "Codex Remote"
     : state.sessionTitle || "Codex Remote";
-  elements.collapseSidebarButton.textContent = isMobileNavigation() ? "关闭" : "收起";
+  elements.collapseSidebarButton.textContent = "收起";
 }
 
 function syncSidebarState() {
@@ -1267,7 +1272,7 @@ async function toggleFullAccess() {
   }
 }
 
-function handleServerEvent(event) {
+function handleServerEvent(event, replay = false) {
   switch (event.type) {
     case "task.queued": {
       state.running = true;
@@ -1337,6 +1342,7 @@ function handleServerEvent(event) {
       showThinking();
       break;
     case "task.completed":
+      if (!replay) void refreshSessionMetrics();
       state.running = false;
       state.controlsTask = false;
       setCurrentSessionState("idle");
@@ -2273,7 +2279,6 @@ function updateControls() {
   elements.rewindShortcut.title = confirmLocked
     ? "请先点开输入框再回退"
     : "";
-  elements.usageShortcut.disabled = !connected || !hasSession || state.commandBusy;
   elements.fullAccessShortcut.disabled = !connected || !hasSession || busy || confirmLocked;
   elements.fullAccessShortcut.setAttribute("aria-pressed", String(state.fullAccessEnabled));
   elements.fullAccessShortcut.title = confirmLocked
@@ -2526,3 +2531,76 @@ function slashMenuElement() {
   byId("composer").prepend(element);
   return element;
 }
+
+
+let metricsRequestPending = false;
+let metricsRefreshQueued = false;
+async function refreshSessionMetrics() {
+  if (!state.authenticated || !state.sessionId) return;
+  metricsRefreshQueued = true;
+  if (document.hidden || metricsRequestPending) return;
+  metricsRefreshQueued = false;
+  const sessionId = state.sessionId;
+  const generation = state.generation;
+  metricsRequestPending = true;
+  try {
+    const data = await request("session.metrics");
+    if (state.sessionId !== sessionId || state.generation !== generation) return;
+    state.metrics = data.sessionId === sessionId ? data.metrics : null;
+  } catch {
+    if (state.sessionId !== sessionId || state.generation !== generation) return;
+    state.metrics = null;
+  } finally {
+    metricsRequestPending = false;
+    // 切换会话或 Worker 结束若发生在查询期间，完成后补取最新数据。
+    if (metricsRefreshQueued) void refreshSessionMetrics();
+  }
+  renderSessionMetrics();
+}
+
+function renderSessionMetrics() {
+  elements.sessionMetrics.hidden = !state.sessionId;
+  if (!state.sessionId) { elements.sessionMetrics.textContent = ""; return; }
+  const metrics = state.metrics;
+  const parts = [metrics?.context
+    ? `上下文约 ${metrics.context.percentage.toFixed(1)}%`
+    : "上下文等待更新"];
+  if (metrics?.windows?.length) {
+    for (const window of metrics.windows) {
+      const left = typeof window.remainingPercent === "number"
+        ? `${window.remainingPercent.toFixed(1)}%` : "未知";
+      const reset = formatDate(window.resetsAt);
+      const label = window.label.replace(/^codex（(.+)）$/i, "$1");
+      parts.push(`${label}剩余 ${left}${reset ? `，${reset} 重置` : ""}`);
+    }
+  } else parts.push("套餐额度不可用");
+  parts.push(metrics?.lastReplyAt
+    ? `最后回复时间 ${formatDate(metrics.lastReplyAt)}` : "最后回复时间不可用");
+  elements.sessionMetrics.replaceChildren();
+  parts.forEach((text, index) => {
+    if (index > 0) {
+      const separator = document.createElement("span");
+      separator.className = "session-metrics-separator";
+      separator.textContent = "|";
+      separator.setAttribute("aria-hidden", "true");
+      elements.sessionMetrics.append(separator);
+    }
+    elements.sessionMetrics.append(document.createTextNode(text));
+  });
+  elements.sessionMetrics.title = "上下文按最近一次调用的 Token 用量估算；额度属于账号。历史回复时间按该轮完成时间显示。";
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) void refreshSessionMetrics();
+});
+
+
+// 以右侧顶栏的实际高度同步桌面侧栏首行，跟随信息条、字体和窗口变化。
+const conversationHeader = document.querySelector(".app-header");
+const headerHeightObserver = new ResizeObserver(() => {
+  const height = conversationHeader.getBoundingClientRect().height;
+  if (height > 0) {
+    elements.appView.style.setProperty("--conversation-header-height", `${height}px`);
+  }
+});
+headerHeightObserver.observe(conversationHeader);

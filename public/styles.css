@@ -471,6 +471,7 @@ button.small {
 }
 
 .app-header {
+  min-width: 0;
   min-height: 54px;
   padding: max(0.55rem, env(safe-area-inset-top)) 1rem 0.55rem;
   display: flex;
@@ -481,6 +482,7 @@ button.small {
 }
 
 .conversation-heading {
+  flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -488,6 +490,7 @@ button.small {
 }
 
 .conversation-heading > div {
+  flex: 1;
   min-width: 0;
 }
 
@@ -1340,5 +1343,45 @@ button:focus-visible {
     left: 0.6rem;
     right: 0.6rem;
     max-height: 46dvh;
+  }
+}
+
+/* 指标保持单行，窄屏时在这一行内横滑。 */
+.conversation-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+.conversation-title-row .connection-status {
+  flex: none;
+  margin-left: 0;
+  white-space: nowrap;
+}
+.sidebar-open-button { flex-shrink: 0; }
+.session-metrics {
+  display: block;
+  margin-top: 0.3rem;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.3;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+.session-metrics::-webkit-scrollbar { display: none; }
+.session-metrics-separator {
+  margin: 0 0.45em;
+  color: var(--accent);
+}
+.session-metrics[hidden] { display: none; }
+
+
+@media (min-width: 801px) {
+  .session-sidebar {
+    grid-template-rows: var(--conversation-header-height, 54px) auto auto auto minmax(0, 1fr) auto auto;
   }
 }

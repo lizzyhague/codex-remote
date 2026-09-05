@@ -1,3 +1,4 @@
+import { SessionMetricsStore } from "../sessions/metrics.ts";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -117,6 +118,7 @@ type ProvisionalWorker = {
  * 事件日志都属于这里，因此页面断开不会销毁正在运行的 turn。
  */
 export class SessionWorkerManager {
+  readonly metrics = new SessionMetricsStore();
   readonly #store: WorkerStateStore;
   readonly #projects: ProjectCatalog;
   readonly #trash: TrashStore;
@@ -324,6 +326,7 @@ export class SessionWorkerManager {
       );
     }
     return this.#withTransientWorker(projectId, threadId, async (worker, notice) => {
+      this.metrics.seed(threadId, worker.opened.turns);
       this.#sessionSnapshots.set(threadId, worker.opened);
       return {
         ...this.#managedOpen(worker.opened, worker.fullAccessEnabled),
@@ -449,13 +452,6 @@ export class SessionWorkerManager {
           );
         }
         return worker.commands.rename(argument);
-      }
-      if (command === "status") return worker.commands.status();
-      if (command === "usage") {
-        if (!option) {
-          throw new WorkerManagerError("command_option_required", "请先选择要查看的用量。");
-        }
-        return worker.commands.usage(option);
       }
       throw new WorkerManagerError("unknown_command", "不支持这个斜杠命令。");
     });
@@ -818,6 +814,7 @@ export class SessionWorkerManager {
       ...(threadId ? { threadId } : {}),
       ...(this.#codexBinary ? { codexBinary: this.#codexBinary } : {}),
       ...(this.#workingDirectory ? { workingDirectory: this.#workingDirectory } : {}),
+      onMetricsNotification: (message) => this.metrics.observe(message),
       onStreamEvent: (event) => this.#handleStreamEvent(event),
       onApprovalEvent: (event) => this.#handleApprovalEvent(event),
       onInteractionEvent: (event) => this.#handleInteractionEvent(event),

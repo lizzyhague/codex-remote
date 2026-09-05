@@ -51,7 +51,6 @@ export class CommandRunner {
   readonly #threadId: string;
   readonly #unsubscribe: () => void;
   #runtime: RuntimeState;
-  #tokenUsage: JsonObject | null = null;
   #fullAccessEnabled: boolean;
   #settingsRevision = 0;
 
@@ -111,18 +110,6 @@ export class CommandRunner {
           disabled: !profile.allowed,
           danger: isFullAccessProfile(profile.id),
         })),
-      };
-    }
-
-    if (command === "usage") {
-      return {
-        title: "查看哪一种用量",
-        items: [
-          { id: "rate-limits", label: "当前剩余", description: "查看剩余百分比和重置时间。" },
-          { id: "daily", label: "每日用量", description: "查看最近 7 个有记录的日期。" },
-          { id: "weekly", label: "每周用量", description: "把最近 28 天按 7 天汇总。" },
-          { id: "cumulative", label: "累计用量", description: "查看账户累计 Token 等摘要。" },
-        ],
       };
     }
 
@@ -271,88 +258,6 @@ export class CommandRunner {
     };
   }
 
-  status(): CommandMessage {
-    const total = asObject(this.#tokenUsage?.total);
-    const totalTokens = readFiniteNumber(total?.totalTokens);
-    const contextWindow = readFiniteNumber(this.#tokenUsage?.modelContextWindow);
-    const lines = [
-      `模型：${this.#runtime.model}`,
-      `思考强度：${this.#runtime.reasoningEffort || "自动"}`,
-      `模式：${this.#runtime.collaborationMode === "plan" ? "计划" : "普通"}`,
-      `权限：${this.#runtime.activePermissionProfile
-        ? permissionLabel(this.#runtime.activePermissionProfile.id)
-        : describeLegacyPermissions(this.#runtime.approvalPolicy, this.#runtime.sandboxPolicy)}`,
-    ];
-    lines.push(totalTokens === null
-      ? "上下文：本次连接尚未收到 Token 数据"
-      : contextWindow === null
-      ? `上下文：已使用 ${formatCount(totalTokens)} Token`
-      : `上下文：${formatCount(totalTokens)} / ${formatCount(contextWindow)} Token`);
-    return { kind: "message", title: "当前会话状态", lines };
-  }
-
-  async usage(view: string): Promise<CommandMessage> {
-    if (view === "rate-limits") {
-      return this.#rateLimits();
-    }
-    if (view !== "daily" && view !== "weekly" && view !== "cumulative") {
-      throw new Error("无法识别这个用量选项。");
-    }
-    const response = asObject(await this.#transport.request("account/usage/read", undefined));
-    if (!response) {
-      throw new Error("Codex 返回了无法识别的账户用量。");
-    }
-    const summary = asObject(response.summary);
-    const buckets = Array.isArray(response.dailyUsageBuckets)
-      ? response.dailyUsageBuckets.map(asObject).filter(isObjectValue)
-      : [];
-
-    if (view === "cumulative") {
-      return {
-        kind: "message",
-        title: "累计用量",
-        lines: [
-          summaryLine("累计 Token", summary?.lifetimeTokens),
-          summaryLine("单日峰值", summary?.peakDailyTokens),
-          summaryLine("当前连续使用", summary?.currentStreakDays, " 天"),
-          summaryLine("最长连续使用", summary?.longestStreakDays, " 天"),
-        ],
-      };
-    }
-
-    const daily = buckets
-      .map((bucket) => ({
-        date: typeof bucket.startDate === "string" ? bucket.startDate : "",
-        tokens: readFiniteNumber(bucket.tokens) ?? 0,
-      }))
-      .filter((bucket) => bucket.date)
-      .sort((left, right) => left.date.localeCompare(right.date));
-
-    if (view === "daily") {
-      return {
-        kind: "message",
-        title: "每日用量",
-        lines: daily.slice(-7).map((bucket) =>
-          `${bucket.date}：${formatCount(bucket.tokens)} Token`
-        ).concat(daily.length ? [] : ["目前没有每日用量记录。"]),
-      };
-    }
-
-    const recent = daily.slice(-28);
-    const weekly: string[] = [];
-    for (let index = 0; index < recent.length; index += 7) {
-      const group = recent.slice(index, index + 7);
-      if (!group.length) continue;
-      const total = group.reduce((sum, bucket) => sum + bucket.tokens, 0);
-      weekly.push(`${group[0]!.date} ～ ${group.at(-1)?.date}：${formatCount(total)} Token`);
-    }
-    return {
-      kind: "message",
-      title: "每周用量",
-      lines: weekly.length ? weekly : ["目前没有每周用量记录。"],
-    };
-  }
-
   async compact(): Promise<string | null> {
     await this.#transport.request("thread/compact/start", { threadId: this.#threadId });
     return null;
@@ -457,52 +362,6 @@ export class CommandRunner {
     }
   }
 
-  async #rateLimits(): Promise<CommandMessage> {
-    const response = asObject(
-      await this.#transport.request("account/rateLimits/read", undefined),
-    );
-    if (!response) {
-      throw new Error("Codex 返回了无法识别的限额数据。");
-    }
-    const byId = asObject(response.rateLimitsByLimitId);
-    const snapshots = byId
-      ? Object.values(byId).map(asObject).filter(isObjectValue)
-      : [asObject(response.rateLimits)].filter(isObjectValue);
-    const lines: CommandMessageLine[] = [];
-    for (const snapshot of snapshots) {
-      const name = typeof snapshot.limitName === "string"
-        ? snapshot.limitName
-        : typeof snapshot.limitId === "string"
-        ? snapshot.limitId
-        : "Codex";
-      for (const window of [asObject(snapshot.primary), asObject(snapshot.secondary)]) {
-        if (!window) continue;
-        const used = readFiniteNumber(window.usedPercent);
-        const duration = readFiniteNumber(window.windowDurationMins);
-        const resetsAt = readFiniteNumber(window.resetsAt);
-        const remaining = used === null
-          ? null
-          : Math.max(0, Math.min(100, 100 - used));
-        const usage = `${name}${duration === null ? "" : `（${formatDuration(duration)}）`}：${
-          remaining === null ? "剩余未知" : `剩余 ${Math.round(remaining)}%`
-        }`;
-        lines.push(resetsAt === null
-          ? usage
-          : {
-            kind: "timestamp",
-            before: `${usage}，`,
-            timestamp: resetsAt,
-            after: " 重置",
-          });
-      }
-    }
-    return {
-      kind: "message",
-      title: "当前剩余额度",
-      lines: lines.length ? lines : ["当前账户没有返回可显示的限额窗口。"],
-    };
-  }
-
   async #listModels(): Promise<ModelSummary[]> {
     const result: ModelSummary[] = [];
     let cursor: string | null = null;
@@ -595,10 +454,6 @@ export class CommandRunner {
   #handleNotification(message: JsonObject): void {
     const params = asObject(message.params);
     if (!params || params.threadId !== this.#threadId) return;
-    if (message.method === "thread/tokenUsage/updated") {
-      this.#tokenUsage = asObject(params.tokenUsage);
-      return;
-    }
     if (message.method !== "thread/settings/updated") return;
     const settings = asObject(params.threadSettings);
     if (!settings) return;
@@ -688,47 +543,8 @@ function runtimeUsesFullAccess(runtime: SessionRuntime): boolean {
   return isFullAccessProfile(type);
 }
 
-function describeLegacyPermissions(approval: unknown, sandbox: unknown): string {
-  const policy = typeof approval === "string" ? approval : "自定义审批";
-  const sandboxObject = asObject(sandbox);
-  const sandboxType = typeof sandboxObject?.type === "string"
-    ? sandboxObject.type
-    : typeof sandbox === "string"
-    ? sandbox
-    : "自定义沙箱";
-  return `${policy} / ${sandboxType}`;
-}
-
-function summaryLine(label: string, value: unknown, suffix = " Token"): string {
-  const number = readFiniteNumber(value);
-  return `${label}：${number === null ? "暂无" : `${formatCount(number)}${suffix}`}`;
-}
-
-function formatCount(value: number): string {
-  return new Intl.NumberFormat("zh-CN").format(Math.round(value));
-}
-
-function formatDuration(minutes: number): string {
-  if (minutes < 60) return `${Math.round(minutes)} 分钟`;
-  if (minutes < 1_440) return `${Math.round(minutes / 60)} 小时`;
-  return `${Math.round(minutes / 1_440)} 天`;
-}
-
-function readFiniteNumber(value: unknown): number | null {
-  const number = typeof value === "number"
-    ? value
-    : typeof value === "string" && value.trim()
-    ? Number(value)
-    : NaN;
-  return Number.isFinite(number) ? number : null;
-}
-
 function asObject(value: unknown): JsonObject | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as JsonObject
     : null;
-}
-
-function isObjectValue(value: JsonObject | null): value is JsonObject {
-  return value !== null;
 }

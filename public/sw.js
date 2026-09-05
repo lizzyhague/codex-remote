@@ -1,12 +1,12 @@
-const CACHE_NAME = "codex-remote-shell-v28";
+const CACHE_NAME = "codex-remote-shell-v32";
 const APP_SHELL = [
   "/",
   "/index.html",
-  "/styles.css?v=21",
+  "/styles.css?v=24",
   "/boot.js?v=12",
-  "/app.js?v=23",
+  "/app.js?v=27",
   "/markdown.js?v=15",
-  "/slash-menu.js?v=13",
+  "/slash-menu.js?v=14",
   "/manifest.webmanifest?v=15",
   "/icon-192.png?v=13",
   "/icon-512.png?v=13",

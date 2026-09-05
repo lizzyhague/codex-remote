@@ -57,31 +57,6 @@ class FakeTransport implements AppServerTransport {
         ],
       } as Result;
     }
-    if (method === "account/usage/read") {
-      return {
-        summary: {
-          lifetimeTokens: 123_456,
-          peakDailyTokens: 12_345,
-          currentStreakDays: 3,
-          longestStreakDays: 8,
-        },
-        dailyUsageBuckets: [
-          { startDate: "2026-08-13", tokens: 1_000 },
-          { startDate: "2026-08-14", tokens: 2_000 },
-        ],
-      } as Result;
-    }
-    if (method === "account/rateLimits/read") {
-      return {
-        rateLimits: {
-          limitId: "codex",
-          limitName: "Codex",
-          primary: { usedPercent: 25, windowDurationMins: 10_080, resetsAt: 1_800_000_000 },
-          secondary: null,
-        },
-        rateLimitsByLimitId: null,
-      } as Result;
-    }
     if (method === "review/start") {
       return { turn: { id: "review-1" }, reviewThreadId: "thread-1" } as Result;
     }
@@ -160,7 +135,7 @@ function completedTurn(id: string) {
   };
 }
 
-test("publishes the nine commands in alphabetical order", () => {
+test("publishes the seven commands in alphabetical order", () => {
   const names = COMMAND_CATALOG.map((command) => command.name);
   assert.deepEqual(names, [
     "compact",
@@ -170,13 +145,11 @@ test("publishes the nine commands in alphabetical order", () => {
     "rename",
     "review",
     "rewind",
-    "status",
-    "usage",
   ]);
   assert.match(COMMAND_CATALOG.find((command) => command.name === "rewind")?.confirmation ?? "", /不会撤销/);
 });
 
-test("builds dynamic model, permission, and usage menus", async () => {
+test("builds dynamic model and permission menus", async () => {
   const transport = new FakeTransport();
   const runner = createRunner(transport);
 
@@ -190,14 +163,10 @@ test("builds dynamic model, permission, and usage menus", async () => {
   const permissions = await runner.options("permissions");
   assert.equal(permissions.items[1]?.label.startsWith("✓ "), true);
   assert.equal(permissions.items[2]?.disabled, true);
-  assert.deepEqual(
-    (await runner.options("usage")).items.map((item) => item.id),
-    ["rate-limits", "daily", "weekly", "cumulative"],
-  );
   runner.dispose();
 });
 
-test("runs all nine commands through app-server methods", async () => {
+test("runs all seven commands through app-server methods", async () => {
   const transport = new FakeTransport();
   const runner = createRunner(transport);
 
@@ -210,29 +179,6 @@ test("runs all nine commands through app-server methods", async () => {
   assert.equal((await runner.togglePlan()).title, "已进入计划模式");
   assert.equal((await runner.rename("测试会话")).sessionName, "测试会话");
 
-  transport.notify({
-    method: "thread/tokenUsage/updated",
-    params: {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      tokenUsage: {
-        total: { totalTokens: 2_000 },
-        modelContextWindow: 10_000,
-      },
-    },
-  });
-  assert.equal(runner.status().lines.at(-1), "上下文：2,000 / 10,000 Token");
-  assert.equal((await runner.usage("daily")).title, "每日用量");
-  assert.equal((await runner.usage("weekly")).title, "每周用量");
-  assert.equal((await runner.usage("cumulative")).title, "累计用量");
-  const rateLimits = await runner.usage("rate-limits");
-  assert.equal(rateLimits.title, "当前剩余额度");
-  assert.deepEqual(rateLimits.lines, [{
-    kind: "timestamp",
-    before: "Codex（7 天）：剩余 75%，",
-    timestamp: 1_800_000_000,
-    after: " 重置",
-  }]);
   assert.equal(await runner.compact(), null);
   assert.equal(await runner.review(), "review-1");
   assert.deepEqual(

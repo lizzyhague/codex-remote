@@ -46,6 +46,7 @@ export type BrowserRequest =
     projectId: string;
     sessionId: string;
   }
+  | { type: "session.metrics"; requestId: string }
   | { type: "history.older"; requestId: string }
   | { type: "commands.list"; requestId: string }
   | {
@@ -154,6 +155,8 @@ export function parseBrowserRequest(source: string): BrowserRequest {
         requestId,
         token: requireString(value.token, "访问令牌", requestId, 4_096),
       };
+    case "session.metrics":
+      return { type: "session.metrics", requestId };
     case "projects.list":
       return { type: "projects.list", requestId };
     case "sessions.list":
