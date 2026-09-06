@@ -197,6 +197,8 @@ button.small {
   min-width: 0;
   height: 100dvh;
   display: grid;
+  /* Keep long picker labels inside the viewport so the action strip can scroll. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto auto auto;
   background: #111318;
 }
