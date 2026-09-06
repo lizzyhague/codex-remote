@@ -783,27 +783,46 @@ function createSessionMark(session) {
 
 function sessionMarkIcon(pinned) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("fill", "none");
   svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "1.5");
+  svg.setAttribute("stroke-width", "1.8");
   svg.setAttribute("stroke-linecap", "round");
   svg.setAttribute("stroke-linejoin", "round");
   svg.setAttribute("aria-hidden", "true");
   svg.classList.add("session-mark-icon");
-  const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
-  if (pinned) group.setAttribute("transform", "rotate(-34 8 13.4)");
-  const head = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-  head.setAttribute("cx", "8");
-  head.setAttribute("cy", "5");
-  head.setAttribute("r", "3");
-  if (pinned) head.setAttribute("fill", "currentColor");
-  const collar = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  collar.setAttribute("d", "M5.2 8.2h5.6");
+  /*
+   * 图钉的形状取自 pocket-ai 里标记「已留材料」的那个 📌。画成 SVG 才能跟着
+   * currentColor 走、拿到每个项目自己的主色——emoji 那身红是系统字体给的，改不掉。
+   *
+   * 两个状态换的是两副钉身，不是把同一副转个角度：
+   *   没钉住 = 斜着、空心描边（--muted），像还捏在手里；
+   *   钉住   = 正立、钉身填实（--accent），像已经扎正扎进去了。
+   * 旋转正是上一版的毛病：转完钉头会跑到 viewBox 外面被切掉，而且每条边都变成
+   * 斜切，小尺寸下发糊。两副横平竖直的路径才锐利。
+   *
+   * viewBox 用 24：路径按 Tabler 的 24 网格画，硬换算到 16 只会得到一串读不动
+   * 的小数。渲染尺寸由 CSS 定在 17px，两者不冲突。
+   */
+  const LOOSE = {
+    body: "M15 4.5l-4 4l-4 1.5l-1.5 1.5l7 7l1.5-1.5l1.5-4l4-4",
+    needle: "M9 15l-4.5 4.5",
+    cap: "M14.5 4l5.5 5.5",
+  };
+  const DRIVEN = {
+    body: "M9 4v6l-2 4v2h10v-2l-2-4v-6z",
+    needle: "M12 16l0 5",
+    cap: "M8 4l8 0",
+  };
+  const shape = pinned ? DRIVEN : LOOSE;
+  const body = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  body.setAttribute("d", shape.body);
+  if (pinned) body.setAttribute("fill", "currentColor");
   const needle = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  needle.setAttribute("d", "M8 8.2v5.2");
-  group.append(head, collar, needle);
-  svg.append(group);
+  needle.setAttribute("d", shape.needle);
+  const cap = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  cap.setAttribute("d", shape.cap);
+  svg.append(body, needle, cap);
   return svg;
 }
 

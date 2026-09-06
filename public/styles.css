@@ -418,12 +418,24 @@ button.small {
 }
 
 .session-mark-trigger .session-mark-icon {
-  width: 15px;
-  height: 15px;
+  width: 17px;
+  height: 17px;
 }
 
 .session-mark-trigger[aria-pressed="true"] {
   color: var(--accent);
+}
+
+.session-mark-trigger,
+.session-mark-trigger .session-mark-icon {
+  transition: color 140ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-mark-trigger,
+  .session-mark-trigger .session-mark-icon {
+    transition: none;
+  }
 }
 
 .app-alert-dialog {
