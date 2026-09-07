@@ -1,6 +1,6 @@
 import { renderMarkdown, sanitizeHref } from "./markdown.js?v=15";
 
-const TOKEN_KEY = "codex-remote.token";
+const LEGACY_TOKEN_KEY = "codex-remote.token";
 const PROJECT_KEY = "codex-remote.project";
 const SESSION_KEY = "codex-remote.session";
 const OUTBOX_KEY = "codex-remote.outbox-v2";
@@ -76,7 +76,6 @@ const state = {
   reconnectAllowed: true,
   authenticated: false,
   backgroundWorkers: false,
-  token: "",
   projectId: null,
   projects: [],
   sessionId: null,
@@ -284,18 +283,14 @@ if (typeof window.codexRemoteMarkReady === "function") {
   elements.connectButton.disabled = false;
 }
 
-const savedToken = stateGet(TOKEN_KEY);
-if (savedToken) {
-  elements.tokenInput.value = savedToken;
-  elements.loginStatus.textContent = "正在连接主机……";
-  void connect(savedToken);
-} else {
-  showLogin();
-}
+removeStored(LEGACY_TOKEN_KEY);
+elements.loginStatus.textContent = "正在连接主机……";
+void connect();
 
 async function connect(token) {
   const generation = ++state.generation;
   clearTimeout(state.reconnectTimer);
+  state.reconnectTimer = null;
   rejectPending(new Error("连接已重新建立。"));
 
   if (state.socket) {
@@ -303,11 +298,49 @@ async function connect(token) {
     state.socket.close();
   }
 
-  state.token = token;
   state.authenticated = false;
   elements.connectButton.disabled = true;
   elements.loginStatus.textContent = "正在连接主机……";
   setConnectionStatus("connecting", "正在连接");
+
+  try {
+    const response = token
+      ? await fetch("/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token }),
+        cache: "no-store",
+      })
+      : await fetch("/auth/session", { cache: "no-store" });
+    if (generation !== state.generation) return;
+    if (response.status === 401) {
+      state.reconnectAllowed = false;
+      elements.connectButton.disabled = false;
+      showLogin();
+      elements.loginStatus.textContent = token ? "访问令牌不正确。" : "请登录。";
+      return;
+    }
+    if (!response.ok) throw new Error("登录服务暂时不可用。");
+    const authentication = await response.json();
+    if (generation !== state.generation) return;
+    state.backgroundWorkers = authentication?.features?.backgroundWorkers === true;
+    elements.tokenInput.value = "";
+    const returnTo = new URLSearchParams(location.search).get("returnTo");
+    if (returnTo?.startsWith("/view?")) {
+      const target = new URL(returnTo, location.origin);
+      if (target.origin === location.origin && target.pathname === "/view") {
+        location.replace(target.href);
+        return;
+      }
+    }
+  } catch (error) {
+    if (generation !== state.generation) return;
+    elements.loginStatus.textContent = errorMessage(error);
+    elements.connectButton.disabled = false;
+    setConnectionStatus("disconnected", "连接已断开");
+    scheduleReconnect();
+    return;
+  }
 
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(`${protocol}//${location.host}/ws`);
@@ -320,11 +353,7 @@ async function connect(token) {
   socket.addEventListener("open", async () => {
     if (generation !== state.generation) return;
     try {
-      const authentication = await request("auth", { token });
-      if (generation !== state.generation) return;
       state.authenticated = true;
-      state.backgroundWorkers = authentication?.features?.backgroundWorkers === true;
-      stateSet(TOKEN_KEY, token);
       elements.loginStatus.textContent = "";
       elements.connectButton.disabled = false;
       showApp();
@@ -336,11 +365,6 @@ async function connect(token) {
       const message = errorMessage(error);
       elements.loginStatus.textContent = message;
       elements.connectButton.disabled = false;
-      if (error?.code === "invalid_token") {
-        state.reconnectAllowed = false;
-        removeStored(TOKEN_KEY);
-        showLogin();
-      }
     }
   });
 
@@ -369,17 +393,23 @@ async function connect(token) {
     setConnectionStatus("disconnected", "连接已断开");
     updateControls();
 
-    if (state.reconnectAllowed && state.token) {
+    if (state.reconnectAllowed) {
       if (!elements.appView.hidden) {
         showNotice(backgroundWorkers
           ? "连接中断；已接受的任务会由主机后台继续处理。正在重新连接……"
           : "连接中断，主机会停止正在进行的任务。正在重新连接……");
       }
-      state.reconnectTimer = setTimeout(() => {
-        void connect(state.token);
-      }, RECONNECT_DELAY_MS);
+      scheduleReconnect();
     }
   });
+}
+
+function scheduleReconnect() {
+  if (!state.reconnectAllowed || state.reconnectTimer) return;
+  state.reconnectTimer = setTimeout(() => {
+    state.reconnectTimer = null;
+    void connect();
+  }, RECONNECT_DELAY_MS);
 }
 
 function handleSocketMessage(source) {

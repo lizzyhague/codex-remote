@@ -142,6 +142,17 @@ curl --fail --show-error "http://127.0.0.1:${BACKEND_PORT}/healthz"
 其他 Worker。服务反复重启时，应先看日志中的 App Server/Worker 错误，而不只是检查
 网页入口。
 
+## 浏览器登录
+
+浏览器把 `CODEX_REMOTE_TOKEN` 交给 `/auth/login` 后，服务会签发 `HttpOnly`、
+`Secure`、`SameSite=Strict` 的签名 cookie。登录凭据本身不会写入浏览器存储，
+WebSocket、附件上传和文件读取共用这份 cookie。cookie 不依赖内存会话表，因此重启
+服务不会让已登录设备退出；浏览器允许的持久 cookie 有效期最长约 400 天，已登录
+页面访问受保护的 HTTP 路由时会自动续期。
+
+升级自旧版 Codex Remote 后，每台设备需要重新登录一次。更换
+`CODEX_REMOTE_TOKEN` 会立即使旧 cookie 全部失效。
+
 ## 更新
 
 在没有活动任务时更新：
@@ -173,11 +184,31 @@ curl --fail --show-error "http://127.0.0.1:${BACKEND_PORT}/healthz"
 `config/projects.example.json`。每一项配置一个“项目根目录”，网页列出它下面第一层
 的普通文件夹。
 
-不要把 `/`、整个用户主目录或包含秘密的宽泛目录配置成项目根目录。项目根目录只
-限制浏览器可选择的 cwd 和可恢复会话；Codex 最终能访问哪些文件，还取决于服务账户
-权限及当前 Codex 权限 profile。
+不要把 `/`、整个用户主目录或包含秘密的宽泛目录配置成项目根目录。项目根目录限制
+浏览器可选择的 cwd、可恢复会话以及文件查看器的读取范围；Codex 最终能访问哪些
+文件，还取决于服务账户权限及当前 Codex 权限 profile。
 
 修改项目配置后需要重启服务。
+
+## 查看项目文件
+
+Codex 会话可以交付 Markdown 和图片链接：
+
+```text
+/view?path=%2Fabsolute%2Fpath%2Finside%2Fproject%2Fnote.md
+```
+
+`/raw` 只读取启动时经过 `realpath` 解析的项目根目录，并且只接受 `.md`、`.svg`、
+`.png`、`.jpg`、`.jpeg`、`.gif`、`.webp`、`.avif`、`.bmp` 和 `.ico`。相对路径、目录、
+源码、其他后缀以及通过符号链接逃出根目录的路径统一返回 404。查看器不提供下载或
+目录浏览。
+
+正式文件应放在项目中原本合适的位置。只用于比较、挑选或试验的预览应放在项目内
+已被 Git 忽略的 `notes/previews/`，写入前要先确认该路径确实被忽略。
+
+`/raw` 需要登录 cookie，响应禁止缓存并带有 `nosniff` 和沙箱 CSP；SVG 即使被直接
+打开，也不能在 Codex Remote 的 origin 下执行脚本。Service Worker 只缓存应用外壳，
+不缓存登录、文件或附件响应。
 
 ## 状态文件与备份
 
@@ -202,7 +233,7 @@ SQLite 的在线备份能力。
 
 ## Origin 与反向代理
 
-默认只允许与 `Host` 或 `X-Forwarded-Host` 同源的浏览器 WebSocket。正常保留 Host
+默认只允许与 `Host` 或 `X-Forwarded-Host` 同源的浏览器鉴权请求和 WebSocket。正常保留 Host
 的 Tailscale Serve、Caddy 和 Nginx 配置不需要额外白名单。
 
 只有入口确实改写 Host，并且日志出现“拒绝了来源不匹配的 WebSocket 升级请求”时，
@@ -234,7 +265,7 @@ SQLite 的在线备份能力。
 
 网页能打开但无法登录时：
 
-- “访问令牌不正确”：核对浏览器保存值与主机环境文件；
+- “访问令牌不正确”：核对输入值与主机环境文件；
 - WebSocket 被拒绝：检查日志中的 Origin/Host；
 - 页面脚本未启动：检查 `boot.js`、`app.js` 和依赖资源是否返回 200；
 - 更新后仍像旧版本：彻底关闭已安装 PWA，再从 HTTPS 地址重新打开。

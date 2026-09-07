@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -32,18 +35,18 @@ class EmptyTransport implements AppServerTransport, ApprovalTransport {
   respondToServerRequest(_id: RequestId, _result: unknown): void {}
 }
 
-test("serves health and authenticated WebSocket only on loopback", async () => {
+test("serves health and requires a cookie before the WebSocket upgrade", async () => {
   const transport = new EmptyTransport();
   const approvals = new ApprovalBroker(transport);
   const services = emptyServices(transport, approvals);
   const server = new RemoteWebSocketServer({
     token: "test-secret",
     services,
-    authTimeoutMs: 2_000,
   });
   const address = await server.listen(0);
-  const webSocket = new WebSocket(`ws://${address.host}:${address.port}/ws`);
-  const opened = once(webSocket, "open");
+  const rejected = new WebSocket(`ws://${address.host}:${address.port}/ws`);
+  const rejectedError = once(rejected, "error");
+  let webSocket: WebSocket | null = null;
 
   try {
     const health = await fetch(`http://${address.host}:${address.port}/healthz`);
@@ -78,18 +81,12 @@ test("serves health and authenticated WebSocket only on loopback", async () => {
     const missing = await fetch(`http://${address.host}:${address.port}/not-a-file`);
     assert.equal(missing.status, 404);
 
-    await withTimeout(opened, "打开 WebSocket");
-    const authResponse = once(webSocket, "message");
-    webSocket.send(JSON.stringify({
-      type: "auth",
-      requestId: "auth-1",
-      token: "test-secret",
-    }));
-    const authMessage = await withTimeout(authResponse, "等待认证响应");
-    const auth = JSON.parse(String(authMessage[0])) as {
-      ok: boolean;
-    };
-    assert.equal(auth.ok, true);
+    await withTimeout(rejectedError, "等待未登录连接被拒绝");
+    const cookie = await loginCookie(address);
+    webSocket = new WebSocket(`ws://${address.host}:${address.port}/ws`, {
+      headers: { cookie },
+    });
+    await withTimeout(once(webSocket, "open"), "打开 WebSocket");
 
     const projectsResponse = once(webSocket, "message");
     webSocket.send(JSON.stringify({
@@ -103,7 +100,8 @@ test("serves health and authenticated WebSocket only on loopback", async () => {
     assert.equal(projects.data.projects.length, 1);
     assert.deepEqual(address.host, "127.0.0.1");
   } finally {
-    if (webSocket.readyState !== WebSocket.CLOSED) {
+    rejected.terminate();
+    if (webSocket && webSocket.readyState !== WebSocket.CLOSED) {
       const closed = once(webSocket, "close");
       webSocket.close();
       await withTimeout(closed, "关闭 WebSocket");
@@ -145,9 +143,10 @@ test("streams same-origin uploads through the local attachment adapter", async (
   const address = await server.listen(0);
   const origin = `http://${address.host}:${address.port}`;
   try {
+    const cookie = await loginCookie(address);
     const uploaded = await fetch(`${origin}/attachments/upload`, {
       method: "POST",
-      headers: { origin, "x-upload-ticket": "ticket-secret" },
+      headers: { cookie, origin, "x-upload-ticket": "ticket-secret" },
       body: Buffer.from("hello"),
     });
     assert.equal(uploaded.status, 201);
@@ -171,6 +170,116 @@ test("streams same-origin uploads through the local attachment adapter", async (
   }
 });
 
+test("HTTP login survives restarts and token rotation revokes its cookie", async () => {
+  const transport = new EmptyTransport();
+  const approvals = new ApprovalBroker(transport);
+  const services = emptyServices(transport, approvals);
+  const first = new RemoteWebSocketServer({ token: "test-secret", services });
+  const firstAddress = await first.listen(0);
+  const cookie = await loginCookie(firstAddress);
+  const session = await fetch(
+    `http://${firstAddress.host}:${firstAddress.port}/auth/session`,
+    { headers: { cookie } },
+  );
+  assert.equal(session.status, 200);
+  assert.deepEqual(await session.json(), { authenticated: true });
+  assert.match(session.headers.get("set-cookie") ?? "", /Max-Age=34560000/u);
+  await first.close();
+
+  const restarted = new RemoteWebSocketServer({ token: "test-secret", services });
+  const restartedAddress = await restarted.listen(0);
+  assert.equal((await fetch(
+    `http://${restartedAddress.host}:${restartedAddress.port}/auth/session`,
+    { headers: { cookie } },
+  )).status, 200);
+  await restarted.close();
+
+  const rotated = new RemoteWebSocketServer({ token: "rotated-secret", services });
+  const rotatedAddress = await rotated.listen(0);
+  assert.equal((await fetch(
+    `http://${rotatedAddress.host}:${rotatedAddress.port}/auth/session`,
+    { headers: { cookie } },
+  )).status, 401);
+  const crossSite = await fetch(`http://${rotatedAddress.host}:${rotatedAddress.port}/auth/login`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin: "https://attacker.example",
+    },
+    body: JSON.stringify({ token: "rotated-secret" }),
+  });
+  assert.equal(crossSite.status, 403);
+  await rotated.close();
+  approvals.dispose();
+});
+
+test("raw serves only caged Markdown and images with sandbox headers", async (t) => {
+  const temp = await realpath(await mkdtemp(path.join(tmpdir(), "codex-remote-view-")));
+  t.after(() => rm(temp, { recursive: true, force: true }));
+  const firstRoot = path.join(temp, "first");
+  const secondRoot = path.join(temp, "second");
+  const outside = path.join(temp, "outside");
+  await Promise.all([mkdir(firstRoot), mkdir(secondRoot), mkdir(outside)]);
+  const note = path.join(firstRoot, "note.md");
+  const image = path.join(secondRoot, "image.svg");
+  const secret = path.join(outside, "secret.md");
+  await Promise.all([
+    writeFile(note, "# hello"),
+    writeFile(image, '<svg xmlns="http://www.w3.org/2000/svg"></svg>'),
+    writeFile(secret, "outside"),
+    writeFile(path.join(firstRoot, "source.ts"), "code"),
+  ]);
+  await symlink(secret, path.join(firstRoot, "escape.md"));
+
+  const transport = new EmptyTransport();
+  const approvals = new ApprovalBroker(transport);
+  const server = new RemoteWebSocketServer({
+    token: "test-secret",
+    services: emptyServices(transport, approvals),
+    fileRoots: [await realpath(firstRoot), await realpath(secondRoot)],
+  });
+  const address = await server.listen(0);
+  t.after(async () => {
+    await server.close();
+    approvals.dispose();
+  });
+  const origin = `http://${address.host}:${address.port}`;
+  const cookie = await loginCookie(address);
+
+  const markdown = await fetch(`${origin}/raw?${new URLSearchParams({ path: note })}`, {
+    headers: { cookie },
+  });
+  assert.equal(markdown.status, 200);
+  assert.equal(markdown.headers.get("content-type"), "text/markdown; charset=utf-8");
+  assert.equal(await markdown.text(), "# hello");
+  assert.equal(markdown.headers.get("cache-control"), "no-store");
+  assert.match(markdown.headers.get("content-security-policy") ?? "", /sandbox/u);
+
+  const svg = await fetch(`${origin}/raw?${new URLSearchParams({ path: image })}`, {
+    method: "HEAD",
+    headers: { cookie },
+  });
+  assert.equal(svg.status, 200);
+  assert.equal(svg.headers.get("content-type"), "image/svg+xml");
+  assert.match(svg.headers.get("content-security-policy") ?? "", /default-src 'none'/u);
+
+  for (const denied of [
+    "note.md",
+    secret,
+    path.join(firstRoot, "escape.md"),
+    path.join(firstRoot, "source.ts"),
+  ]) {
+    const response = await fetch(`${origin}/raw?${new URLSearchParams({ path: denied })}`, {
+      headers: { cookie },
+    });
+    assert.equal(response.status, 404, denied);
+  }
+  assert.equal((await fetch(`${origin}/raw?${new URLSearchParams({ path: note })}`)).status, 401);
+  for (const asset of ["/view?path=anything", "/viewer.js", "/viewer.css"]) {
+    assert.equal((await fetch(`${origin}${asset}`)).status, 200, asset);
+  }
+});
+
 test("releases writers only after the last thread-using browser disconnects", async () => {
   const transport = new EmptyTransport();
   const approvals = new ApprovalBroker(transport);
@@ -186,7 +295,6 @@ test("releases writers only after the last thread-using browser disconnects", as
   const server = new RemoteWebSocketServer({
     token: "test-secret",
     services,
-    authTimeoutMs: 2_000,
     onWritersIdle: async () => {
       idleCalls += 1;
       resolveIdle();
@@ -194,23 +302,19 @@ test("releases writers only after the last thread-using browser disconnects", as
   });
   const address = await server.listen(0);
   const url = `ws://${address.host}:${address.port}/ws`;
-  const first = new WebSocket(url);
-  const second = new WebSocket(url);
+  const cookie = await loginCookie(address);
+  const first = new WebSocket(url, { headers: { cookie } });
+  const second = new WebSocket(url, { headers: { cookie } });
 
   try {
     await Promise.all([
       withTimeout(once(first, "open"), "打开第一个 WebSocket"),
       withTimeout(once(second, "open"), "打开第二个 WebSocket"),
     ]);
-    for (const [index, socket] of [first, second].entries()) {
-      await sendRequest(socket, {
-        type: "auth",
-        requestId: `auth-${index}`,
-        token: "test-secret",
-      });
+    for (const socket of [first, second]) {
       await sendRequest(socket, {
         type: "session.start",
-        requestId: `open-${index}`,
+        requestId: "open",
         projectId: "projects/demo",
       });
     }
@@ -351,11 +455,11 @@ test("only accepts WebSocket upgrades from its own page", async () => {
   const server = new RemoteWebSocketServer({
     token: "test-secret",
     services: emptyServices(transport, approvals),
-    authTimeoutMs: 2_000,
     allowedOrigins: ["https://vps.example.ts.net"],
   });
   const address = await server.listen(0);
   const url = `ws://${address.host}:${address.port}/ws`;
+  const cookie = await loginCookie(address);
 
   try {
     // 用户浏览的其它网站发起的连接：Origin 与 Host 不符，直接拒绝。
@@ -370,20 +474,20 @@ test("only accepts WebSocket upgrades from its own page", async () => {
 
     // 页面自己发起的连接：Origin 与 Host 同源。
     const sameOrigin = new WebSocket(url, {
-      headers: { origin: `http://${address.host}:${address.port}` },
+      headers: { cookie, origin: `http://${address.host}:${address.port}` },
     });
     await withTimeout(once(sameOrigin, "open"), "打开同源 WebSocket");
     sameOrigin.close();
 
     // 反向代理入口：Host 是内部地址，Origin 是对外域名，靠白名单放行。
     const proxied = new WebSocket(url, {
-      headers: { origin: "https://vps.example.ts.net" },
+      headers: { cookie, origin: "https://vps.example.ts.net" },
     });
     await withTimeout(once(proxied, "open"), "打开白名单来源的 WebSocket");
     proxied.close();
 
-    // 冒烟脚本和命令行客户端不发 Origin，仍然可用。
-    const headless = new WebSocket(url);
+    // 冒烟脚本和命令行客户端不发 Origin，但仍要带登录 cookie。
+    const headless = new WebSocket(url, { headers: { cookie } });
     await withTimeout(once(headless, "open"), "打开无 Origin 的 WebSocket");
     headless.close();
   } finally {
@@ -391,3 +495,18 @@ test("only accepts WebSocket upgrades from its own page", async () => {
     approvals.dispose();
   }
 });
+
+async function loginCookie(
+  address: { host: string; port: number },
+  token = "test-secret",
+): Promise<string> {
+  const response = await fetch(`http://${address.host}:${address.port}/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  assert.equal(response.status, 200);
+  const cookie = response.headers.get("set-cookie")?.split(";", 1)[0];
+  assert.ok(cookie);
+  return cookie;
+}

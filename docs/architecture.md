@@ -13,7 +13,7 @@ Codex Remote 解决的是高 RTT 下的交互手感问题。编辑发生在浏�
 
 浏览器负责：
 
-- 保存访问令牌；
+- 使用后端签发的 `HttpOnly` cookie 保持登录；
 - 本地编辑消息；
 - 选择、上传和移除当前会话的附件；
 - 选择项目和会话；
@@ -55,7 +55,7 @@ SQLite 保存一次性票据、附件绑定、哈希、过期时间和任务租�
 完整接收并同步后才原子移入 blobs。默认目录在仓库之外的
 `~/.local/share/ai-remote/uploads/`。
 
-浏览器先在已认证 WebSocket 上申请票据，再向 Codex Remote 的同源
+浏览器先在已认证 WebSocket 上申请票据，再带同一登录 cookie 向 Codex Remote 的同源
 `POST /attachments/upload` 发送原始字节。Node 后端把请求流直接转交共享服务；票据
 本身承担这次 HTTP 上传的短期授权。浏览器得到的结果只有原始文件名、附件 ID、MIME、
 大小、哈希和时间，不含绝对路径。
@@ -77,17 +77,16 @@ SQLite 保存一次性票据、附件绑定、哈希、过期时间和任务租�
 
 斜杠菜单是可选增强：`slash-menu.js` 单独注册菜单类，`app.js` 在它不可用时使用空实现，核心登录和会话选择仍能工作。当前浏览器请求等待 15 秒后会关闭连接并重连，避免一个没有响应的请求永久禁用页面控件。
 
-鉴权响应会声明后台 Worker 能力。这样发布静态文件但尚未重启旧后端的短暂窗口里，
-新前端仍沿用旧版的断线和会话导航限制；只有连接到带能力标记的新后端后，才显示并
-启用后台执行行为。
+HTTP 鉴权响应会声明后台 Worker 能力，前端据此启用后台执行行为。WebSocket 在 HTTP
+升级前验证相同的登录 cookie，不再在第一帧重复发送访问令牌。
 
-HTTP 服务只提供 `src/server/http-server.ts` 中 `STATIC_FILES` 明确列出的文件。新增 `public/` 资源时，必须同时增加静态路由和相应测试，否则浏览器会收到 404。PWA 外壳资源使用查询参数版本，Service Worker 也使用独立缓存名；当前应用资源版本是 `v16`，缓存名是 `v18`。修改外壳文件时要同步更新两处版本，防止旧 HTML 和新脚本混用。
+HTTP 服务只提供 `src/server/http-server.ts` 中 `STATIC_FILES` 明确列出的文件。新增 `public/` 资源时，必须同时增加静态路由和相应测试，否则浏览器会收到 404。PWA 外壳资源使用查询参数版本，Service Worker 也使用独立缓存名；修改外壳文件时要同步更新两处版本，防止旧 HTML 和新脚本混用。Service Worker 只拦截外壳清单中的资源以及应用根导航，不缓存鉴权、附件和文件查看响应。
 
 ### Codex App Server
 
 后端通过子进程的 stdin/stdout 使用 JSONL。App Server 从未绑定公网端口，也不接受浏览器直连。
 
-新建和恢复 thread 时，后端通过 `developerInstructions` 追加 Codex Remote 的运行环境说明。它告诉模型当前会话由 Codex Remote 后端及其 Tailscale 路径承载；只有在修改 `codex-remote` 项目自身时，才需要把重启、部署和网络变更纳入执行顺序。若连接中断前必须由用户在会话外操作，模型应预先给出完整命令、主机与目录、SSH 登录时点、验证点和恢复步骤。这些说明只随 Codex Remote 的 thread 请求发送，不修改 Codex 全局配置。
+新建和恢复 thread 时，后端通过 `developerInstructions` 追加 Codex Remote 的运行环境说明。它告诉模型当前会话由 Codex Remote 后端及其 Tailscale 路径承载；只有在修改 `codex-remote` 项目自身时，才需要把重启、部署和网络变更纳入执行顺序。若连接中断前必须由用户在会话外操作，模型应预先给出完整命令、主机与目录、SSH 登录时点、验证点和恢复步骤。它也要求把要交付的 Markdown 和图片保存在当前项目中，并给出 `/view?path=...` 链接。这些说明只随 Codex Remote 的 thread 请求发送，不修改 Codex 全局配置。
 
 ## 安全边界
 
@@ -99,19 +98,25 @@ Serve 提供 tailnet 内的 HTTPS，也可以选择 Caddy、Nginx 等公网 HTTP
 
 WebSocket 不受浏览器同源策略保护，因此升级请求还会校验 `Origin`：只接受与
 `Host`（或 `X-Forwarded-Host`）同源的来源，以及 `CODEX_REMOTE_ALLOWED_ORIGINS`
-里显式列出的来源。不带 `Origin` 的非浏览器客户端（冒烟脚本、curl）仍然可用。
-访问令牌仍是主要防线，这一层只是防止用户浏览的其它网站悄悄连上这个端口。
+里显式列出的来源。不带 `Origin` 的非浏览器客户端仍可访问，但受保护的 HTTP 路由
+和 WebSocket 仍要携带登录 cookie。访问令牌仍是主要防线，这一层只是防止用户浏览
+的其它网站悄悄连上这个端口。
 被拒绝的升级请求会在服务日志里写明 origin 和 host，便于换入口时排查。
 
 ### 项目白名单
 
-`config/projects.json` 只允许配置项目根目录。后端扫描每个根目录的第一层普通文件夹，并给浏览器返回项目 ID 和名称。
+`config/projects.json` 只允许配置项目根目录。后端扫描每个根目录的第一层普通文件夹，
+并给浏览器返回项目 ID 和名称。文件查看器只读取这些根目录内的 Markdown 和图片；
+绝对路径只出现在用户自己打开的查看链接中，不进入项目列表协议。
 
 浏览器发回项目 ID 后，后端重新扫描并解析真实路径。会话列表和恢复会话还会再次核对 Codex 返回的 `cwd`，防止跨项目恢复。
 
 ### 访问令牌
 
-WebSocket 建立后必须在超时前提交至少 32 字符的令牌。比较使用定时安全比较。令牌保存在仓库外的环境文件中。
+浏览器通过同源 HTTP 端点提交至少 32 字符的令牌，比较使用定时安全比较。服务返回
+由令牌派生密钥签名的持久 cookie，浏览器脚本不能读取其内容；WebSocket 在升级前
+验证该 cookie。服务不保存内存登录会话，更换令牌会撤销全部旧 cookie。令牌保存在
+仓库外的环境文件中。
 
 使用 Tailscale Serve 时，tailnet 身份和应用令牌形成两层保护。使用公网反向代理时，
 网络身份层不再天然存在；可在代理前增加独立身份认证，但应用令牌仍必须保留。

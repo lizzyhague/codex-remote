@@ -1,10 +1,10 @@
-const CACHE_NAME = "codex-remote-shell-v38";
+const CACHE_NAME = "codex-remote-shell-v39";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/styles.css?v=28",
   "/boot.js?v=12",
-  "/app.js?v=30",
+  "/app.js?v=31",
   "/markdown.js?v=15",
   "/slash-menu.js?v=16",
   "/manifest.webmanifest?v=15",
@@ -33,24 +33,26 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin || url.pathname === "/healthz") {
+  if (url.origin !== self.location.origin) return;
+
+  const isAppRoot = url.pathname === "/" || url.pathname === "/index.html";
+  if (event.request.mode === "navigate") {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (isAppRoot && response.ok) {
+            const copy = response.clone();
+            void caches.open(CACHE_NAME).then((cache) => cache.put("/", copy));
+          }
+          return response;
+        })
+        .catch(() => isAppRoot
+          ? caches.match("/").then((cached) => cached ?? Response.error())
+          : Response.error()),
+    );
     return;
   }
 
-  event.respondWith(
-    fetch(event.request)
-      .then((response) => {
-        if (response.ok) {
-          const copy = response.clone();
-          void caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-        }
-        return response;
-      })
-      .catch(() => caches.match(event.request).then((cached) =>
-        cached ?? new Response("当前无法连接主机。", {
-          status: 503,
-          headers: { "content-type": "text/plain; charset=utf-8" },
-        })
-      )),
-  );
+  if (!APP_SHELL.includes(`${url.pathname}${url.search}`)) return;
+  event.respondWith(caches.match(event.request).then((cached) => cached ?? fetch(event.request)));
 });

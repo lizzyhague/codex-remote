@@ -24,6 +24,7 @@ SSH 逐键输入延迟的影响。
 - Worker 完成队列后立即退出并释放该会话的 writer，不依赖浏览器连接生命周期；
 - 普通权限离线等待 10 秒后会取消需要审批的整轮，Full access 可继续处理执行审批；
 - 长会话分页加载，完成消息渲染安全的 Markdown 子集；
+- 在登录后查看项目根目录内的 Markdown 和图片，不提供源码查看、下载或目录浏览；
 - 提供模型、权限、计划、检查、回退和用量等斜杠命令，以及输入框下的常用快捷入口；
 - 可安装为 PWA，并缓存应用外壳。
 
@@ -160,7 +161,7 @@ Codex 运行在权限边界明确的非 root Unix 用户下。
 
 | 环境变量 | 说明 |
 | --- | --- |
-| `CODEX_REMOTE_TOKEN` | 浏览器 WebSocket 登录令牌，至少 32 个字符 |
+| `CODEX_REMOTE_TOKEN` | 浏览器登录凭据，至少 32 个字符 |
 | `CODEX_REMOTE_PORT` | 回环监听端口；未设置时默认 `3000`，正式部署建议显式设置 |
 | `CODEX_REMOTE_ALLOWED_ORIGINS` | 额外允许的浏览器 Origin，逗号分隔；通常留空 |
 | `CODEX_REMOTE_PROJECTS_CONFIG` | 项目根目录配置文件，默认 `config/projects.json` |
@@ -186,8 +187,9 @@ Codex 仍负责保存原生会话和完整历史。为了支持后台执行，Co
 字节和元数据 SQLite 默认位于 `~/.local/share/ai-remote/uploads/`，同样属于敏感
 数据并保留 30 天。回收站登记仍单独保存，默认保留 30 天。
 
-访问令牌会保存在浏览器 `localStorage`，用于刷新和断线重连。不要在共享设备上保存
-令牌；怀疑泄露时应立即更换服务端令牌，并清除已登录浏览器中的旧值。
+浏览器登录时把访问令牌交给 HTTP 登录端点，随后只保存服务签发的 `HttpOnly` 签名
+cookie，令牌本身不写入浏览器存储。cookie 不依赖内存会话表，服务重启后仍然有效；
+更换服务端令牌会立即让所有旧 cookie 失效。
 
 更完整的信任边界见 [架构说明](docs/architecture.md) 和 [安全策略](SECURITY.md)。
 

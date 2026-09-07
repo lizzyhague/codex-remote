@@ -92,6 +92,11 @@ export class ProjectCatalog {
     return projects.map(({ path: _path, ...summary }) => summary);
   }
 
+  /** 仅供进程内的文件访问边界使用，不得发送给浏览器。 */
+  rootPaths(): string[] {
+    return this.#roots.map((root) => root.realPath);
+  }
+
   /**
    * 每次开始工作前重新扫描并解析 ID，不直接接受浏览器传来的文件路径。
    */

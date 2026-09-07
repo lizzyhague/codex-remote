@@ -33,6 +33,7 @@ try {
   approvals = new ApprovalBroker(appServer);
   remote = new RemoteWebSocketServer({
     token,
+    fileRoots: projects.rootPaths(),
     services: {
       projects,
       sessions: new CodexSessionService(appServer, projects, trash),
@@ -42,14 +43,17 @@ try {
     },
   });
   const address = await remote.listen(0);
-  webSocket = new WebSocket(`ws://${address.host}:${address.port}/ws`);
-  await once(webSocket, "open");
-
-  await sendRequest(webSocket, {
-    type: "auth",
-    requestId: "auth",
-    token,
+  const login = await fetch(`http://${address.host}:${address.port}/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token }),
   });
+  const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
+  if (!login.ok || !cookie) throw new Error("HTTP 登录没有签发 cookie。");
+  webSocket = new WebSocket(`ws://${address.host}:${address.port}/ws`, {
+    headers: { cookie },
+  });
+  await once(webSocket, "open");
   const projectResponse = await sendRequest(webSocket, {
     type: "projects.list",
     requestId: "projects",

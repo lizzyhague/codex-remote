@@ -20,6 +20,7 @@ test("只列出根目录下一层的普通项目文件夹", async (context) => {
   await symlink(outside, path.join(root, "escape"), "dir");
 
   const catalog = await ProjectCatalog.fromRoots([{ id: "workspace", path: root }]);
+  assert.deepEqual(catalog.rootPaths(), [await realpath(root)]);
   const projects = await catalog.list();
 
   assert.deepEqual(projects, [

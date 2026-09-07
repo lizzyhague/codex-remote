@@ -255,11 +255,6 @@ function setup() {
   return { appServer, approvals, services };
 }
 
-async function authenticate(connection: BrowserConnection): Promise<void> {
-  connection.receiveText(request("auth", "auth-1", { token: "test-secret" }));
-  await connection.whenIdle();
-}
-
 async function openSession(connection: BrowserConnection): Promise<void> {
   connection.receiveText(request("session.start", "open-1", {
     projectId: "projects/demo",
@@ -267,11 +262,10 @@ async function openSession(connection: BrowserConnection): Promise<void> {
   await connection.whenIdle();
 }
 
-test("authenticates and translates a full streaming task", async () => {
+test("translates a full streaming task for an authenticated connection", async () => {
   const { appServer, approvals, services } = setup();
   const socket = new FakeSocket();
-  const connection = new BrowserConnection("phone", socket, "test-secret", services);
-  await authenticate(connection);
+  const connection = new BrowserConnection("phone", socket, services);
   await openSession(connection);
 
   connection.receiveText(request("message.send", "send-1", { text: "检查项目" }));
@@ -325,7 +319,6 @@ test("authenticates and translates a full streaming task", async () => {
     message.type === "event" ? (message.event as JsonObject).type : message.type
   ), [
     "response",
-    "response",
     "task.started",
     "message.user",
     "response",
@@ -351,10 +344,8 @@ test("syncs a user message to another device without granting task control", asy
   const { approvals, services } = setup();
   const phoneSocket = new FakeSocket();
   const computerSocket = new FakeSocket();
-  const phone = new BrowserConnection("phone", phoneSocket, "test-secret", services);
-  const computer = new BrowserConnection("computer", computerSocket, "test-secret", services);
-  await authenticate(phone);
-  await authenticate(computer);
+  const phone = new BrowserConnection("phone", phoneSocket, services);
+  const computer = new BrowserConnection("computer", computerSocket, services);
   await openSession(phone);
   computer.receiveText(request("session.resume", "resume-1", {
     projectId: "projects/demo",
@@ -400,8 +391,7 @@ test("sends only the latest 20 turns and loads older history in pages", async ()
     turns,
   });
   const socket = new FakeSocket();
-  const connection = new BrowserConnection("phone", socket, "test-secret", services);
-  await authenticate(connection);
+  const connection = new BrowserConnection("phone", socket, services);
   connection.receiveText(request("session.resume", "resume-long", {
     projectId: "projects/demo",
     sessionId: "session-long",
@@ -434,8 +424,7 @@ test("sends only the latest 20 turns and loads older history in pages", async ()
 test("rewinds one turn per request and replaces browser history", async () => {
   const { appServer, approvals, services } = setup();
   const socket = new FakeSocket();
-  const connection = new BrowserConnection("phone", socket, "test-secret", services);
-  await authenticate(connection);
+  const connection = new BrowserConnection("phone", socket, services);
   await openSession(connection);
 
   appServer.rollbackTurns = Array.from(
@@ -489,8 +478,7 @@ test("rewinds one turn per request and replaces browser history", async () => {
 test("blocks rewind while a task is active", async () => {
   const { appServer, approvals, services } = setup();
   const socket = new FakeSocket();
-  const connection = new BrowserConnection("phone", socket, "test-secret", services);
-  await authenticate(connection);
+  const connection = new BrowserConnection("phone", socket, services);
   await openSession(connection);
 
   connection.receiveText(request("message.send", "send-before-rewind", { text: "仍在执行" }));
@@ -515,10 +503,8 @@ test("blocks a second task in the same project", async () => {
   const { approvals, services } = setup();
   const firstSocket = new FakeSocket();
   const secondSocket = new FakeSocket();
-  const first = new BrowserConnection("phone", firstSocket, "test-secret", services);
-  const second = new BrowserConnection("computer", secondSocket, "test-secret", services);
-  await authenticate(first);
-  await authenticate(second);
+  const first = new BrowserConnection("phone", firstSocket, services);
+  const second = new BrowserConnection("computer", secondSocket, services);
   await openSession(first);
   await openSession(second);
 
@@ -543,8 +529,7 @@ test("blocks a second task in the same project", async () => {
 test("routes approval answers and cancels pending approval on disconnect", async () => {
   const { appServer, approvals, services } = setup();
   const socket = new FakeSocket();
-  const connection = new BrowserConnection("phone", socket, "test-secret", services);
-  await authenticate(connection);
+  const connection = new BrowserConnection("phone", socket, services);
   await openSession(connection);
   connection.receiveText(request("message.send", "send-1", { text: "执行" }));
   await connection.whenIdle();
@@ -595,28 +580,12 @@ test("routes approval answers and cancels pending approval on disconnect", async
   approvals.dispose();
 });
 
-test("rejects an invalid token", async () => {
-  const { approvals, services } = setup();
-  const socket = new FakeSocket();
-  const connection = new BrowserConnection("unknown", socket, "test-secret", services);
-  connection.receiveText(request("auth", "auth-bad", { token: "wrong" }));
-  await connection.whenIdle();
-
-  assert.equal(socket.messages[0]?.ok, false);
-  assert.equal((socket.messages[0]?.error as JsonObject).code, "invalid_token");
-  assert.equal(socket.closeCall?.code, 1008);
-  await connection.disconnect();
-  approvals.dispose();
-});
-
 test("archives an idle open session and notifies every connected device", async () => {
   const { approvals, services } = setup();
   const firstSocket = new FakeSocket();
   const secondSocket = new FakeSocket();
-  const first = new BrowserConnection("first", firstSocket, "test-secret", services);
-  const second = new BrowserConnection("second", secondSocket, "test-secret", services);
-  await authenticate(first);
-  await authenticate(second);
+  const first = new BrowserConnection("first", firstSocket, services);
+  const second = new BrowserConnection("second", secondSocket, services);
   await openSession(first);
   second.receiveText(request("session.resume", "resume-2", {
     projectId: "projects/demo",
@@ -651,10 +620,9 @@ test("archives an idle open session and notifies every connected device", async 
 test("releases the project lock when a command never becomes a task", async () => {
   const { approvals, services } = setup();
   const socket = new FakeSocket();
-  const connection = new BrowserConnection("phone", socket, "test-secret", services, {
+  const connection = new BrowserConnection("phone", socket, services, {
     taskClaimTimeoutMs: 20,
   });
-  await authenticate(connection);
   await openSession(connection);
 
   connection.receiveText(request("command.run", "compact-1", {
@@ -684,10 +652,8 @@ test("refuses session settings changes from a device that is only watching", asy
   const { approvals, services } = setup();
   const controllerSocket = new FakeSocket();
   const watcherSocket = new FakeSocket();
-  const controller = new BrowserConnection("phone", controllerSocket, "test-secret", services);
-  const watcher = new BrowserConnection("computer", watcherSocket, "test-secret", services);
-  await authenticate(controller);
-  await authenticate(watcher);
+  const controller = new BrowserConnection("phone", controllerSocket, services);
+  const watcher = new BrowserConnection("computer", watcherSocket, services);
   await openSession(controller);
   watcher.receiveText(request("session.resume", "resume-1", {
     projectId: "projects/demo",
@@ -721,8 +687,7 @@ test("refuses session settings changes from a device that is only watching", asy
 test("toggles Full access per thread and restores its default permissions", async () => {
   const { approvals, services } = setup();
   const socket = new FakeSocket();
-  const connection = new BrowserConnection("phone", socket, "test-secret", services);
-  await authenticate(connection);
+  const connection = new BrowserConnection("phone", socket, services);
   await openSession(connection);
 
   const opened = socket.messages.at(-1)?.data as JsonObject;
@@ -763,8 +728,7 @@ test("toggles Full access per thread and restores its default permissions", asyn
 test("releases the project lock when the open session goes away", async () => {
   const { approvals, services } = setup();
   const socket = new FakeSocket();
-  const connection = new BrowserConnection("phone", socket, "test-secret", services);
-  await authenticate(connection);
+  const connection = new BrowserConnection("phone", socket, services);
   await openSession(connection);
   connection.receiveText(request("command.run", "compact-1", {
     command: "compact",

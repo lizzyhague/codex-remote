@@ -14,7 +14,8 @@ const timeoutMs = 4 * 60 * 1_000;
 
 async function main(): Promise<void> {
   const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-attachment-smoke-"));
-  const socket = new SmokeSocket(webSocketUrl(baseUrl));
+  const cookie = await loginCookie(baseUrl, token);
+  const socket = new SmokeSocket(webSocketUrl(baseUrl), cookie);
   let cleanupProjectId: string | null = null;
   let cleanupSessionId: string | null = null;
   try {
@@ -26,7 +27,6 @@ async function main(): Promise<void> {
     ]);
 
     await socket.open();
-    await socket.request("auth", { token });
     const projects = asArray((await socket.request("projects.list", {})).projects);
     const project = projects.map(asObject).find((entry) => entry?.name === projectName);
     if (typeof project?.id !== "string") {
@@ -121,6 +121,7 @@ async function uploadAttachment(
   const response = await fetch(new URL("/attachments/upload", remoteUrl), {
     method: "POST",
     headers: {
+      cookie: socket.cookie,
       "content-type": fixture.mime,
       "content-length": String(fixture.bytes.byteLength),
       "x-upload-ticket": ticket.ticket,
@@ -140,6 +141,7 @@ async function uploadAttachment(
 }
 
 class SmokeSocket {
+  readonly cookie: string;
   readonly #socket: WebSocket;
   readonly #pending = new Map<string, {
     resolve: (value: Record<string, unknown>) => void;
@@ -153,8 +155,9 @@ class SmokeSocket {
     answers: string[];
   }>();
 
-  constructor(url: string) {
-    this.#socket = new WebSocket(url);
+  constructor(url: string, cookie: string) {
+    this.cookie = cookie;
+    this.#socket = new WebSocket(url, { headers: { cookie } });
     this.#socket.on("message", (data) => this.#receive(String(data)));
   }
 
@@ -230,6 +233,17 @@ class SmokeSocket {
     if (event.status === "completed") waiter.resolve(waiter.answers.join("\n"));
     else waiter.reject(new Error(`附件冒烟任务以 ${String(event.status)} 结束。`));
   }
+}
+
+async function loginCookie(remoteUrl: string, credential: string): Promise<string> {
+  const response = await fetch(new URL("/auth/login", remoteUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: credential }),
+  });
+  const cookie = response.headers.get("set-cookie")?.split(";", 1)[0];
+  if (!response.ok || !cookie) throw new Error("HTTP 登录没有签发 cookie。");
+  return cookie;
 }
 
 function webSocketUrl(value: string): string {

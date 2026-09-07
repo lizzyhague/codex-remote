@@ -22,7 +22,6 @@ export const MAX_MESSAGE_TEXT_BYTES = 1_048_576;
 const MAX_MESSAGE_TEXT_LENGTH = 524_288;
 
 export type BrowserRequest =
-  | { type: "auth"; requestId: string; token: string }
   | { type: "projects.list"; requestId: string }
   | {
     type: "sessions.list";
@@ -156,12 +155,6 @@ export function parseBrowserRequest(source: string): BrowserRequest {
   }
 
   switch (value.type) {
-    case "auth":
-      return {
-        type: "auth",
-        requestId,
-        token: requireString(value.token, "访问令牌", requestId, 4_096),
-      };
     case "session.metrics":
       return { type: "session.metrics", requestId };
     case "projects.list":

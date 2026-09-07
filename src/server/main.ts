@@ -73,6 +73,7 @@ export async function main(): Promise<void> {
     cleanupTimer.unref();
     remote = new RemoteWebSocketServer({
       token,
+      fileRoots: projects.rootPaths(),
       allowedOrigins: readAllowedOrigins(process.env.CODEX_REMOTE_ALLOWED_ORIGINS),
       uploads,
       onWritersIdle: async () => {

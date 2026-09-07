@@ -8,6 +8,7 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import type { SharedUploadClient } from "../shared-upload/client.ts";
 import { MAX_UPLOAD_BYTES, SharedUploadError } from "../shared-upload/types.ts";
@@ -23,6 +24,8 @@ import {
   type BrowserConnectionServices,
   type BrowserSocket,
 } from "./connection.ts";
+import { CookieAuth, secretsEqual } from "./auth.ts";
+import { openViewableFile } from "./files.ts";
 import { MAX_BROWSER_MESSAGE_BYTES } from "./protocol.ts";
 
 export type RemoteServerAddress = {
@@ -35,7 +38,7 @@ export type RemoteWebSocketServerOptions = {
   services: BrowserConnectionServices;
   /** 最后一个使用过 thread writer 的浏览器完成断线清理后调用。 */
   onWritersIdle?: () => Promise<void>;
-  authTimeoutMs?: number;
+  fileRoots?: string[];
   heartbeatIntervalMs?: number;
   /** 额外允许的浏览器 Origin。与 Host 同源的请求始终允许。 */
   allowedOrigins?: string[];
@@ -52,6 +55,9 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const MAX_OUTBOUND_BUFFER_BYTES = 16 * 1_048_576;
 
 const STATIC_FILES: Record<string, { file: string; contentType: string }> = {
+  "/view": { file: "view.html", contentType: "text/html; charset=utf-8" },
+  "/viewer.js": { file: "viewer.js", contentType: "text/javascript; charset=utf-8" },
+  "/viewer.css": { file: "viewer.css", contentType: "text/css; charset=utf-8" },
   "/": { file: "index.html", contentType: "text/html; charset=utf-8" },
   "/index.html": { file: "index.html", contentType: "text/html; charset=utf-8" },
   "/boot.js": { file: "boot.js", contentType: "text/javascript; charset=utf-8" },
@@ -73,9 +79,10 @@ const STATIC_FILES: Record<string, { file: string; contentType: string }> = {
 /** 浏览器入口。它只绑定回环地址，公网/Tailscale 配置不属于这一层。 */
 export class RemoteWebSocketServer {
   readonly #token: string;
+  readonly #auth: CookieAuth;
+  readonly #fileRoots: readonly string[];
   readonly #services: BrowserConnectionServices;
   readonly #onWritersIdle: (() => Promise<void>) | null;
-  readonly #authTimeoutMs: number;
   readonly #heartbeatIntervalMs: number;
   readonly #allowedOrigins: ReadonlySet<string>;
   readonly #webRoot: string;
@@ -93,15 +100,20 @@ export class RemoteWebSocketServer {
       throw new Error("WebSocket 访问令牌不能为空。");
     }
     this.#token = options.token;
+    this.#auth = new CookieAuth(options.token);
+    this.#fileRoots = options.fileRoots ?? [];
     this.#services = options.services;
     this.#onWritersIdle = options.onWritersIdle ?? null;
-    this.#authTimeoutMs = options.authTimeoutMs ?? 10_000;
     this.#heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     this.#allowedOrigins = new Set(options.allowedOrigins ?? []);
     this.#webRoot = options.webRoot ?? DEFAULT_WEB_ROOT;
     this.#uploads = options.uploads;
     this.#http = createServer((request, response) => {
-      void this.#serveHttp(request, response);
+      void this.#serveHttp(request, response).catch((error: unknown) => {
+        console.error(error);
+        if (response.headersSent) response.destroy();
+        else sendJson(response, 500, { error: { message: "请求失败。" } });
+      });
     });
     this.#webSockets = new WebSocketServer({
       noServer: true,
@@ -128,6 +140,11 @@ export class RemoteWebSocketServer {
         socket.destroy();
         return;
       }
+      if (!this.#auth.read(request.headers.cookie)) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
       this.#webSockets.handleUpgrade(request, socket, head, (webSocket) => {
         this.#webSockets.emit("connection", webSocket, request);
       });
@@ -140,8 +157,40 @@ export class RemoteWebSocketServer {
   async #serveHttp(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
     if (request.method === "GET" && pathname === "/healthz") {
-      response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      response.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+      });
       response.end('{"status":"ok"}\n');
+      return;
+    }
+    if (pathname === "/auth/login") {
+      await this.#login(request, response);
+      return;
+    }
+    if (["/auth/session", "/raw", "/attachments/upload"].includes(pathname)) {
+      if (!this.#originAllowed(request)) {
+        sendJson(response, 403, { error: { message: "请求来源不匹配。" } });
+        return;
+      }
+      const cookie = this.#auth.read(request.headers.cookie);
+      if (!cookie) {
+        sendJson(response, 401, { error: { message: "请先登录。" } });
+        return;
+      }
+      response.setHeader("set-cookie", this.#auth.header(cookie));
+    }
+    if (pathname === "/auth/session") {
+      if (request.method !== "GET") {
+        response.setHeader("allow", "GET");
+        sendJson(response, 405, { error: { message: "只允许 GET。" } });
+      } else {
+        sendJson(response, 200, this.#authentication());
+      }
+      return;
+    }
+    if (pathname === "/raw") {
+      await this.#serveRaw(request, response);
       return;
     }
     if (pathname === "/attachments/upload") {
@@ -149,6 +198,92 @@ export class RemoteWebSocketServer {
       return;
     }
     await this.#serveWebFile(request, response);
+  }
+
+  #authentication(): Record<string, unknown> {
+    return {
+      authenticated: true,
+      ...(this.#services.workers ? { features: { backgroundWorkers: true } } : {}),
+    };
+  }
+
+  async #login(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method !== "POST") {
+      response.setHeader("allow", "POST");
+      sendJson(response, 405, { error: { message: "只允许 POST。" } });
+      return;
+    }
+    if (!this.#originAllowed(request)) {
+      sendJson(response, 403, { error: { message: "登录来源不匹配。" } });
+      return;
+    }
+    if (request.headers["content-type"]?.split(";")[0]?.trim() !== "application/json") {
+      sendJson(response, 415, { error: { message: "需要 JSON 请求。" } });
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let length = 0;
+    try {
+      for await (const chunk of request) {
+        const buffer = Buffer.from(chunk);
+        length += buffer.length;
+        if (length > 16_384) {
+          sendJson(response, 413, { error: { message: "登录请求过大。" } });
+          return;
+        }
+        chunks.push(buffer);
+      }
+      const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      if (typeof value !== "object" || value === null ||
+          !("token" in value) || typeof value.token !== "string") {
+        sendJson(response, 400, { error: { message: "请提供访问令牌。" } });
+        return;
+      }
+      if (!secretsEqual(value.token, this.#token)) {
+        sendJson(response, 401, { error: { message: "访问令牌不正确。" } });
+        return;
+      }
+    } catch {
+      sendJson(response, 400, { error: { message: "登录请求无效。" } });
+      return;
+    }
+    response.setHeader("set-cookie", this.#auth.header(this.#auth.issue()));
+    sendJson(response, 200, this.#authentication());
+  }
+
+  async #serveRaw(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    response.setHeader("cache-control", "no-store");
+    response.setHeader("x-content-type-options", "nosniff");
+    response.setHeader(
+      "content-security-policy",
+      "sandbox; default-src 'none'; style-src 'unsafe-inline'",
+    );
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      response.setHeader("allow", "GET, HEAD");
+      sendJson(response, 405, { error: { message: "只允许 GET 或 HEAD。" } });
+      return;
+    }
+    const params = new URL(request.url ?? "/", "http://127.0.0.1").searchParams;
+    const file = params.getAll("path").length === 1
+      ? await openViewableFile(this.#fileRoots, params.get("path")!)
+      : null;
+    if (!file) {
+      sendJson(response, 404, { error: { message: "文件不存在或不允许查看。" } });
+      return;
+    }
+    try {
+      response.writeHead(200, {
+        "content-type": file.contentType,
+        "content-length": file.size,
+      });
+      if (request.method === "HEAD" || file.size === 0) {
+        response.end();
+      } else {
+        await pipeline(file.handle.createReadStream({ autoClose: false, end: file.size - 1 }), response);
+      }
+    } finally {
+      await file.handle.close();
+    }
   }
 
   async #receiveUpload(
@@ -336,17 +471,9 @@ export class RemoteWebSocketServer {
     const connection = new BrowserConnection(
       randomUUID(),
       socket,
-      this.#token,
       this.#services,
     );
     this.#connections.set(webSocket, connection);
-
-    const authTimer = setTimeout(() => {
-      if (!connection.authenticated) {
-        webSocket.close(1008, "Authentication timeout");
-      }
-    }, this.#authTimeoutMs);
-    authTimer.unref();
 
     // 手机换网络或息屏时 TCP 常常只是半开：不发心跳的话，后端要等到内核超时
     // 才会发现连接已死，也就无法准确判断何时进入离线审批宽限期。
@@ -372,7 +499,6 @@ export class RemoteWebSocketServer {
       connection.receiveText(rawDataToString(data));
     });
     webSocket.once("close", () => {
-      clearTimeout(authTimer);
       clearInterval(heartbeatTimer);
       this.#connections.delete(webSocket);
       this.#disconnecting += 1;
@@ -430,6 +556,17 @@ function sendUploadError(response: ServerResponse, error: unknown): void {
     error: { code: known.code, message: known.message },
   })}\n`);
   response.writeHead(known.status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": body.byteLength,
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+  });
+  response.end(body);
+}
+
+function sendJson(response: ServerResponse, status: number, value: unknown): void {
+  const body = Buffer.from(`${JSON.stringify(value)}\n`);
+  response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "content-length": body.byteLength,
     "cache-control": "no-store",

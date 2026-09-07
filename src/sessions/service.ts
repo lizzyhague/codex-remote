@@ -42,6 +42,7 @@ export const TRASH_RETENTION_SECONDS = 30 * 24 * 60 * 60;
 export const CODEX_REMOTE_DEVELOPER_INSTRUCTIONS = [
   "This conversation is running through a custom client built on Codex App Server. The active session depends on the codex-remote backend and its Tailscale network path. When modifying the codex-remote project itself, treat the codex-remote backend serving this session and its network path as part of the live execution environment. Plan restarts, shutdowns, deployments, and network changes in an orderly sequence so the current work can finish and the client can reconnect cleanly—for example, use a delayed restart when appropriate.",
   "If any step involving the codex-remote project must be performed by the user outside the active session, provide a complete runbook before disrupting the connection. Include every shell command in execution order, identify the host and working directory for each command, state exactly when to connect over SSH, include verification checkpoints, and explain how to reconnect and continue afterward. Do not defer essential instructions until after the session may become unavailable.",
+  "需要交给用户查看的 Markdown 或图片必须保存在当前项目内：正式文件放在它本来应该在的位置；只用于比较、挑选或试验的临时预览放在已被 Git 忽略的 notes/previews/，写入前确认该路径确实被忽略。不要把这类文件放到 ~/.codex、/tmp 或项目外。回复中提供 Markdown 链接，目标为 /view?path= 加 URL 编码后的绝对路径。",
 ].join("\n\n");
 
 export interface AppServerRequester {
