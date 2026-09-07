@@ -807,6 +807,7 @@ function createSessionMark(session) {
   button.addEventListener("click", (event) => {
     event.stopPropagation();
     void toggleSessionMark(session);
+    if (!session.marked) openRenameDialog(session);
   });
   return button;
 }
@@ -1447,7 +1448,7 @@ function handleServerEvent(event, replay = false) {
         showEmpty("这个会话已经移出当前列表。请选择其他会话。");
       }
       if (
-        event.change === "mark" || event.change === "unmark" ||
+        event.change === "mark" || event.change === "unmark" || event.change === "rename" ||
         event.projectId === state.projectId
       ) {
         void loadSessions();
@@ -2903,15 +2904,26 @@ document.addEventListener("keydown", event => {
   }
 });
 
-function openRenameDialog(initialTitle) {
-  if (!state.sessionId || state.commandBusy || state.running) return;
+function openRenameDialog(initialTitleOrSession) {
+  const fromSession = initialTitleOrSession && typeof initialTitleOrSession === "object"
+    ? initialTitleOrSession
+    : null;
+  const initialTitle = typeof initialTitleOrSession === "string" ? initialTitleOrSession : null;
   const dialog = document.getElementById("rename-dialog");
-  dialog.dataset.sessionId = state.sessionId;
   const input = document.getElementById("rename-input");
-  input.value = initialTitle ?? state.sessionTitle ?? "";
+  if (fromSession) {
+    dialog.dataset.sessionId = fromSession.id;
+    dialog.dataset.projectId = fromSession.projectId || "";
+    input.value = fromSession.title || "新会话";
+  } else {
+    if (!state.sessionId || state.commandBusy || state.running) return;
+    dialog.dataset.sessionId = state.sessionId;
+    dialog.dataset.projectId = state.projectId || "";
+    input.value = initialTitle ?? state.sessionTitle ?? "";
+  }
   document.getElementById("rename-status").textContent = "";
   closeComposerPicker();
-  dialog.showModal();
+  if (!dialog.open) dialog.showModal();
   input.focus();
   input.select();
 }
@@ -2922,18 +2934,33 @@ document.getElementById("rename-form").addEventListener("submit", async event =>
   const status = document.getElementById("rename-status");
   const title = document.getElementById("rename-input").value.trim();
   if (!title) { status.textContent = "会话名称不能为空。"; return; }
-  if (dialog.dataset.sessionId !== state.sessionId) { status.textContent = "当前会话已切换，请关闭后重试。"; return; }
-  if (state.commandBusy) return;
-  state.commandBusy = true;
-  document.getElementById("rename-save").disabled = true;
-  updateControls();
-  try {
-    const result = await request("command.run", { command: "rename", argument: title });
-    addCommandResult(result);
+  const sessionId = dialog.dataset.sessionId;
+  const projectId = dialog.dataset.projectId || state.projectId;
+  if (!sessionId || !projectId) {
+    status.textContent = "找不到要改名的会话。";
+    return;
+  }
+  const session = findSessionSummary(sessionId);
+  const displayed = session?.title || (sessionId === state.sessionId ? state.sessionTitle : "") || "";
+  if (title === displayed) {
     dialog.close();
-  } catch (error) { status.textContent = errorMessage(error); }
-  finally {
-    state.commandBusy = false;
+    return;
+  }
+  document.getElementById("rename-save").disabled = true;
+  try {
+    const data = await request("session.rename", { projectId, sessionId, title });
+    if (data?.session) {
+      upsertSession(data.session);
+      if (data.session.id === state.sessionId) {
+        state.sessionTitle = data.session.title;
+        updateConversationTitle();
+      }
+      renderSessionList();
+    }
+    dialog.close();
+  } catch (error) {
+    status.textContent = errorMessage(error);
+  } finally {
     document.getElementById("rename-save").disabled = false;
     updateControls();
   }

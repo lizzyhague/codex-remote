@@ -75,6 +75,7 @@ export interface SessionsApi {
   restoreTrash(projectId: string, sessionIds: string[]): Promise<SessionMutationResult>;
   deleteTrash(projectId: string, sessionIds: string[]): Promise<SessionMutationResult>;
   setMarked(projectId: string, sessionId: string, marked: boolean): Promise<OpenedSession["session"]>;
+  rename(projectId: string, sessionId: string, title: string): Promise<OpenedSession["session"]>;
   onChange?(listener: (event: SessionChangeEvent) => void): () => void;
 }
 
@@ -224,6 +225,15 @@ export class BrowserConnection {
           request.projectId,
           request.sessionId,
           request.marked,
+        );
+        const { sessionId: _engineSessionId, ...summary } = session;
+        return { session: summary };
+      }
+      case "session.rename": {
+        const session = await this.#services.sessions.rename(
+          request.projectId,
+          request.sessionId,
+          request.title,
         );
         const { sessionId: _engineSessionId, ...summary } = session;
         return { session: summary };

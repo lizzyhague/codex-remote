@@ -17,6 +17,8 @@ import type { ThreadStartParams } from "../generated/v2/ThreadStartParams.ts";
 import type { ThreadStartResponse } from "../generated/v2/ThreadStartResponse.ts";
 import type { ThreadTurnsListParams } from "../generated/v2/ThreadTurnsListParams.ts";
 import type { ThreadTurnsListResponse } from "../generated/v2/ThreadTurnsListResponse.ts";
+import type { ThreadSetNameParams } from "../generated/v2/ThreadSetNameParams.ts";
+import type { ThreadSetNameResponse } from "../generated/v2/ThreadSetNameResponse.ts";
 import type { ThreadUnarchiveParams } from "../generated/v2/ThreadUnarchiveParams.ts";
 import type { ThreadUnarchiveResponse } from "../generated/v2/ThreadUnarchiveResponse.ts";
 import type { ProjectCatalog } from "../projects/catalog.ts";
@@ -94,7 +96,7 @@ export type TrashCleanupResult = {
 export type SessionChangeEvent = {
   projectId: string;
   sessionIds: string[];
-  change: "archive" | "unarchive" | "trash" | "restore" | "delete" | "mark" | "unmark";
+  change: "archive" | "unarchive" | "trash" | "restore" | "delete" | "mark" | "unmark" | "rename";
 };
 
 export type OpenedSession = {
@@ -297,6 +299,28 @@ export class CodexSessionService {
       await this.#marks.put({ threadId, projectId });
       this.#emitChange({ projectId, sessionIds: [threadId], change: "mark" });
       return toSessionSummary(thread, projectId, true);
+    });
+  }
+
+  rename(projectId: string, threadId: string, title: string): Promise<SessionSummary> {
+    return this.#serializeMutation(async () => {
+      const trimmed = title.trim();
+      if (!trimmed) {
+        throw new Error("会话名称不能为空。");
+      }
+      if (trimmed.length > 160 || trimmed.includes("\n")) {
+        throw new Error("会话名称请控制在 160 个字以内，并且不要换行。");
+      }
+      const project = await this.#projects.resolve(projectId);
+      const thread = await this.#readOwnedThread(project.path, threadId);
+      const params: ThreadSetNameParams = { threadId, name: trimmed };
+      await this.#transport.request<ThreadSetNameResponse>("thread/name/set", params);
+      this.#emitChange({ projectId, sessionIds: [threadId], change: "rename" });
+      return toSessionSummary(
+        { ...thread, name: trimmed },
+        projectId,
+        this.#marks?.has(threadId) ?? false,
+      );
     });
   }
 

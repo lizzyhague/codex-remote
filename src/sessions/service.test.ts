@@ -381,3 +381,59 @@ test("keeps archived marked sessions out of the recent-session pin group", async
   assert.deepEqual(page.sessions.map((session) => session.id), ["thread-other"]);
   assert.deepEqual(page.marked, []);
 });
+
+test("renames a not-loaded thread through app-server without resuming it", async (context) => {
+  const { catalog, project, trash, marks } = await createFixture(context);
+  const transport = new FakeTransport();
+  transport.results.push(
+    { thread: thread("thread-old", project, { status: { type: "notLoaded" }, preview: "首条消息" }) },
+    {},
+  );
+  const service = new CodexSessionService(transport, catalog, trash, { marks });
+  const changes: Array<{ change: string; sessionIds: string[] }> = [];
+  service.onChange((event) => changes.push(event));
+
+  const renamed = await service.rename("workspace/alpha", "thread-old", "  新名字  ");
+  assert.equal(renamed.title, "新名字");
+  assert.equal(renamed.preview, "首条消息");
+  assert.equal(renamed.marked, false);
+  assert.deepEqual(transport.requests, [
+    { method: "thread/read", params: { threadId: "thread-old", includeTurns: false } },
+    { method: "thread/name/set", params: { threadId: "thread-old", name: "新名字" } },
+  ]);
+  assert.deepEqual(changes, [{
+    projectId: "workspace/alpha",
+    sessionIds: ["thread-old"],
+    change: "rename",
+  }]);
+});
+
+test("rejects an empty or oversized session rename before talking to Codex", async (context) => {
+  const { catalog, trash } = await createFixture(context);
+  const transport = new FakeTransport();
+  const service = new CodexSessionService(transport, catalog, trash);
+
+  await assert.rejects(service.rename("workspace/alpha", "thread-old", "   "), /会话名称不能为空/u);
+  await assert.rejects(
+    service.rename("workspace/alpha", "thread-old", "名".repeat(161)),
+    /160 个字以内/u,
+  );
+  await assert.rejects(
+    service.rename("workspace/alpha", "thread-old", "第一行\n第二行"),
+    /不要换行/u,
+  );
+  assert.deepEqual(transport.requests, []);
+});
+
+test("refuses to rename a session from another project", async (context) => {
+  const { catalog, outside, trash } = await createFixture(context);
+  const transport = new FakeTransport();
+  transport.results.push({ thread: thread("thread-outside", outside) });
+  const service = new CodexSessionService(transport, catalog, trash);
+
+  await assert.rejects(
+    service.rename("workspace/alpha", "thread-outside", "新名字"),
+    /不属于所选项目/u,
+  );
+  assert.deepEqual(transport.requests.map((request) => request.method), ["thread/read"]);
+});

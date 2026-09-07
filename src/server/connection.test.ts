@@ -193,6 +193,11 @@ class FakeSessions implements SessionsApi {
     this.#emit({ projectId, sessionIds: [sessionId], change: marked ? "mark" : "unmark" });
     return { ...openedSession(sessionId).session, projectId, marked };
   }
+
+  async rename(projectId: string, sessionId: string, title: string) {
+    this.#emit({ projectId, sessionIds: [sessionId], change: "rename" });
+    return { ...openedSession(sessionId).session, projectId, title };
+  }
 }
 
 function openedSession(id: string): OpenedSession {

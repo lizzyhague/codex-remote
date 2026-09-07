@@ -52,6 +52,13 @@ export type BrowserRequest =
     sessionId: string;
     marked: boolean;
   }
+  | {
+    type: "session.rename";
+    requestId: string;
+    projectId: string;
+    sessionId: string;
+    title: string;
+  }
   | { type: "session.metrics"; requestId: string }
   | { type: "history.older"; requestId: string }
   | { type: "commands.list"; requestId: string }
@@ -198,6 +205,14 @@ export function parseBrowserRequest(source: string): BrowserRequest {
         projectId: requireString(value.projectId, "项目 ID", requestId, 1_024),
         sessionId: requireString(value.sessionId, "会话 ID", requestId, 1_024),
         marked: requireBoolean(value.marked, "钉住", requestId),
+      };
+    case "session.rename":
+      return {
+        type: "session.rename",
+        requestId,
+        projectId: requireString(value.projectId, "项目 ID", requestId, 1_024),
+        sessionId: requireString(value.sessionId, "会话 ID", requestId, 1_024),
+        title: requireString(value.title, "会话名称", requestId, 160),
       };
     case "history.older":
       return { type: "history.older", requestId };

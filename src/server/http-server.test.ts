@@ -389,6 +389,22 @@ function emptyServices(
           purgeAt: null,
         };
       },
+      async rename(projectId: string, sessionId: string, title: string) {
+        return {
+          id: sessionId,
+          sessionId,
+          title,
+          preview: "",
+          createdAt: 1,
+          updatedAt: 1,
+          lastReplyAt: null,
+          state: "idle" as const,
+          projectId,
+          marked: false,
+          deletedAt: null,
+          purgeAt: null,
+        };
+      },
     },
     turnTransport: transport,
     approvals,

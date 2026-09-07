@@ -26,6 +26,17 @@ test("recent sessions pin marked items above an untitled accent divider", () => 
   assert.match(styles, /\.session-mark-divider\s*\{[^}]*border-top:\s*2px solid var\(--accent\)/su);
 });
 
+test("pinning an unmarked session opens the rename dialog", () => {
+  const create = app.slice(
+    app.indexOf("function createSessionMark("),
+    app.indexOf("function sessionMarkIcon("),
+  );
+  assert.match(create, /void toggleSessionMark\(session\)/u);
+  assert.match(create, /if \(!session\.marked\) openRenameDialog\(session\)/u);
+  assert.match(app, /request\("session\.rename"/u);
+  assert.doesNotMatch(app, /dialog\.dataset\.sessionId !== state\.sessionId/u);
+});
+
 test("opening a marked session with a missing directory alerts and does not resume", () => {
   const resume = app.slice(
     app.indexOf("async function resumeSession("),

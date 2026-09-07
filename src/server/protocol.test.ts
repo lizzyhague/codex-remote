@@ -87,6 +87,19 @@ test("parses the small stable browser protocol", () => {
     marked: true,
   });
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
+    type: "session.rename",
+    requestId: "rename-1",
+    projectId: "projects/demo",
+    sessionId: "session-1",
+    title: "新名字",
+  })), {
+    type: "session.rename",
+    requestId: "rename-1",
+    projectId: "projects/demo",
+    sessionId: "session-1",
+    title: "新名字",
+  });
+  assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "sessions.mutate",
     requestId: "sessions-2",
     projectId: "projects/demo",
@@ -193,6 +206,16 @@ test("rejects arbitrary paths and unknown operations", () => {
       projectId: "projects/demo",
       sessionIds: [],
       action: "delete-now",
+    })),
+    (error: unknown) => error instanceof ProtocolError && error.code === "invalid_field",
+  );
+  assert.throws(
+    () => parseBrowserRequest(JSON.stringify({
+      type: "session.rename",
+      requestId: "rename-too-long",
+      projectId: "projects/demo",
+      sessionId: "session-1",
+      title: "名".repeat(161),
     })),
     (error: unknown) => error instanceof ProtocolError && error.code === "invalid_field",
   );
