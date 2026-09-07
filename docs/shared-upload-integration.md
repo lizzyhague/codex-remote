@@ -1,8 +1,8 @@
 # 共享上传服务实现与接入说明
 
-本文面向以后接入 Grok Remote、Claude Remote 或维护 Codex Remote 的 AI。共享上传
-服务和 Codex 适配已经在本仓库实现；Grok、Claude 项目只应复用本机服务和协议，
-不要复制存储、票据、清理或租约代码。
+本文说明共享上传服务的实现、本机协议以及 Remote 接入约束。共享上传服务和 Codex
+适配已经在本仓库实现；其它 Remote 应复用共享服务和协议，不复制存储、票据、清理
+或租约代码。
 
 ## 已实现范围
 
@@ -55,7 +55,7 @@ ai-remote-upload
 - 一条消息最多引用 100 个附件；不设置长期总数或每日配额。
 
 以上是共享层限制。Codex 适配另有一条上下文限制：同一消息的 UTF-8 文本附件合计
-最多 512 KiB；这不影响文件上传和其它 Remote 以后采用自己的适配限制。
+最多 512 KiB；这不影响文件上传，其它 Remote 可以采用自己的适配限制。
 
 上传时使用 `wx` 创建临时文件，边写边计算 SHA-256，完整接收并 `fsync` 后原子重命名。
 PNG、JPEG、GIF 和 WebP 通过文件签名识别为图片；PDF 也通过签名识别。其余内容按
@@ -137,7 +137,7 @@ PNG、JPEG、GIF 和 WebP 通过文件签名识别为图片；PDF 也通过签�
 
 ## Remote 接入顺序
 
-Grok 或 Claude 项目的 AI 应按下面顺序实施：
+其它 Remote 应按下面顺序接入：
 
 1. 先核对该 Remote 的真实项目 ID、会话 ID、鉴权和消息幂等机制；不要照抄 Codex
    的 `SessionWorkerManager`。
@@ -187,17 +187,14 @@ Codex Remote 后端读取，并作为带私有标记的第二个 `text` 输入�
 
 官方 `UserInput` 源码：https://github.com/openai/codex/blob/main/codex-rs/protocol/src/user_input.rs
 
-## Grok 和 Claude 的适配边界
+## Remote 适配边界
 
-本仓库没有实现以下两项：
-
-- Grok：按届时的 CLI/ACP 行为验证本地路径引用是否真的产生视觉理解；如果只能看到
-  文件名或无法读取图片，再讨论 OCR/视觉降级，不要静默声称成功。
-- Claude：根据届时采用的 CLI 或 API 映射为原生图片/文件输入；不能假设其输入结构
-  与 Codex 相同。
+每个 Remote 必须按所用 coding agent 的真实协议映射附件，不能假设不同 CLI、SDK
+或 API 的输入结构相同。本地路径引用也必须经过内容级验证，不能因为 agent 接受路径
+就声称它理解了图片或文件。
 
 无论适配方式如何，浏览器只应看到公开元数据和附件 ID。coding agent 不支持某种
-格式时，应明确告诉用户，而不是把成功落盘等同于成功理解。
+格式时，应明确告诉用户，不能把成功落盘等同于成功理解。
 
 ## 最低验收清单
 

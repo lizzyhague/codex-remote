@@ -12,14 +12,15 @@ npm test
 
 ## 部署
 
-本项目在作者的私有主机上以 systemd 服务长期运行,只通过 Tailscale 暴露给私有网络,没有公网入口。
+本项目可以在 Linux 或 macOS 主机上由外部进程管理器长期运行。仓库中的部署文件只提供通用样例。
 
 ⚠️ **不要照仓库里的文件推断线上部署配置。**
+
 - `deploy/*.service.example` 是样例,不是线上配置。
 - `deploy/*.service.local` 是本地文件,不进 git,可能与线上不一致。
 - 线上实际生效的配置只有 `systemctl cat <unit>` 能看到。服务可能被 drop-in 覆盖 `ExecStart`,也可能经一个包装脚本启动,而**包装脚本不在本仓库内**。
 
-⚠️ **如果你正在部署主机上工作,先读 `docs/deployment.node1.local.md`。** 那份文件不进 git,记录了本机的单元名、端口、重启命令、`ExecStart` 的实际位置和已知的坑。没读它就猜服务怎么重启,多半会猜错。
+如果存在被忽略的 `notes/deployment.local.md`,它记录当前主机的实际部署方式。在部署主机上操作前先读该文件,并继续以进程管理器显示的生效配置为准。
 
 ## 跨平台：Linux 与 macOS 都要能跑
 
