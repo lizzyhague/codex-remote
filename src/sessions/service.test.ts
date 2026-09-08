@@ -195,6 +195,29 @@ test("checks ownership before resuming and returns stored turns", async (context
   ]);
 });
 
+test("resuming reads the current pin without changing the stored mark or adding RPCs", async (context) => {
+  const { catalog, project, trash, marks } = await createFixture(context);
+  const transport = new FakeTransport();
+  const service = new CodexSessionService(transport, catalog, trash, { marks });
+  const threadId = "thread-pinned";
+  await marks.put({ threadId, projectId: "workspace/alpha" });
+
+  for (const marked of [true, false]) {
+    if (!marked) await marks.remove(threadId);
+    transport.results.push(
+      { thread: thread(threadId, project) },
+      { thread: thread(threadId, project) },
+    );
+    const opened = await service.resume("workspace/alpha", threadId);
+    assert.equal(opened.session.marked, marked);
+    assert.equal(service.isMarked(threadId), marked);
+    assert.equal(marks.has(threadId), marked);
+  }
+  assert.deepEqual(transport.requests.map(({ method }) => method), [
+    "thread/read", "thread/resume", "thread/read", "thread/resume",
+  ]);
+});
+
 test("refuses to resume a session from another project", async (context) => {
   const { catalog, outside, trash } = await createFixture(context);
   const transport = new FakeTransport();

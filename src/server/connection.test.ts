@@ -20,6 +20,7 @@ import {
   type SessionsApi,
 } from "./connection.ts";
 import { ProjectTaskLocks } from "./project-locks.ts";
+import type { SessionWorkerManager } from "../workers/manager.ts";
 
 class FakeSocket implements BrowserSocket {
   readonly messages: JsonObject[] = [];
@@ -141,7 +142,12 @@ class FakeProjects implements ProjectsApi {
 
 class FakeSessions implements SessionsApi {
   #nextSession = 1;
+  readonly marks = new Set<string>();
   readonly #listeners = new Set<(event: SessionChangeEvent) => void>();
+
+  isMarked(sessionId: string): boolean {
+    return this.marks.has(sessionId);
+  }
 
   onChange(listener: (event: SessionChangeEvent) => void) {
     this.#listeners.add(listener);
@@ -190,6 +196,8 @@ class FakeSessions implements SessionsApi {
   }
 
   async setMarked(projectId: string, sessionId: string, marked: boolean) {
+    if (marked) this.marks.add(sessionId);
+    else this.marks.delete(sessionId);
     this.#emit({ projectId, sessionIds: [sessionId], change: marked ? "mark" : "unmark" });
     return { ...openedSession(sessionId).session, projectId, marked };
   }
@@ -265,6 +273,58 @@ async function openSession(connection: BrowserConnection): Promise<void> {
     projectId: "projects/demo",
   }));
   await connection.whenIdle();
+}
+
+for (const source of ["direct", "fresh worker", "cached worker"] as const) {
+  test(`opening a ${source} session returns the current pin instead of a stale snapshot`, async (context) => {
+    const { appServer, approvals, services } = setup();
+    const snapshot = openedSession("session-pinned");
+    if (source === "direct") {
+      services.sessions.resume = async () => snapshot;
+    } else {
+      services.workers = {
+        onEvent: () => () => {},
+        clientAuthenticated() {},
+        clientDisconnected() {},
+        attachSession() {},
+        detachSession() {},
+        async resumeSession() {
+          return {
+            opened: source === "cached worker" ? snapshot : structuredClone(snapshot),
+            activeTaskId: null,
+            controlsActiveTask: false,
+            fullAccessEnabled: false,
+            replayEvents: [],
+          };
+        },
+      } as unknown as SessionWorkerManager;
+    }
+    const socket = new FakeSocket();
+    const connection = new BrowserConnection("phone", socket, services);
+    context.after(async () => {
+      await connection.disconnect();
+      approvals.dispose();
+    });
+
+    for (const marked of [true, false, true]) {
+      // Both directions must override the snapshot, including after a previous open.
+      snapshot.session.marked = !marked;
+      connection.receiveText(request("session.mark", "mark", {
+        projectId: "projects/demo", sessionId: snapshot.session.id, marked,
+      }));
+      connection.receiveText(request("session.resume", "resume", {
+        projectId: "projects/demo", sessionId: snapshot.session.id,
+      }));
+      await connection.whenIdle();
+      const response = socket.messages.at(-1)!;
+      assert.equal(response.requestId, "resume");
+      assert.equal(response.ok, true);
+      assert.equal(((response.data as JsonObject).session as JsonObject).marked, marked);
+      assert.equal(snapshot.session.marked, !marked, "must not mutate the worker snapshot");
+      assert.equal(services.sessions.isMarked(snapshot.session.id), marked);
+    }
+    assert.deepEqual(appServer.requests, [], "pin enrichment must not add App Server requests");
+  });
 }
 
 test("translates a full streaming task for an authenticated connection", async () => {

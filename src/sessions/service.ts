@@ -147,6 +147,10 @@ export class CodexSessionService {
     this.#now = options.now ?? (() => Math.floor(Date.now() / 1_000));
   }
 
+  isMarked(threadId: string): boolean {
+    return this.#marks?.has(threadId) ?? false;
+  }
+
   onChange(listener: (event: SessionChangeEvent) => void): () => void {
     this.#changeListeners.add(listener);
     return () => this.#changeListeners.delete(listener);
@@ -238,7 +242,7 @@ export class CodexSessionService {
     );
     assertOpenedThreadResponse(response);
     await assertThreadBelongsToProject(response.thread, project.path);
-    return toOpenedSession(response, projectId);
+    return toOpenedSession(response, projectId, this.isMarked(response.thread.id));
   }
 
   async resume(projectId: string, threadId: string): Promise<OpenedSession> {
@@ -275,7 +279,7 @@ export class CodexSessionService {
       throw new Error("Codex 返回了错误的会话。");
     }
     await assertThreadBelongsToProject(response.thread, project.path);
-    return toOpenedSession(response, projectId);
+    return toOpenedSession(response, projectId, this.isMarked(threadId));
   }
 
   setMarked(projectId: string, threadId: string, marked: boolean): Promise<SessionSummary> {
@@ -729,13 +733,14 @@ export class CodexSessionService {
 function toOpenedSession(
   response: ThreadStartResponse | ThreadResumeResponse,
   projectId: string,
+  marked: boolean,
 ): OpenedSession {
   const thread = response.thread;
   const experimental = response as typeof response & {
     activePermissionProfile?: { id: string; extends: string | null } | null;
   };
   return {
-    session: toSessionSummary(thread, projectId, false),
+    session: toSessionSummary(thread, projectId, marked),
     turns: thread.turns,
     activeTurnId: findActiveTurnId(thread),
     runtime: {

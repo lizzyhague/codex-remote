@@ -349,6 +349,9 @@ function emptyServices(
       },
     },
     sessions: {
+      isMarked() {
+        return false;
+      },
       async list(): Promise<SessionPage> {
         return { sessions: [], marked: [], nextCursor: null };
       },

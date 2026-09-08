@@ -62,6 +62,7 @@ export interface ProjectsApi {
 }
 
 export interface SessionsApi {
+  isMarked(sessionId: string): boolean;
   list(projectId: string, options?: SessionListOptions): Promise<SessionPage>;
   start(projectId: string): Promise<OpenedSession>;
   resume(projectId: string, sessionId: string): Promise<OpenedSession>;
@@ -465,7 +466,7 @@ export class BrowserConnection {
     this.#olderTurns = opened.turns.slice(0, visibleStart);
     const visibleTurns = opened.turns.slice(visibleStart);
     return {
-      ...toBrowserOpenedSession(opened, visibleTurns, this.#olderTurns.length > 0),
+      ...this.#browserOpenedSession(opened, visibleTurns),
       controlsActiveTask,
       fullAccessEnabled: commandRunner.fullAccessEnabled(),
     };
@@ -480,10 +481,9 @@ export class BrowserConnection {
     this.#olderTurns = managed.opened.turns.slice(0, visibleStart);
     const visibleTurns = managed.opened.turns.slice(visibleStart);
     return {
-      ...toBrowserOpenedSession(
+      ...this.#browserOpenedSession(
         { ...managed.opened, activeTurnId: managed.activeTaskId },
         visibleTurns,
-        this.#olderTurns.length > 0,
       ),
       activeTaskId: managed.activeTaskId,
       controlsActiveTask: managed.controlsActiveTask,
@@ -494,6 +494,13 @@ export class BrowserConnection {
         sequence: stored.sequence,
       })),
     };
+  }
+
+  #browserOpenedSession(opened: OpenedSession, visibleTurns: OpenedSession["turns"]) {
+    const result = toBrowserOpenedSession(opened, visibleTurns, this.#olderTurns.length > 0);
+    // Worker 快照可能早于最近一次钉住操作；发回页面前使用共享名单的当前值。
+    result.session.marked = this.#services.sessions.isMarked(opened.session.id);
+    return result;
   }
 
   #loadOlderHistory(): { tasks: ReturnType<typeof toBrowserTasks>; hasOlder: boolean } {
