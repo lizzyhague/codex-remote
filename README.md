@@ -60,24 +60,6 @@ Codex/Claude Code 在同一项目中并行执行。
 
 Codex App Server 官方说明：https://developers.openai.com/codex/app-server
 
-## 让 AI 帮你部署
-
-如果不熟悉 Linux、systemd 或反向代理，可以把仓库地址交给 AI，并要求它先完整阅读
-[AI 部署与交接规范](docs/deployment-ai.md)。这份规范会引导 AI：
-
-- 先只读核对主机环境，不根据示例路径猜测真实配置；
-- 让用户选择 Tailscale 私网或公网 HTTPS，不擅自替换部署路径；
-- 在改文件、安装软件或使用管理员权限前，说明影响并取得确认；
-- 分阶段验证服务、HTTPS 入口和浏览器行为；
-- 部署完成后，主动讲清安全边界、多终端行为和日常维护注意事项。
-
-可以把下面这段话连同仓库地址发给部署 AI：
-
-> 请先完整阅读 `docs/deployment-ai.md`，再帮助我部署。第一步只做环境检查和方案说明，
-> 不要安装软件、修改文件或使用管理员权限。把需要我决定的事项、准备执行的操作和
-> 会改动的文件列清楚，等我确认后再分阶段执行。完成后请按文档中的交接模板向我说明
-> 安全边界、多终端连接行为、令牌保管和维护方法。
-
 ## 快速启动
 
 以下命令用于本机试运行，不等同于已经完成远程 HTTPS 和常驻服务部署。
@@ -137,16 +119,13 @@ curl http://127.0.0.1:3000/healthz
 `3000` 是本地开发默认值。正式部署应显式设置回环端口；HTTPS 入口端口由
 Tailscale Serve 或其它反向代理单独选择，两者不要求使用相同数字。
 
-然后选择一种 HTTPS 入口：
+然后选择一种 HTTPS 入口，说明都在 [`docs/deployment.md`](docs/deployment.md)：
 
-- [Tailscale Serve 私网部署](docs/deployment-tailscale.md)：访问设备需要加入 tailnet，
-  默认推荐；
-- [公网 HTTPS 部署](docs/deployment-public.md)：普通浏览器可直接访问，但需要承担额外
-  的公网攻击面。
+- Tailscale Serve（第 4a 节）：访问设备需要加入 tailnet，默认推荐；
+- 公网 HTTPS（第 4b 节）：普通浏览器可直接访问，但需要承担额外的公网攻击面。
 
-Linux 常驻运行、更新和日志说明见 [运维说明](docs/operations.md)，Mac mini 等 macOS
-主机见 [macOS 常驻部署](docs/deployment-macos.md)。多台主机并存或切换见
-[实例迁移与多主机部署](docs/migration.md)。
+Linux / macOS 常驻运行、更新和日志见 [运维说明](docs/operations.md)；多主机见
+`docs/deployment.md` 第 5 节。
 
 ## 权限默认值
 
@@ -175,9 +154,8 @@ Codex 运行在权限边界明确的非 root Unix 用户下。
 
 真实令牌和 `config/projects.json` 都已被 Git 忽略。仓库只保存示例文件。
 
-共享上传服务另有 `AI_REMOTE_UPLOAD_ROOT` 和 `AI_REMOTE_UPLOAD_MIN_FREE_MIB`。完整接口、
-数据目录和其它 Remote 的接入方式见
-[共享上传服务实现与接入说明](docs/shared-upload-integration.md)。
+共享上传服务另有 `AI_REMOTE_UPLOAD_ROOT` 和 `AI_REMOTE_UPLOAD_MIN_FREE_MIB`。
+安装见 [`docs/deployment.md`](docs/deployment.md)，数据目录见 [运维说明](docs/operations.md)。
 
 ## 数据与浏览器存储
 
