@@ -1,5 +1,5 @@
-# Scratch previews only; project notes live outside this repository
-/notes/
+# Scratch previews only
+/previews/
 
 # Local configuration and runtime data
 /.env

@@ -147,7 +147,7 @@ test("starts a persistent session with a catalog-resolved cwd", async (context) 
   assert.match(CODEX_REMOTE_DEVELOPER_INSTRUCTIONS, /正式文件放在它本来应该在的位置/u);
   assert.match(
     CODEX_REMOTE_DEVELOPER_INSTRUCTIONS,
-    /Git 忽略的 notes\/previews\/.*确认该路径确实被忽略/u,
+    /Git 忽略的 previews\/.*确认该路径确实被忽略/u,
   );
   assert.match(CODEX_REMOTE_DEVELOPER_INSTRUCTIONS, /不要把这类文件放到 ~\/\.codex、\/tmp 或项目外/u);
   assert.match(CODEX_REMOTE_DEVELOPER_INSTRUCTIONS, /\/view\?path= 加 URL 编码后的绝对路径/u);
