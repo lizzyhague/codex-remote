@@ -4,6 +4,7 @@ import test from "node:test";
 import type { ThreadItem } from "../generated/v2/ThreadItem.ts";
 import type { Turn } from "../generated/v2/Turn.ts";
 import { PRIVATE_ATTACHMENT_INPUT_PREFIX } from "../app-server/turn-session.ts";
+import { formatPrivateAttachmentPathsBlock } from "../attachments/private-paths.ts";
 import { toBrowserTasks } from "./history.ts";
 
 test("marks only ordinary user turns for input restoration", () => {
@@ -105,6 +106,50 @@ test("reload hides inlined attachment content from the browser timeline", () => 
   }]);
   assert.equal(JSON.stringify(tasks).includes("/private/path"), false);
   assert.equal(JSON.stringify(tasks).includes("secret note"), false);
+});
+
+test("reload strips path blocks and replaces known attachment paths in replies", () => {
+  const mapping = {
+    id: "file-id",
+    originalName: "notes.txt",
+    path: "/private/uploads/notes.txt",
+  };
+  const block = formatPrivateAttachmentPathsBlock([{
+    ...mapping,
+    mimeType: "text/plain",
+    size: 11,
+  }]);
+  const tasks = toBrowserTasks([turn("attachment-paths", [
+    userMessage(
+      "user-attachment",
+      `检查附件\n\n[附件：notes.txt · file-id]\n${block}`,
+    ),
+    {
+      type: "agentMessage",
+      id: "assistant-attachment",
+      text: `已读取 ${mapping.path}`,
+      phase: null,
+      memoryCitation: null,
+      delivery: null,
+      questions: null,
+    },
+  ])], [mapping]);
+
+  assert.deepEqual(tasks[0]?.items, [
+    {
+      type: "message",
+      id: "user-attachment",
+      role: "user",
+      text: "检查附件\n\n[附件：notes.txt · file-id]",
+    },
+    {
+      type: "message",
+      id: "assistant-attachment",
+      role: "assistant",
+      text: "已读取 附件：notes.txt",
+    },
+  ]);
+  assert.equal(JSON.stringify(tasks).includes(mapping.path), false);
 });
 
 function turn(id: string, items: ThreadItem[]): Turn {

@@ -1,7 +1,13 @@
 import type { ThreadItem } from "../generated/v2/ThreadItem.ts";
 import type { Turn } from "../generated/v2/Turn.ts";
 import type { OpenedSession, SessionPage, SessionSummary } from "../sessions/service.ts";
-import { isPrivateAttachmentInputText } from "../app-server/turn-session.ts";
+import type { AttachmentDisplayMapping } from "../attachments/path-redaction.ts";
+import { redactKnownAttachmentPaths } from "../attachments/path-redaction.ts";
+import { parsePrivateAttachmentPaths } from "../attachments/private-paths.ts";
+import {
+  isPrivateAttachmentInputText,
+  stripPrivateAttachmentInputs,
+} from "../app-server/turn-session.ts";
 
 export type BrowserSessionSummary = Omit<SessionSummary, "sessionId">;
 
@@ -43,17 +49,47 @@ export function toBrowserOpenedSession(
   opened: OpenedSession,
   visibleTurns: Turn[] = opened.turns,
   hasOlder = false,
+  mappings: readonly AttachmentDisplayMapping[] = [],
 ): BrowserOpenedSession {
   return {
     session: toBrowserSessionSummary(opened.session),
-    tasks: toBrowserTasks(visibleTurns),
+    tasks: toBrowserTasks(visibleTurns, mappings),
     activeTaskId: opened.activeTurnId,
     hasOlder,
   };
 }
 
-export function toBrowserTasks(turns: Turn[]): BrowserTaskSnapshot[] {
-  return turns.map(toBrowserTask);
+export function toBrowserTasks(
+  turns: Turn[],
+  mappings: readonly AttachmentDisplayMapping[] = [],
+): BrowserTaskSnapshot[] {
+  return turns.map((turn) => toBrowserTask(turn, mappings));
+}
+
+/** 从 CLI 原始用户消息里收集路径块，用来补齐显示索引。 */
+export function collectHistoryAttachmentRecords(turns: Turn[]): Array<{
+  messageId: string;
+  attachments: AttachmentDisplayMapping[];
+}> {
+  const collected: Array<{ messageId: string; attachments: AttachmentDisplayMapping[] }> = [];
+  for (const turn of turns) {
+    for (const item of turn.items) {
+      if (item.type !== "userMessage") continue;
+      const records = item.content
+        .filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
+        .flatMap((part) => parsePrivateAttachmentPaths(part.text));
+      if (records.length === 0) continue;
+      collected.push({
+        messageId: item.id,
+        attachments: records.map((record) => ({
+          id: record.id,
+          originalName: record.originalName,
+          path: record.path,
+        })),
+      });
+    }
+  }
+  return collected;
 }
 
 function toBrowserSessionSummary(session: SessionSummary): BrowserSessionSummary {
@@ -61,13 +97,18 @@ function toBrowserSessionSummary(session: SessionSummary): BrowserSessionSummary
   return summary;
 }
 
-function toBrowserTask(turn: Turn): BrowserTaskSnapshot {
+function toBrowserTask(
+  turn: Turn,
+  mappings: readonly AttachmentDisplayMapping[],
+): BrowserTaskSnapshot {
   return {
     id: turn.id,
     status: turn.status,
-    error: turn.error?.message ?? null,
+    error: turn.error?.message
+      ? redactKnownAttachmentPaths(turn.error.message, mappings)
+      : null,
     restoresInput: restoresInput(turn),
-    items: turn.items.flatMap(toBrowserTimelineItem),
+    items: turn.items.flatMap((item) => toBrowserTimelineItem(item, mappings)),
   };
 }
 
@@ -82,13 +123,16 @@ function restoresInput(turn: Turn): boolean {
   );
 }
 
-function toBrowserTimelineItem(item: ThreadItem): BrowserTimelineItem[] {
+function toBrowserTimelineItem(
+  item: ThreadItem,
+  mappings: readonly AttachmentDisplayMapping[],
+): BrowserTimelineItem[] {
   if (item.type === "userMessage") {
     return [{
       type: "message",
       id: item.id,
       role: "user",
-      text: userMessageText(item),
+      text: redactKnownAttachmentPaths(userMessageText(item), mappings),
     }];
   }
   if (item.type === "agentMessage") {
@@ -96,7 +140,7 @@ function toBrowserTimelineItem(item: ThreadItem): BrowserTimelineItem[] {
       type: "message",
       id: item.id,
       role: "assistant",
-      text: item.text,
+      text: redactKnownAttachmentPaths(item.text, mappings),
     }];
   }
   if (item.type === "exitedReviewMode") {
@@ -104,7 +148,7 @@ function toBrowserTimelineItem(item: ThreadItem): BrowserTimelineItem[] {
       type: "message",
       id: item.id,
       role: "assistant",
-      text: item.review,
+      text: redactKnownAttachmentPaths(item.review, mappings),
     }];
   }
   // 重新加载只恢复对话。工具、思考和模式切换仍作为独立 ThreadItem
@@ -113,9 +157,11 @@ function toBrowserTimelineItem(item: ThreadItem): BrowserTimelineItem[] {
 }
 
 function userMessageText(item: Extract<ThreadItem, { type: "userMessage" }>): string {
-  return item.content
-    .filter((part): part is Extract<typeof part, { type: "text" }> =>
-      part.type === "text" && !isPrivateAttachmentInputText(part.text))
-    .map((part) => part.text)
-    .join("\n");
+  return stripPrivateAttachmentInputs(
+    item.content
+      .filter((part): part is Extract<typeof part, { type: "text" }> =>
+        part.type === "text" && !isPrivateAttachmentInputText(part.text))
+      .map((part) => part.text)
+      .join("\n"),
+  );
 }

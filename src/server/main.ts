@@ -10,7 +10,9 @@ import { resolveTrashStatePath, TrashStore } from "../sessions/trash-store.ts";
 import { resolveMarkStatePath, MarkStore } from "../sessions/mark-store.ts";
 import { RemoteWebSocketServer } from "./http-server.ts";
 import { ProjectTaskLocks } from "./project-locks.ts";
+import { AttachmentDisplayIndex } from "../workers/attachment-index.ts";
 import {
+  resolveWorkerStateDirectory,
   resolveWorkerStatePath,
   WorkerStateStore,
 } from "../workers/state-store.ts";
@@ -31,6 +33,7 @@ export async function main(): Promise<void> {
   const trash = await TrashStore.open(resolveTrashStatePath());
   const marks = await MarkStore.open(resolveMarkStatePath());
   const workerState = await WorkerStateStore.open(resolveWorkerStatePath());
+  const attachmentIndex = await AttachmentDisplayIndex.open(resolveWorkerStateDirectory());
   const uploads = new SharedUploadClient(resolveSharedUploadSocket());
 
   const projects = await ProjectCatalog.fromConfigFile(configPath);
@@ -51,6 +54,7 @@ export async function main(): Promise<void> {
       trash,
       locks,
       uploads,
+      attachmentIndex,
       workingDirectory: process.cwd(),
       ...(process.env.CODEX_BIN ? { codexBinary: process.env.CODEX_BIN } : {}),
       ...optionalNumber(
@@ -65,6 +69,12 @@ export async function main(): Promise<void> {
         "offlineGraceMs",
         readNonnegativeInteger(process.env.CODEX_REMOTE_OFFLINE_GRACE_MS),
       ),
+    });
+    sessions.onChange((event) => {
+      if (event.change !== "delete") return;
+      for (const sessionId of event.sessionIds) {
+        void workers?.forgetSessionAttachments(sessionId);
+      }
     });
     await cleanExpiredTrash(sessions);
     cleanupTimer = setInterval(() => {

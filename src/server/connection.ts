@@ -242,7 +242,7 @@ export class BrowserConnection {
       case "session.start":
         this.#assertCanSwitchSession();
         if (this.#services.workers) {
-          return this.#openManagedSession(
+          return await this.#openManagedSession(
             request.projectId,
             await this.#services.workers.startSession(request.projectId),
           );
@@ -254,7 +254,7 @@ export class BrowserConnection {
       case "session.resume":
         this.#assertCanSwitchSession();
         if (this.#services.workers) {
-          return this.#openManagedSession(
+          return await this.#openManagedSession(
             request.projectId,
             await this.#services.workers.resumeSession(request.projectId, request.sessionId),
           );
@@ -472,11 +472,15 @@ export class BrowserConnection {
     };
   }
 
-  #openManagedSession(projectId: string, managed: ManagedSessionOpen): unknown {
+  async #openManagedSession(projectId: string, managed: ManagedSessionOpen): Promise<unknown> {
     this.#disposeTurnSession();
     this.#projectId = projectId;
     this.#managedSessionId = managed.opened.session.id;
     this.#services.workers!.attachSession(this.#id, this.#managedSessionId);
+    const mappings = await this.#services.workers!.syncAttachmentMappings?.(
+      managed.opened.session.id,
+      managed.opened.turns,
+    ) ?? [];
     const visibleStart = Math.max(0, managed.opened.turns.length - HISTORY_PAGE_SIZE);
     this.#olderTurns = managed.opened.turns.slice(0, visibleStart);
     const visibleTurns = managed.opened.turns.slice(visibleStart);
@@ -484,6 +488,7 @@ export class BrowserConnection {
       ...this.#browserOpenedSession(
         { ...managed.opened, activeTurnId: managed.activeTaskId },
         visibleTurns,
+        mappings,
       ),
       activeTaskId: managed.activeTaskId,
       controlsActiveTask: managed.controlsActiveTask,
@@ -496,11 +501,26 @@ export class BrowserConnection {
     };
   }
 
-  #browserOpenedSession(opened: OpenedSession, visibleTurns: OpenedSession["turns"]) {
-    const result = toBrowserOpenedSession(opened, visibleTurns, this.#olderTurns.length > 0);
+  #browserOpenedSession(
+    opened: OpenedSession,
+    visibleTurns: OpenedSession["turns"],
+    mappings: ReturnType<SessionWorkerManager["peekAttachmentMappings"]> = [],
+  ) {
+    const result = toBrowserOpenedSession(
+      opened,
+      visibleTurns,
+      this.#olderTurns.length > 0,
+      mappings,
+    );
     // Worker 快照可能早于最近一次钉住操作；发回页面前使用共享名单的当前值。
     result.session.marked = this.#services.sessions.isMarked(opened.session.id);
     return result;
+  }
+
+  #historyMappings(): ReturnType<SessionWorkerManager["peekAttachmentMappings"]> {
+    const sessionId = this.#currentSessionId();
+    if (!sessionId || !this.#services.workers) return [];
+    return this.#services.workers.peekAttachmentMappings?.(sessionId) ?? [];
   }
 
   #loadOlderHistory(): { tasks: ReturnType<typeof toBrowserTasks>; hasOlder: boolean } {
@@ -509,7 +529,7 @@ export class BrowserConnection {
     const turns = this.#olderTurns.slice(start);
     this.#olderTurns.length = start;
     return {
-      tasks: toBrowserTasks(turns),
+      tasks: toBrowserTasks(turns, this.#historyMappings()),
       hasOlder: this.#olderTurns.length > 0,
     };
   }
@@ -581,7 +601,7 @@ export class BrowserConnection {
     const { turns: _turns, ...rest } = result;
     return {
       ...rest,
-      tasks: toBrowserTasks(turns.slice(visibleStart)),
+      tasks: toBrowserTasks(turns.slice(visibleStart), this.#historyMappings()),
       hasOlder: this.#olderTurns.length > 0,
     };
   }
@@ -607,7 +627,7 @@ export class BrowserConnection {
           "最近一轮已从当前会话的对话上下文中移除。",
           "这一轮已经造成的文件改动仍然保留。",
         ],
-        tasks: toBrowserTasks(turns.slice(visibleStart)),
+        tasks: toBrowserTasks(turns.slice(visibleStart), this.#historyMappings()),
         hasOlder: this.#olderTurns.length > 0,
       };
     } finally {

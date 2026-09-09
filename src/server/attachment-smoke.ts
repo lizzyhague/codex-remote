@@ -54,15 +54,27 @@ async function main(): Promise<void> {
     const accepted = asObject(await socket.request("message.send", {
       clientMessageId,
       text: [
-        "这是附件输入的自动冒烟测试。请查看图片和文本文件。",
+        "这是附件路径输入的自动冒烟测试。请使用可用工具打开图片和文本文件。",
         "只回复一行，依次写：图片中央的像素文字、彩色按钮的颜色和位置、文本文件等号后的值。",
-        "第二项必须使用 COLOR_POSITION 格式，例如 RED_TOP_LEFT；三项用空格分隔。不要调用工具。",
+        "第二项必须使用 COLOR_POSITION 格式，例如 RED_TOP_LEFT；三项用空格分隔。",
+        "回复中使用附件原名，不要写出存储路径。",
       ].join("\n"),
       attachmentIds: [imageAttachment.id, noteAttachment.id],
     }));
     if (typeof accepted?.taskId !== "string") throw new Error("消息没有返回任务 ID。");
     socket.bindTask(clientMessageId, accepted.taskId);
     const answer = await completion;
+    const leaked = socket.eventDump();
+    for (const fragment of [
+      "AI_REMOTE_PRIVATE_ATTACHMENT_PATHS_V1",
+      "CODEX_REMOTE_PRIVATE_ATTACHMENT_CONTENT_V1",
+      "uploads/blobs",
+      "/blobs/",
+    ]) {
+      if (leaked.includes(fragment)) {
+        throw new Error(`浏览器事件泄露了附件内部信息：${fragment}`);
+      }
+    }
     for (const expected of ["CODEX-7319", "GREEN_BOTTOM_RIGHT", "ORCHID-5824"]) {
       if (!answer.includes(expected)) {
         throw new Error(`Codex 的附件回答缺少 ${expected}：${answer}`);
@@ -70,7 +82,7 @@ async function main(): Promise<void> {
     }
     console.log(
       `附件端到端冒烟成功：图片 ${imageAttachment.id}，文件 ${noteAttachment.id}；` +
-        "Codex 正确返回了图片文字、控件位置/颜色和文件内容。",
+        "Codex 通过路径输入后的工具读取返回了图片文字、控件位置/颜色和文件内容。",
     );
   } finally {
     if (cleanupProjectId && cleanupSessionId) {
@@ -154,6 +166,7 @@ class SmokeSocket {
     timer: NodeJS.Timeout;
     answers: string[];
   }>();
+  readonly #events: Record<string, unknown>[] = [];
 
   constructor(url: string, cookie: string) {
     this.cookie = cookie;
@@ -192,6 +205,10 @@ class SmokeSocket {
     this.#taskAliases.set(taskId, clientMessageId);
   }
 
+  eventDump(): string {
+    return JSON.stringify(this.#events);
+  }
+
   close(): void {
     this.#socket.close();
     for (const pending of this.#pending.values()) pending.reject(new Error("冒烟连接已关闭。"));
@@ -219,6 +236,7 @@ class SmokeSocket {
     }
     if (message.type !== "event") return;
     const event = asObject(message.event);
+    if (event) this.#events.push(event);
     if (!event || typeof event.taskId !== "string") return;
     const key = this.#taskAliases.get(event.taskId);
     const waiter = key ? this.#taskWaiters.get(key) : null;

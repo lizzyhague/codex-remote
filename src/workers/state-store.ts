@@ -46,9 +46,17 @@ export function resolveWorkerStatePath(
 ): string {
   const configured = environment.CODEX_REMOTE_WORK_STATE_FILE?.trim();
   if (configured) return path.resolve(configured);
+  return path.join(resolveWorkerStateDirectory(environment), "work.sqlite");
+}
+
+export function resolveWorkerStateDirectory(
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  const configured = environment.CODEX_REMOTE_WORK_STATE_FILE?.trim();
+  if (configured) return path.dirname(path.resolve(configured));
   const stateHome = environment.XDG_STATE_HOME?.trim() ||
     path.join(homedir(), ".local", "state");
-  return path.join(stateHome, "codex-remote", "work.sqlite");
+  return path.join(stateHome, "codex-remote");
 }
 
 /**

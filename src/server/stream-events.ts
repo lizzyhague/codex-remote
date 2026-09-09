@@ -1,4 +1,6 @@
 import type { CodexStreamEvent } from "../app-server/turn-session.ts";
+import type { AttachmentDisplayMapping } from "../attachments/path-redaction.ts";
+import { redactKnownAttachmentPathsDeep } from "../attachments/path-redaction.ts";
 
 export function toBrowserStreamEvent(
   event: CodexStreamEvent,
@@ -23,4 +25,13 @@ export function toBrowserStreamEvent(
     : "task.error";
   const { type: _internalType, ...payload } = rest;
   return { type, sessionId, taskId: nativeTurnId, nativeTurnId, ...payload };
+}
+
+/** 把已知附件路径从即将发给浏览器的事件副本里换掉。 */
+export function redactBrowserStreamEvent<T extends Record<string, unknown>>(
+  event: T,
+  mappings: readonly AttachmentDisplayMapping[],
+): T {
+  if (mappings.length === 0) return event;
+  return redactKnownAttachmentPathsDeep(event, mappings);
 }

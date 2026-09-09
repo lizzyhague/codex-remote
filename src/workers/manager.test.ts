@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
+import { AttachmentDisplayIndex } from "./attachment-index.ts";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -393,8 +394,7 @@ test("deduplicates an accepted attachment message before asking for a new lease"
   assert.equal(createCalls, 1);
 });
 
-test("rejects an unsupported Codex file before persisting the task", async (context) => {
-  let released = 0;
+test("accepts a PDF attachment and hides its storage path from browser events", async (context) => {
   const uploads: NonNullable<SessionWorkerManagerOptions["uploads"]> = {
     async createLease(binding, ownerId, attachmentIds) {
       return {
@@ -419,25 +419,30 @@ test("rejects an unsupported Codex file before persisting the task", async (cont
     async renewLease(leaseId) {
       return { leaseId, expiresAtMs: Date.now() + 900_000 };
     },
-    async releaseLease() {
-      released += 1;
-    },
+    async releaseLease() {},
   };
   const fixture = await managerFixture(context, { offlineGraceMs: 10, uploads });
+  const events: Array<Record<string, unknown>> = [];
+  fixture.manager.onEvent((event) => events.push(event.event));
 
-  await assert.rejects(
-    fixture.manager.enqueueMessageWithAttachments(
-      "project-1",
-      "thread-1",
-      "message-pdf",
-      "看报告",
-      ["attachment-pdf"],
-    ),
-    (error: unknown) => error instanceof WorkerManagerError &&
-      error.code === "unsupported_attachment",
+  const accepted = await fixture.manager.enqueueMessageWithAttachments(
+    "project-1",
+    "thread-1",
+    "message-pdf",
+    "看报告",
+    ["attachment-pdf"],
   );
-  assert.equal(fixture.store.findByClientMessageId("message-pdf"), null);
-  assert.equal(released, 1);
+  fixture.manager.start();
+  const worker = await fixture.waitForWorker();
+  assert.equal(accepted.duplicate, false);
+  assert.equal(fixture.store.findByClientMessageId("message-pdf")?.id, accepted.taskId);
+  assert.equal(worker.startedAttachments[0]?.path, "/private/uploads/report.pdf");
+  worker.emitAssistant("/private/uploads/report.pdf 已打开");
+  worker.complete("completed");
+  await waitFor(() => fixture.store.require(accepted.taskId).status === "completed");
+  const serialized = JSON.stringify(events);
+  assert.equal(serialized.includes("/private/uploads/report.pdf"), false);
+  assert.ok(serialized.includes("附件：report.pdf") || serialized.includes("report.pdf"));
 });
 
 async function managerFixture(
@@ -456,6 +461,7 @@ async function managerFixture(
 ) {
   const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-manager-"));
   const store = await WorkerStateStore.open(path.join(directory, "work.sqlite"));
+  const attachmentIndex = await AttachmentDisplayIndex.open(directory);
   if (options.persistedFullAccess !== undefined) {
     store.setSessionFullAccess("thread-1", options.persistedFullAccess, 1);
   }
@@ -485,6 +491,7 @@ async function managerFixture(
       return worker as unknown as SessionWorker;
     },
     ...(options.uploads ? { uploads: options.uploads } : {}),
+    attachmentIndex,
   });
   context.after(async () => {
     await manager.close();
@@ -573,6 +580,7 @@ class FakeWorker {
       get activeTurnId() {
         return thisOwner.#activeTurnId;
       },
+      setAttachmentMappings: () => {},
       startTextTurn: async (_text: string, attachments: Array<{ path: string }> = []) => {
         this.started = true;
         this.startedAttachments = attachments;
@@ -636,6 +644,17 @@ class FakeWorker {
     this.#options.onApprovalEvent?.({
       type: "approval_requested",
       approval: this.#pendingApproval,
+    });
+  }
+
+  emitAssistant(text: string): void {
+    if (!this.#activeTurnId) return;
+    this.#stream({
+      type: "assistant_text_completed",
+      threadId: "thread-1",
+      turnId: this.#activeTurnId,
+      itemId: "assistant-1",
+      text,
     });
   }
 

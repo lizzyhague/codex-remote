@@ -1,3 +1,6 @@
+import type { AttachmentDisplayMapping } from "../attachments/path-redaction.ts";
+import { redactKnownAttachmentPaths } from "../attachments/path-redaction.ts";
+
 export type PublicToolKind =
   | "read"
   | "edit"
@@ -72,23 +75,24 @@ const MAX_TITLE_LENGTH = 256;
 export function publicToolView(
   item: unknown,
   fallbackStatus: "inProgress" | "completed" = "inProgress",
+  mappings: readonly AttachmentDisplayMapping[] = [],
 ): PublicToolView | null {
   const value = asObject(item);
   const type = stringField(value.type);
   if (!type) return null;
   const status = stringField(value.status) ?? fallbackStatus;
+  const present = (
+    fields: Partial<PublicToolView> & Pick<PublicToolView, "kind" | "title" | "status">,
+  ) => view(fields, mappings);
 
   if (type === "commandExecution") {
     const command = stringField(value.command) ?? "未知命令";
-    const output = stringValue(value.aggregatedOutput);
-    const clipped = clipOutput(output);
-    return view({
+    return present({
       kind: "execute",
       title: command,
       status,
       input: command,
-      output: clipped.text,
-      outputTruncated: clipped.truncated,
+      output: stringValue(value.aggregatedOutput),
       exitCode: numberField(value.exitCode),
     });
   }
@@ -100,7 +104,7 @@ export function publicToolView(
     const visibleEntries = entries.length > 0
       ? entries
       : [{ kind: "edit" as const, title: "文件改动" }];
-    return view({
+    return present({
       kind: visibleEntries[0]!.kind,
       title: visibleEntries.length === 1
         ? visibleEntries[0]!.title
@@ -121,7 +125,7 @@ export function publicToolView(
     const kind = actionType === "openPage" || actionType === "open_page"
       ? "fetch"
       : "search";
-    return view({
+    return present({
       kind,
       title: kind === "fetch"
         ? actionUrl ?? "Open Page"
@@ -134,7 +138,7 @@ export function publicToolView(
 
   if (type === "imageView") {
     const path = stringField(value.path) ?? "图片";
-    return view({
+    return present({
       kind: "read",
       title: path,
       status,
@@ -144,11 +148,11 @@ export function publicToolView(
 
   if (type === "reasoning" || type === "plan" || type === "contextCompaction" ||
     type === "hookPrompt") {
-    return view({ kind: "think", title: type, status });
+    return present({ kind: "think", title: type, status });
   }
 
   if (type === "enteredReviewMode") {
-    return view({
+    return present({
       kind: "switch_mode",
       title: "Enter review mode",
       status,
@@ -164,7 +168,7 @@ export function publicToolView(
     const actionName = stringField(context.actionName);
     const title = [appName ?? server, actionName ?? tool].filter(Boolean).join(" · ") ||
       "MCP Tool";
-    return view({
+    return present({
       kind: "other",
       title,
       status,
@@ -176,7 +180,7 @@ export function publicToolView(
   if (type === "dynamicToolCall") {
     const namespace = stringField(value.namespace);
     const tool = stringField(value.tool);
-    return view({
+    return present({
       kind: "other",
       title: [namespace, tool].filter(Boolean).join(" · ") || "Dynamic Tool",
       status,
@@ -195,7 +199,7 @@ export function publicToolView(
       receiverThreadIds: value.receiverThreadIds,
       agentsStates: value.agentsStates,
     });
-    return view({
+    return present({
       kind: "other",
       title: stringField(value.tool) ?? "Collaboration",
       status,
@@ -205,7 +209,7 @@ export function publicToolView(
   }
 
   if (type === "subAgentActivity") {
-    return view({
+    return present({
       kind: "other",
       title: `Sub-agent ${stringField(value.kind) ?? "activity"}`,
       status,
@@ -218,7 +222,7 @@ export function publicToolView(
 
   if (type === "sleep") {
     const duration = numberField(value.durationMs);
-    return view({
+    return present({
       kind: "other",
       title: "Sleep",
       status,
@@ -227,7 +231,7 @@ export function publicToolView(
   }
 
   if (type === "imageGeneration") {
-    return view({
+    return present({
       kind: "other",
       title: "Image Generation",
       status,
@@ -247,6 +251,7 @@ export function publicToolView(
 export function publicRawToolView(
   item: unknown,
   startedTool: PublicToolView | null = null,
+  mappings: readonly AttachmentDisplayMapping[] = [],
 ): PublicRawToolEvent | null {
   const value = asObject(item);
   const type = stringField(value.type);
@@ -264,7 +269,7 @@ export function publicRawToolView(
         title: programmaticToolTitle(value.input),
         status: "inProgress",
         input: value.input,
-      }),
+      }, mappings),
     };
   }
 
@@ -276,25 +281,32 @@ export function publicRawToolView(
       ...startedTool,
       status: "completed",
       output: functionCallOutputText(value.output),
-    }),
+    }, mappings),
   };
 }
 
-function view(fields: Partial<PublicToolView> & Pick<PublicToolView, "kind" | "title" | "status">): PublicToolView {
-  const clippedOutput = clipOutput(fields.output ?? null);
+function view(
+  fields: Partial<PublicToolView> & Pick<PublicToolView, "kind" | "title" | "status">,
+  mappings: readonly AttachmentDisplayMapping[] = [],
+): PublicToolView {
+  const redact = (text: string) => redactKnownAttachmentPaths(text, mappings);
+  const clippedOutput = clipOutput(fields.output == null ? null : redact(fields.output));
   return {
     kind: fields.kind,
-    title: clipTitle(fields.title),
+    title: clipTitle(redact(fields.title)),
     status: fields.status,
-    input: fields.input == null ? null : clipInput(fields.input),
-    query: fields.query == null ? null : fields.query.slice(0, MAX_QUERY_LENGTH),
-    resources: fields.resources ?? [],
+    input: fields.input == null ? null : clipInput(redact(fields.input)),
+    query: fields.query == null ? null : redact(fields.query).slice(0, MAX_QUERY_LENGTH),
+    resources: (fields.resources ?? []).map((resource) => ({
+      address: redact(resource.address),
+      label: resource.label ? redact(resource.label).replace(/\s+/g, " ").trim().slice(0, MAX_TITLE_LENGTH) || null : null,
+    })),
     output: clippedOutput.text,
     outputTruncated: fields.outputTruncated === true || clippedOutput.truncated,
     exitCode: fields.exitCode ?? null,
     entries: (fields.entries ?? []).map((entry) => ({
       kind: entry.kind,
-      title: clipTitle(entry.title),
+      title: clipTitle(redact(entry.title)),
     })),
   };
 }
@@ -388,10 +400,9 @@ function mergeResources(resources: PublicToolResource[]): PublicToolResource[] {
 
 function stringifyToolText(value: unknown): string | null {
   if (value == null) return null;
-  if (typeof value === "string") return clipInput(value);
+  if (typeof value === "string") return value;
   try {
-    const serialized = JSON.stringify(value, null, 2);
-    return serialized ? clipInput(serialized) : null;
+    return JSON.stringify(value, null, 2);
   } catch {
     return null;
   }

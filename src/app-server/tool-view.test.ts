@@ -148,3 +148,21 @@ test("does not claim unrelated raw custom tools", () => {
     input: "payload",
   }), null);
 });
+
+test("replaces known attachment paths before clipping tool titles", () => {
+  const mapping = {
+    id: "file-id",
+    originalName: "notes.txt",
+    path: "/private/uploads/notes.txt",
+  };
+  const view = publicToolView({
+    type: "commandExecution",
+    command: `cat ${mapping.path}`,
+    status: "completed",
+    aggregatedOutput: mapping.path,
+  }, "completed", [mapping]);
+  assert.equal(view?.title.includes(mapping.path), false);
+  assert.equal(view?.input?.includes(mapping.path), false);
+  assert.equal(view?.output?.includes(mapping.path), false);
+  assert.ok(view?.title.includes("附件：notes.txt"));
+});

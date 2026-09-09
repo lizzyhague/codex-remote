@@ -3,9 +3,18 @@ import { randomUUID } from "node:crypto";
 
 import {
   CodexAttachmentError,
+  stripPrivateAttachmentInputs,
   type CodexStreamEvent,
   validateCodexTurnAttachments,
 } from "../app-server/turn-session.ts";
+import type { AttachmentDisplayMapping } from "../attachments/path-redaction.ts";
+import {
+  AttachmentPathStreamRedactor,
+  redactKnownAttachmentPathsDeep,
+} from "../attachments/path-redaction.ts";
+import { collectHistoryAttachmentRecords } from "../server/history.ts";
+import type { Turn } from "../generated/v2/Turn.ts";
+import { AttachmentDisplayIndex } from "./attachment-index.ts";
 import type { ApprovalEvent, ApprovalRequest } from "../approvals/broker.ts";
 import type { CommandName } from "../commands/catalog.ts";
 import type { CommandOptions } from "../commands/runner.ts";
@@ -25,7 +34,7 @@ import type {
   ResolvedAttachment,
 } from "../shared-upload/types.ts";
 import { ProjectTaskLocks } from "../server/project-locks.ts";
-import { toBrowserStreamEvent } from "../server/stream-events.ts";
+import { redactBrowserStreamEvent, toBrowserStreamEvent } from "../server/stream-events.ts";
 import { SessionWorker, type SessionWorkerOptions } from "./session-worker.ts";
 import type {
   WorkerInteractionEvent,
@@ -92,6 +101,7 @@ export type SessionWorkerManagerOptions = {
     SharedUploadClient,
     "createLease" | "renewLease" | "releaseLease"
   >;
+  attachmentIndex?: AttachmentDisplayIndex;
 };
 
 export type PreparedTaskAttachments = {
@@ -133,6 +143,8 @@ export class SessionWorkerManager {
   readonly #workerFactory: WorkerFactory;
   readonly #availableMemory: () => Promise<MemoryReading>;
   readonly #uploads: SessionWorkerManagerOptions["uploads"];
+  readonly #attachmentIndex: AttachmentDisplayIndex | null;
+  readonly #pathRedactors = new Map<string, AttachmentPathStreamRedactor>();
   readonly #listeners = new Set<(event: WorkerManagerEvent) => void>();
   readonly #workers = new Map<string, ActiveWorker>();
   readonly #provisionalWorkers = new Map<string, ProvisionalWorker>();
@@ -172,7 +184,31 @@ export class SessionWorkerManager {
     this.#workerFactory = options.workerFactory ?? SessionWorker.create;
     this.#availableMemory = options.availableMemory ?? readAvailableMemory;
     this.#uploads = options.uploads;
+    this.#attachmentIndex = options.attachmentIndex ?? null;
     this.#store.recoverInterrupted(this.#now());
+  }
+
+  peekAttachmentMappings(threadId: string): AttachmentDisplayMapping[] {
+    return this.#attachmentIndex?.peek(threadId) ?? [];
+  }
+
+  async syncAttachmentMappings(
+    threadId: string,
+    turns: Turn[] = [],
+  ): Promise<AttachmentDisplayMapping[]> {
+    if (!this.#attachmentIndex) return [];
+    await this.#attachmentIndex.mappingsFor(threadId);
+    for (const entry of collectHistoryAttachmentRecords(turns)) {
+      await this.#attachmentIndex.register(threadId, entry.messageId, entry.attachments);
+    }
+    const mappings = this.#attachmentIndex.peek(threadId);
+    this.#applyAttachmentMappings(threadId, mappings);
+    return mappings;
+  }
+
+  async forgetSessionAttachments(threadId: string): Promise<void> {
+    this.#clearPathRedactors(threadId);
+    await this.#attachmentIndex?.remove(threadId);
   }
 
   onEvent(listener: (event: WorkerManagerEvent) => void): () => void {
@@ -243,6 +279,14 @@ export class SessionWorkerManager {
       };
     }
     const prepared = await this.prepareMessageAttachments(projectId, threadId, attachmentIds, text);
+    try {
+      await this.#registerPreparedAttachments(threadId, clientMessageId, prepared);
+    } catch (error) {
+      if (prepared) {
+        await this.#releaseAttachmentLease(prepared.taskId, prepared.lease).catch(() => {});
+      }
+      throw error;
+    }
     return this.enqueueMessage(projectId, threadId, clientMessageId, text, prepared);
   }
 
@@ -552,6 +596,8 @@ export class SessionWorkerManager {
     await Promise.all([...this.#attachmentLeases.entries()].map(([taskId, lease]) =>
       this.#releaseAttachmentLease(taskId, lease)
     ));
+    this.#pathRedactors.clear();
+    await this.#attachmentIndex?.drain();
     this.#listeners.clear();
   }
 
@@ -742,6 +788,7 @@ export class SessionWorkerManager {
     let workerReserved = false;
     try {
       const attachments = await this.#ensureTaskAttachments(task);
+      await this.#registerTaskAttachments(task.threadId, task.clientMessageId, attachments);
       const provisional = this.#provisionalWorkers.get(task.threadId);
       if (provisional?.closeTimer) clearTimeout(provisional.closeTimer);
       if (provisional) this.#provisionalWorkers.delete(task.threadId);
@@ -764,6 +811,7 @@ export class SessionWorkerManager {
         startTimer: null,
       };
       this.#workers.set(task.threadId, active);
+      this.#applyAttachmentMappings(task.threadId, this.peekAttachmentMappings(task.threadId));
       if (workerReserved) {
         this.#workerReservations -= 1;
         workerReserved = false;
@@ -833,13 +881,8 @@ export class SessionWorkerManager {
       this.#store.setNativeTurnId(active.task.id, event.turnId, this.#now());
     }
 
-    const browserEvent = {
-      ...toBrowserStreamEvent(event),
-      taskId: active.task.id,
-      ...(event.type === "user_message_started" && active.task.attachments.length > 0
-        ? { attachments: active.task.attachments }
-        : {}),
-    };
+    const browserEvent = this.#browserStreamEvent(active, event);
+    if (!browserEvent) return;
     if (event.type === "turn_completed") {
       active.finishing = true;
       const status = event.status === "interrupted"
@@ -878,7 +921,7 @@ export class SessionWorkerManager {
         type: "approval.requested",
         sessionId: active.task.threadId,
         taskId: active.task.id,
-        approval: publicApproval(event.approval),
+        approval: publicApproval(event.approval, this.peekAttachmentMappings(active.task.threadId)),
       }, this.#now());
 
       if (this.#authenticatedClients.size > 0) {
@@ -927,7 +970,10 @@ export class SessionWorkerManager {
         type: "interaction.requested",
         sessionId: active.task.threadId,
         taskId: active.task.id,
-        interaction: publicInteraction(event.interaction),
+        interaction: publicInteraction(
+          event.interaction,
+          this.peekAttachmentMappings(active.task.threadId),
+        ),
       }, this.#now());
       if (this.#authenticatedClients.size > 0) {
         this.#emit(stored, "all");
@@ -1208,6 +1254,100 @@ export class SessionWorkerManager {
     this.#schedule();
   }
 
+  async #registerPreparedAttachments(
+    threadId: string,
+    messageId: string,
+    prepared: PreparedTaskAttachments | null,
+  ): Promise<void> {
+    await this.#registerTaskAttachments(
+      threadId,
+      messageId,
+      prepared?.lease.attachments ?? [],
+    );
+  }
+
+  async #registerTaskAttachments(
+    threadId: string,
+    messageId: string,
+    attachments: readonly ResolvedAttachment[],
+  ): Promise<void> {
+    if (!this.#attachmentIndex || attachments.length === 0) return;
+    await this.#attachmentIndex.register(
+      threadId,
+      messageId,
+      attachments.map((attachment) => ({
+        id: attachment.id,
+        originalName: attachment.originalName,
+        path: attachment.path,
+      })),
+    );
+    this.#applyAttachmentMappings(threadId, this.#attachmentIndex.peek(threadId));
+  }
+
+  #applyAttachmentMappings(threadId: string, mappings: readonly AttachmentDisplayMapping[]): void {
+    const active = this.#workers.get(threadId);
+    active?.worker.turns.setAttachmentMappings(mappings);
+    for (const [key, redactor] of this.#pathRedactors) {
+      if (key.startsWith(`${threadId}:`)) redactor.setMappings(mappings);
+    }
+  }
+
+  #browserStreamEvent(
+    active: ActiveWorker,
+    event: CodexStreamEvent,
+  ): (Record<string, unknown> & { type: string }) | null {
+    const mappings = this.peekAttachmentMappings(active.task.threadId);
+    const converted: Record<string, unknown> & { type: string } = {
+      ...toBrowserStreamEvent(event),
+      taskId: active.task.id,
+      ...(event.type === "user_message_started" && active.task.attachments.length > 0
+        ? { attachments: active.task.attachments }
+        : {}),
+    };
+    if (event.type === "user_message_started" && typeof converted.text === "string") {
+      converted.text = stripPrivateAttachmentInputs(converted.text);
+    }
+    if (event.type === "assistant_text_delta" || event.type === "tool_output_delta") {
+      const itemId = typeof converted.itemId === "string" ? converted.itemId : event.itemId;
+      const kind = event.type === "assistant_text_delta" ? "assistant" : "tool";
+      const delta = this.#pathRedactor(active.task.threadId, itemId, kind, mappings)
+        .push(typeof converted.delta === "string" ? converted.delta : "");
+      if (!delta) return null;
+      converted.delta = delta;
+      return converted;
+    }
+    if (event.type === "assistant_text_completed") {
+      this.#pathRedactor(active.task.threadId, event.itemId, "assistant", mappings).flush();
+    }
+    if (event.type === "tool_completed") {
+      this.#pathRedactor(active.task.threadId, event.itemId, "tool", mappings).flush();
+    }
+    if (event.type === "turn_completed" || event.type === "turn_error") {
+      this.#clearPathRedactors(active.task.threadId);
+    }
+    return redactBrowserStreamEvent(converted, mappings);
+  }
+
+  #pathRedactor(
+    threadId: string,
+    itemId: string,
+    kind: "assistant" | "tool",
+    mappings: readonly AttachmentDisplayMapping[],
+  ): AttachmentPathStreamRedactor {
+    const key = `${threadId}:${kind}:${itemId}`;
+    const existing = this.#pathRedactors.get(key);
+    if (existing) return existing;
+    const created = new AttachmentPathStreamRedactor(mappings);
+    this.#pathRedactors.set(key, created);
+    return created;
+  }
+
+  #clearPathRedactors(threadId: string): void {
+    for (const key of this.#pathRedactors.keys()) {
+      if (key.startsWith(`${threadId}:`)) this.#pathRedactors.delete(key);
+    }
+  }
+
   /**
    * 启动 Worker 前的内存判断。`blocked` 是拦截用的可信读数，`notice` 是降级放行时
    * 要转给浏览器的说明；两者不会同时出现。
@@ -1225,18 +1365,27 @@ export class SessionWorkerManager {
   }
 }
 
-function publicApproval(approval: ApprovalRequest): Record<string, unknown> {
-  return {
+function publicApproval(
+  approval: ApprovalRequest,
+  mappings: readonly AttachmentDisplayMapping[] = [],
+): Record<string, unknown> {
+  return redactKnownAttachmentPathsDeep({
     id: approval.id,
     kind: approval.kind,
     reason: approval.reason,
     startedAtMs: approval.startedAtMs,
     ...(approval.kind === "command" ? { network: approval.network } : {}),
-  };
+  }, mappings);
 }
 
-function publicInteraction(interaction: WorkerInteractionRequest): Record<string, unknown> {
-  return structuredClone(interaction) as unknown as Record<string, unknown>;
+function publicInteraction(
+  interaction: WorkerInteractionRequest,
+  mappings: readonly AttachmentDisplayMapping[] = [],
+): Record<string, unknown> {
+  return redactKnownAttachmentPathsDeep(
+    structuredClone(interaction) as unknown as Record<string, unknown>,
+    mappings,
+  );
 }
 
 function publicAttachment(attachment: ResolvedAttachment): PublicAttachment {
