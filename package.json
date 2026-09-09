@@ -10,7 +10,6 @@
   },
   "scripts": {
     "start": "node src/server/main.ts",
-    "start:uploads": "node src/shared-upload/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --test \"src/**/*.test.ts\" \"public/**/*.test.js\"",
     "smoke": "node src/app-server/smoke.ts",

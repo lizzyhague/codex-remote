@@ -23,7 +23,7 @@ Codex Remote 是单用户自托管的 PWA，用来在手机或电脑上控制主
 | `src/approvals` | 接收 App Server 的审批请求并转给浏览器 |
 | `src/commands` | 斜杠命令目录与执行 |
 | `src/projects` | 项目白名单解析 |
-| `src/shared-upload` | 共享附件服务本体（独立进程）及其客户端 |
+| `src/shared-upload` | 独立项目 `ai-remote-upload` 的薄客户端 |
 | `src/platform` | 平台差异（可用内存读取等） |
 | `src/generated` | 由 Codex CLI 协议生成的类型，与具体 Codex 版本绑定 |
 | `public/` | 前端 PWA：登录、项目与会话导航、编辑发送、流式显示、Markdown、斜杠菜单 |

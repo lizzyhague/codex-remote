@@ -50,7 +50,8 @@ Codex/Claude Code 在同一项目中并行执行。
 - Node.js 24 或更新版本；
 - npm；
 - 已安装并登录 Codex CLI；
-- `codex app-server --stdio` 可用。
+- `codex app-server --stdio` 可用；
+- 使用附件时，需要与本服务同一 Unix 账号运行的独立 [`ai-remote-upload`](https://github.com/lizzyhague/ai-remote-upload) 服务。
 
 常驻服务应以已经安装并登录 Codex、且能访问允许项目的非 root Unix 用户运行。部署者
 可以使用现有用户，也可以为服务准备独立用户；仓库不假定固定账户、HOME 或安装路径。
@@ -96,13 +97,7 @@ cp config/projects.example.json config/projects.json
 openssl rand -hex 32
 ```
 
-先在一个终端启动共享上传服务：
-
-```bash
-npm run start:uploads
-```
-
-再在另一个终端启动 Codex Remote：
+使用附件时，先按 [`ai-remote-upload`](https://github.com/lizzyhague/ai-remote-upload) 的说明启动独立上传服务，再启动 Codex Remote：
 
 ```bash
 CODEX_REMOTE_TOKEN="粘贴刚生成的令牌" \
@@ -154,16 +149,15 @@ Codex 运行在权限边界明确的非 root Unix 用户下。
 
 真实令牌和 `config/projects.json` 都已被 Git 忽略。仓库只保存示例文件。
 
-共享上传服务另有 `AI_REMOTE_UPLOAD_ROOT` 和 `AI_REMOTE_UPLOAD_MIN_FREE_MIB`。
-安装见 [`docs/deployment.md`](docs/deployment.md)，数据目录见 [运维说明](docs/operations.md)。
+附件本体由独立的 `ai-remote-upload` 服务保存。安装见该项目的部署说明；本仓库只配置
+`AI_REMOTE_UPLOAD_SOCKET`。
 
 ## 数据与浏览器存储
 
 Codex 仍负责保存原生会话和完整历史。为了支持后台执行，Codex Remote 还会在 Worker
 状态库中保存已接受消息、任务状态、脱敏后的流事件和中断原因；这份日志可能包含对话
 正文、附件公开元数据和工具输出，应按与 Codex 会话数据相同的敏感级别保护。附件
-字节和元数据 SQLite 默认位于 `~/.local/share/ai-remote/uploads/`，同样属于敏感
-数据并保留 30 天。回收站登记仍单独保存，默认保留 30 天。
+字节由独立上传服务保存，默认仍保留 30 天。回收站登记仍单独保存，默认保留 30 天。
 
 浏览器登录时把访问令牌交给 HTTP 登录端点，随后只保存服务签发的 `HttpOnly` 签名
 cookie，令牌本身不写入浏览器存储。cookie 不依赖内存会话表，服务重启后仍然有效；

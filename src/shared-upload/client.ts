@@ -3,7 +3,7 @@ import {
   type IncomingMessage,
 } from "node:http";
 
-import { resolveSharedUploadPaths } from "./paths.ts";
+import { resolveSharedUploadSocket } from "./paths.ts";
 import {
   type AttachmentBinding,
   type AttachmentLease,
@@ -17,7 +17,7 @@ const MAX_RESPONSE_BYTES = 1_048_576;
 export class SharedUploadClient {
   readonly #socketPath: string;
 
-  constructor(socketPath = resolveSharedUploadPaths().socket) {
+  constructor(socketPath = resolveSharedUploadSocket()) {
     this.#socketPath = socketPath;
   }
 

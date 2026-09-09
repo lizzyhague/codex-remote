@@ -16,7 +16,7 @@ import {
 } from "../workers/state-store.ts";
 import { SessionWorkerManager } from "../workers/manager.ts";
 import { SharedUploadClient } from "../shared-upload/client.ts";
-import { resolveSharedUploadPaths } from "../shared-upload/paths.ts";
+import { resolveSharedUploadSocket } from "../shared-upload/paths.ts";
 
 const TRASH_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 
@@ -31,7 +31,7 @@ export async function main(): Promise<void> {
   const trash = await TrashStore.open(resolveTrashStatePath());
   const marks = await MarkStore.open(resolveMarkStatePath());
   const workerState = await WorkerStateStore.open(resolveWorkerStatePath());
-  const uploads = new SharedUploadClient(resolveSharedUploadPaths().socket);
+  const uploads = new SharedUploadClient(resolveSharedUploadSocket());
 
   const projects = await ProjectCatalog.fromConfigFile(configPath);
   const appServer = new RestartableAppServer({ workingDirectory: process.cwd() });

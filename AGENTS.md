@@ -22,6 +22,8 @@ npm test
 
 当前主机的实际部署方式记录在仓库之外的私有笔记里。在部署主机上操作前先找到并读它,并继续以进程管理器显示的生效配置为准。
 
+共享上传服务是独立项目 [`ai-remote-upload`](https://github.com/lizzyhague/ai-remote-upload)。本仓库只保留薄客户端，不再提供其源码或 systemd/launchd 入口。更新本服务时不要重启上传服务。
+
 ## 跨平台：Linux 与 macOS 都要能跑
 
 本项目同时部署在 Linux（systemd）和 macOS（launchd）上，仓库里两套部署样例都在。**改代码时必须保证两边通用**——不要造成「从远端拉一次更新，原来的 macOS 部署就起不来了」。

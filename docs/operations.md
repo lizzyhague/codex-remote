@@ -15,12 +15,14 @@ npm run typecheck && npm test
 Linux：
 
 ```bash
-sudo systemctl restart ai-remote-upload.service
 sudo systemctl restart codex-remote.service
 curl --fail --show-error http://127.0.0.1:3000/healthz
 ```
 
 macOS：`sudo launchctl kickstart -k system/<你的 label>`，再做同样的健康检查。
+
+更新或停止本服务时，不要捎带更新、停止或重启 `ai-remote-upload`。附件存储的备份和
+恢复见独立上传服务的运维说明。
 
 Node 直接跑 TypeScript，没有构建步骤。重启会断开浏览器连接：`running` 和
 `waiting_for_permission` 会被标成 `interrupted`，`queued` 的继续调度。
@@ -71,10 +73,9 @@ CSP。
 | --- | --- | --- |
 | `CODEX_REMOTE_STATE_FILE` | 回收站登记：thread ID、项目 ID、删除时间、恢复目标 | 低 |
 | `CODEX_REMOTE_WORK_STATE_FILE` | Worker SQLite：已接受消息、任务状态、脱敏事件、工具输出 | 高，按对话数据对待 |
-| `AI_REMOTE_UPLOAD_ROOT` | 附件本体和索引库，默认 `~/.local/share/ai-remote/uploads` | 高 |
 
 SQLite 用 WAL，不要在服务运行时只复制主库文件而漏掉 `-wal`。可靠做法是无活动任务时
-停服务再复制。附件目录要整个复制并保持 `0700`/`0600`。
+停服务再复制。附件本体不在本仓库的数据目录里，备份独立上传服务时按它自己的运维说明。
 
 ## 新增前端文件
 

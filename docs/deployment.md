@@ -12,6 +12,9 @@
 状态和会话，附件也要访问同一用户下的 socket。用专用服务账号也可以，但要在该账号下
 单独装 Codex、登录、给项目权限——不要靠放宽数据目录权限跨账号共享。
 
+使用附件时，先按独立项目 [`ai-remote-upload`](https://github.com/lizzyhague/ai-remote-upload)
+的部署说明安装上传服务。本仓库不再提供该服务的源码或启动入口。
+
 在该用户的登录环境中核验（要求 Node.js 24 以上）：
 
 ```bash
@@ -33,8 +36,7 @@ npm run typecheck && npm test
 
 cp config/projects.example.json config/projects.json
 cp deploy/codex-remote.env.example deploy/codex-remote.env
-cp deploy/ai-remote-upload.env.example deploy/ai-remote-upload.env
-chmod 600 config/projects.json deploy/*.env
+chmod 600 config/projects.json deploy/codex-remote.env
 openssl rand -hex 32
 ```
 
@@ -57,19 +59,17 @@ openssl rand -hex 32
 
 ```bash
 cp deploy/codex-remote.service.example deploy/codex-remote.service.local
-cp deploy/ai-remote-upload.service.example deploy/ai-remote-upload.service.local
 ```
 
-替换两个本地副本里的占位符：`__RUN_USER__`、`__RUN_GROUP__`、`__RUN_HOME__`、
-`__APP_DIR__`（仓库根目录）、`__ENV_FILE__`、`__UPLOAD_ENV_FILE__`、`__NODE_BIN__`、
-`__RUNTIME_PATH__`（含 Node 和 Codex 的完整 PATH）。
+替换本地副本里的占位符：`__RUN_USER__`、`__RUN_GROUP__`、`__RUN_HOME__`、
+`__APP_DIR__`（仓库根目录）、`__ENV_FILE__`、`__NODE_BIN__`、
+`__RUNTIME_PATH__`（含 Node 和 Codex 的完整 PATH）。样例用 `Wants`/`After` 声明对
+`ai-remote-upload.service` 的启动顺序，不把本服务的生死绑到上传服务。
 
 ```bash
 grep -n '__[A-Z_]*__' deploy/*.service.local   # 应无输出
-sudo install -m 0644 deploy/ai-remote-upload.service.local /etc/systemd/system/ai-remote-upload.service
 sudo install -m 0644 deploy/codex-remote.service.local /etc/systemd/system/codex-remote.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now ai-remote-upload.service
 sudo systemctl enable --now codex-remote.service
 curl --fail --show-error http://127.0.0.1:3000/healthz
 ```
@@ -78,15 +78,14 @@ curl --fail --show-error http://127.0.0.1:3000/healthz
 `deploy/codex-remote-upload.conf` 为
 `/etc/systemd/system/codex-remote.service.d/20-ai-remote-upload.conf` 再
 `daemon-reload`。它用 `Wants` 而不是 `Requires`：共享服务坏了只让附件失败，不挡纯文本
-启动。
+启动。上传服务本身仍按 `ai-remote-upload` 仓库安装。
 
 ## 3b. macOS + launchd
 
 用系统级 LaunchDaemon，服务不依赖图形登录；`UserName` 仍是上面那个已登录 Codex 的
-普通用户。两个服务各一份 plist。
+普通用户。上传服务的 plist 在 `ai-remote-upload` 仓库，不在本仓库。
 
 ```bash
-cp deploy/launchd/ai-remote-upload.plist.example deploy/launchd/ai-remote-upload.plist.local
 cp deploy/launchd/codex-remote.plist.example deploy/launchd/codex-remote.plist.local
 mkdir -p "$HOME/Library/Logs/codex-remote" && chmod 700 "$HOME/Library/Logs/codex-remote"
 ```
@@ -98,16 +97,13 @@ mkdir -p "$HOME/Library/Logs/codex-remote" && chmod 700 "$HOME/Library/Logs/code
 ```bash
 grep -n '__[A-Z_]*__' deploy/launchd/*.plist.local   # 应无输出
 plutil -lint deploy/launchd/*.plist.local
-sudo install -o root -g wheel -m 0644 deploy/launchd/ai-remote-upload.plist.local \
-  /Library/LaunchDaemons/io.example.ai-remote-upload.plist
 sudo install -o root -g wheel -m 0644 deploy/launchd/codex-remote.plist.local \
   /Library/LaunchDaemons/io.example.codex-remote.plist
-sudo launchctl bootstrap system /Library/LaunchDaemons/io.example.ai-remote-upload.plist
 sudo launchctl bootstrap system /Library/LaunchDaemons/io.example.codex-remote.plist
 curl --fail --show-error http://127.0.0.1:3000/healthz
 ```
 
-两个服务不建立启动顺序；共享服务没起来时，只有附件会失败。
+本仓库不为上传服务建立启动顺序；共享服务没起来时，只有附件会失败。
 
 需要代理时，把 `HTTPS_PROXY` 等写进 `deploy/codex-remote.env`，并用 `NO_PROXY` 保持
 `127.0.0.1`、`localhost` 和私网入口直连。
