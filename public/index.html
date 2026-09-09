@@ -8,7 +8,7 @@
     <meta name="description" content="通过私人网络使用远程主机上的 Codex">
     <link rel="manifest" href="/manifest.webmanifest?v=15">
     <link rel="icon" href="/icon-192.png?v=13" type="image/png" sizes="192x192">
-    <link rel="stylesheet" href="/styles.css?v=28">
+    <link rel="stylesheet" href="/styles.css?v=29">
     <title>Codex Remote</title>
   </head>
   <body>
@@ -33,7 +33,24 @@
             <img class="sidebar-logo" src="/icon-192.png?v=13" alt="">
             <strong>会话</strong>
           </div>
-          <button id="collapse-sidebar-button" class="quiet small" type="button" aria-label="收起会话列表">收起</button>
+          <div class="sidebar-heading-actions">
+            <button
+              id="app-settings-button"
+              class="quiet small app-settings-button"
+              type="button"
+              aria-label="应用设置"
+              title="应用设置"
+              aria-haspopup="dialog"
+              aria-controls="app-settings-dialog"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+            </button>
+            <button id="collapse-sidebar-button" class="quiet small" type="button" aria-label="收起会话列表">收起</button>
+          </div>
         </div>
 
         <div class="project-controls">
@@ -147,6 +164,34 @@
       </section>
     </div>
 
+    <dialog id="app-settings-dialog" class="application-settings-dialog" aria-labelledby="app-settings-title">
+      <form method="dialog" class="application-settings-card">
+        <div class="application-settings-heading">
+          <h2 id="app-settings-title">应用设置</h2>
+          <button id="app-settings-close-button" class="quiet small" type="button" aria-label="关闭">关闭</button>
+        </div>
+        <div class="application-settings-body">
+          <h3 class="application-settings-title">显示时区</h3>
+          <label class="application-settings-row">
+            <span>跟随设备</span>
+            <input id="follow-device-timezone-input" type="checkbox">
+          </label>
+          <label class="application-settings-row">
+            <span>城市</span>
+            <select id="display-timezone-city-select">
+              <option value="Asia/Shanghai">上海</option>
+              <option value="Asia/Tokyo">东京</option>
+              <option value="Europe/London">伦敦</option>
+              <option value="Europe/Paris">巴黎</option>
+              <option value="America/New_York">纽约</option>
+              <option value="America/Los_Angeles">洛杉矶</option>
+            </select>
+          </label>
+          <p class="application-settings-help">仅影响这台设备上的时间显示，自动考虑夏令时。</p>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="app-alert-dialog" class="app-alert-dialog" aria-labelledby="app-alert-title" aria-describedby="app-alert-message">
       <form method="dialog">
         <h2 id="app-alert-title">提示</h2>
@@ -170,6 +215,6 @@
     </dialog>
     <script src="/boot.js?v=12"></script>
     <script type="module" src="/slash-menu.js?v=16"></script>
-    <script type="module" src="/app.js?v=33"></script>
+    <script type="module" src="/app.js?v=34"></script>
   </body>
 </html>

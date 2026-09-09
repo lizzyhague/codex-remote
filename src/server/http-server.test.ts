@@ -58,7 +58,7 @@ test("serves health and requires a cookie before the WebSocket upgrade", async (
     assert.match(await page.text(), /Codex Remote/);
     assert.match(page.headers.get("content-security-policy") ?? "", /default-src 'self'/);
 
-    for (const asset of ["/boot.js", "/markdown.js", "/slash-menu.js"]) {
+    for (const asset of ["/boot.js", "/markdown.js", "/slash-menu.js", "/display-timezone.js"]) {
       const response = await fetch("http://" + address.host + ":" + address.port + asset);
       assert.equal(response.status, 200, asset + " should be served");
       assert.equal(

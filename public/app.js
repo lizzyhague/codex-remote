@@ -1,4 +1,12 @@
 import { renderMarkdown, sanitizeHref } from "./markdown.js?v=15";
+import {
+  DISPLAY_TIMEZONE_KEY,
+  deviceTimeZone,
+  formatDisplayTime,
+  loadDisplayTimezonePreference,
+  resolveDisplayTimeZone,
+  saveDisplayTimezonePreference,
+} from "./display-timezone.js?v=1";
 
 const LEGACY_TOKEN_KEY = "codex-remote.token";
 const PROJECT_KEY = "codex-remote.project";
@@ -28,6 +36,11 @@ const elements = {
   sessionSidebar: byId("session-sidebar"),
   openSidebarButton: byId("open-sidebar-button"),
   collapseSidebarButton: byId("collapse-sidebar-button"),
+  appSettingsButton: byId("app-settings-button"),
+  appSettingsDialog: byId("app-settings-dialog"),
+  appSettingsCloseButton: byId("app-settings-close-button"),
+  followDeviceTimezoneInput: byId("follow-device-timezone-input"),
+  displayTimezoneCitySelect: byId("display-timezone-city-select"),
   sidebarBackdrop: byId("sidebar-backdrop"),
   projectSelect: byId("project-select"),
   newSessionButton: byId("new-session-button"),
@@ -93,6 +106,7 @@ const state = {
   selectionMode: false,
   selectedSessions: new Set(),
   sidebarCollapsed: stateGet(SIDEBAR_COLLAPSED_KEY) === "1",
+  displayTimezone: loadDisplayTimezonePreference(),
   mobileSidebarOpen: false,
   noticeAction: null,
   running: false,
@@ -113,6 +127,7 @@ const state = {
 };
 elements.appView.dataset.sidebarCollapsed = String(state.sidebarCollapsed);
 syncSidebarState();
+syncAppSettingsForm();
 const slashCommandOptions = {
   input: elements.messageInput,
   element: elements.slashMenu,
@@ -162,6 +177,16 @@ elements.projectSelect.addEventListener("change", () => {
 elements.openSidebarButton.addEventListener("click", openSidebar);
 elements.collapseSidebarButton.addEventListener("click", closeSidebar);
 elements.sidebarBackdrop.addEventListener("click", closeSidebar);
+elements.appSettingsButton.addEventListener("click", openAppSettings);
+elements.appSettingsCloseButton.addEventListener("click", closeAppSettings);
+elements.followDeviceTimezoneInput.addEventListener("change", commitDisplayTimezonePreference);
+elements.displayTimezoneCitySelect.addEventListener("change", commitDisplayTimezonePreference);
+window.addEventListener("storage", (event) => {
+  if (event.key !== DISPLAY_TIMEZONE_KEY) return;
+  state.displayTimezone = loadDisplayTimezonePreference();
+  syncAppSettingsForm();
+  refreshDisplayedTimes();
+});
 
 elements.sessionSearchInput.addEventListener("input", () => {
   clearTimeout(state.sessionSearchTimer);
@@ -2047,7 +2072,10 @@ function addCommandResult(result) {
       line && typeof line === "object" && line.kind === "timestamp" &&
       typeof line.timestamp === "number" && Number.isFinite(line.timestamp)
     ) {
-      text.textContent = `${typeof line.before === "string" ? line.before : ""}${formatDate(line.timestamp)}${typeof line.after === "string" ? line.after : ""}`;
+      text.dataset.displayTimestamp = String(line.timestamp);
+      if (typeof line.before === "string") text.dataset.displayBefore = line.before;
+      if (typeof line.after === "string") text.dataset.displayAfter = line.after;
+      text.textContent = `${text.dataset.displayBefore ?? ""}${formatDate(line.timestamp)}${text.dataset.displayAfter ?? ""}`;
     } else {
       text.textContent = typeof line === "string" ? line : "";
     }
@@ -2672,21 +2700,48 @@ function commandStatus(status) {
 function formatDate(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "";
   const milliseconds = value < 1_000_000_000_000 ? value * 1_000 : value;
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(milliseconds));
+  return formatDisplayTime(
+    milliseconds,
+    resolveDisplayTimeZone(state.displayTimezone, deviceTimeZone()),
+  );
 }
 
 function formatLastReplyDate(value) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return "";
-  const milliseconds = value < 1_000_000_000_000 ? value * 1_000 : value;
-  const date = new Date(milliseconds);
-  if (Number.isNaN(date.getTime())) return "";
-  const twoDigits = (part) => String(part).padStart(2, "0");
-  return `${twoDigits(date.getMonth() + 1)}-${twoDigits(date.getDate())} ${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}`;
+  return formatDate(value);
+}
+
+function openAppSettings() {
+  syncAppSettingsForm();
+  if (!elements.appSettingsDialog.open) elements.appSettingsDialog.showModal();
+}
+
+function closeAppSettings() {
+  if (elements.appSettingsDialog.open) elements.appSettingsDialog.close();
+}
+
+function syncAppSettingsForm() {
+  const prefs = state.displayTimezone;
+  elements.followDeviceTimezoneInput.checked = prefs.followDevice;
+  elements.displayTimezoneCitySelect.value = prefs.cityTimeZone;
+  elements.displayTimezoneCitySelect.disabled = prefs.followDevice;
+}
+
+function commitDisplayTimezonePreference() {
+  state.displayTimezone = saveDisplayTimezonePreference({
+    followDevice: elements.followDeviceTimezoneInput.checked,
+    cityTimeZone: elements.displayTimezoneCitySelect.value,
+  });
+  syncAppSettingsForm();
+  refreshDisplayedTimes();
+}
+
+function refreshDisplayedTimes() {
+  renderSessionList();
+  renderSessionMetrics();
+  for (const text of elements.timeline.querySelectorAll("[data-display-timestamp]")) {
+    const stamp = Number(text.dataset.displayTimestamp);
+    text.textContent = `${text.dataset.displayBefore ?? ""}${formatDate(stamp)}${text.dataset.displayAfter ?? ""}`;
+  }
 }
 
 function errorMessage(error) {
