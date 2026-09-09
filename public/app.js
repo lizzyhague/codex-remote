@@ -75,6 +75,7 @@ const state = {
   reconnectTimer: null,
   reconnectAllowed: true,
   authenticated: false,
+  connectionReady: false,
   backgroundWorkers: false,
   projectId: null,
   projects: [],
@@ -289,6 +290,7 @@ void connect();
 
 async function connect(token) {
   const generation = ++state.generation;
+  state.connectionReady = false;
   clearTimeout(state.reconnectTimer);
   state.reconnectTimer = null;
   rejectPending(new Error("连接已重新建立。"));
@@ -299,6 +301,7 @@ async function connect(token) {
   }
 
   state.authenticated = false;
+  updateControls();
   elements.connectButton.disabled = true;
   elements.loginStatus.textContent = "正在连接主机……";
   setConnectionStatus("connecting", "正在连接");
@@ -357,14 +360,31 @@ async function connect(token) {
       elements.loginStatus.textContent = "";
       elements.connectButton.disabled = false;
       showApp();
-      setConnectionStatus("connected", "已连接");
+      setConnectionStatus("connecting", "正在恢复连接");
       void slashCommands.load();
-      await loadProjects();
+      await loadProjects(generation);
+      if (generation !== state.generation || socket.readyState !== WebSocket.OPEN) return;
+      if (state.sessionId) {
+        const projectId = state.projectId;
+        const sessionId = state.sessionId;
+        const opened = await request("session.resume", { projectId, sessionId });
+        if (generation !== state.generation || socket.readyState !== WebSocket.OPEN ||
+            projectId !== state.projectId || sessionId !== state.sessionId) return;
+        applyOpenedSession(opened, { preserveAttachments: true, retryOutbox: false });
+        if (opened.notice) showNotice(opened.notice);
+      }
+      state.connectionReady = true;
+      setConnectionStatus("connected", "已连接");
+      updateControls();
+      void flushQueuedAttachments();
+      void retryOutboxForCurrentSession();
     } catch (error) {
       if (generation !== state.generation) return;
       const message = errorMessage(error);
       elements.loginStatus.textContent = message;
       elements.connectButton.disabled = false;
+      showNotice(`${message}正在重新连接，当前会话和附件已保留。`);
+      socket.close();
     }
   });
 
@@ -382,6 +402,7 @@ async function connect(token) {
     renderSessionMetrics();
     state.socket = null;
     state.authenticated = false;
+    state.connectionReady = false;
     state.backgroundWorkers = false;
     state.running = false;
     state.commandBusy = false;
@@ -478,41 +499,44 @@ function rejectPending(error) {
   state.pendingRequests.clear();
 }
 
-async function loadProjects() {
-  try {
-    const data = await request("projects.list");
-    const projects = Array.isArray(data?.projects) ? data.projects : [];
-    state.projects = projects;
-    elements.projectSelect.replaceChildren();
+async function loadProjects(generation = state.generation) {
+  const data = await request("projects.list");
+  if (generation !== state.generation) return;
+  const projects = Array.isArray(data?.projects) ? data.projects : [];
+  state.projects = projects;
+  elements.projectSelect.replaceChildren();
 
-    for (const project of projects) {
-      const option = document.createElement("option");
-      option.value = project.id;
-      option.textContent = project.name;
-      elements.projectSelect.append(option);
-    }
+  for (const project of projects) {
+    const option = document.createElement("option");
+    option.value = project.id;
+    option.textContent = project.name;
+    elements.projectSelect.append(option);
+  }
 
-    if (projects.length === 0) {
-      state.projectId = null;
-      showEmpty("项目白名单里暂时没有可用项目。");
-      updateControls();
-      return;
-    }
+  if (projects.length === 0) {
+    if (state.sessionId) throw new Error("当前会话的项目暂时不可用。");
+    state.projectId = null;
+    showEmpty("项目白名单里暂时没有可用项目。");
+    updateControls();
+    return;
+  }
 
-    const savedProject = stateGet(PROJECT_KEY);
-    state.projectId = projects.some((project) => project.id === savedProject)
-      ? savedProject
-      : projects[0].id;
-    elements.projectSelect.value = state.projectId;
-    stateSet(PROJECT_KEY, state.projectId);
+  const savedProject = state.projectId || stateGet(PROJECT_KEY);
+  if (state.sessionId && !projects.some((project) => project.id === savedProject)) {
+    throw new Error("当前会话的项目暂时不可用。");
+  }
+  state.projectId = projects.some((project) => project.id === savedProject)
+    ? savedProject
+    : projects[0].id;
+  elements.projectSelect.value = state.projectId;
+  stateSet(PROJECT_KEY, state.projectId);
+  if (!state.sessionId) {
     elements.sessionSearchInput.value = "";
     setSessionView("active", false);
     resetCurrentSession();
     showEmpty("选择以前的会话，或者新建一个会话。");
-    await loadSessions();
-  } catch (error) {
-    showNotice(errorMessage(error));
   }
+  await loadSessions();
 }
 
 async function loadSessions({ append = false } = {}) {
@@ -611,7 +635,8 @@ async function resumeSession(sessionId) {
   }
 }
 
-function applyOpenedSession(opened) {
+function applyOpenedSession(opened, { preserveAttachments = false, retryOutbox = true } = {}) {
+  if (!preserveAttachments) abortAttachmentUploads();
   state.metrics = null;
   state.sessionId = opened.session.id;
   void refreshPickerLabels();
@@ -620,7 +645,7 @@ function applyOpenedSession(opened) {
   state.running = Boolean(opened.activeTaskId);
   state.controlsTask = Boolean(opened.controlsActiveTask);
   state.fullAccessEnabled = opened.fullAccessEnabled === true;
-  loadAttachmentDraftForCurrentSession();
+  if (!preserveAttachments) loadAttachmentDraftForCurrentSession();
   stateSet(SESSION_KEY, state.sessionId);
   upsertSession(opened.session);
   renderSessionList();
@@ -646,7 +671,7 @@ function applyOpenedSession(opened) {
     hideNotice();
   }
   updateControls();
-  void retryOutboxForCurrentSession();
+  if (retryOutbox) void retryOutboxForCurrentSession();
 }
 
 function setSessionView(view, load = true) {
@@ -1200,7 +1225,7 @@ async function sendMessage() {
   const text = elements.messageInput.value.trim();
   const attachments = readyAttachments();
   if ((!text && attachments.length === 0) || !state.sessionId || state.running ||
-    !state.authenticated || state.attachmentUploads.size > 0) return;
+    !state.connectionReady || hasUnfinishedUploads()) return;
   if (attachments.length === 0 && await slashCommands.submit(text)) return;
 
   hideEmpty();
@@ -1263,7 +1288,8 @@ async function sendMessage() {
 }
 
 async function uploadFiles(files) {
-  if (!state.sessionId || !state.projectId || !state.authenticated || files.length === 0) return;
+  // 系统文件选择器返回时连接可能尚未恢复，先接住文件再决定何时上传。
+  if (!state.sessionId || !state.projectId || files.length === 0) return;
   const available = MAX_MESSAGE_ATTACHMENTS - state.pendingAttachments.length;
   if (available <= 0) {
     showNotice(`一条消息最多附加 ${MAX_MESSAGE_ATTACHMENTS} 个文件。`);
@@ -1285,19 +1311,41 @@ async function uploadFile(file) {
     size: file.size,
     status: "preparing",
     statusText: "正在申请上传票据",
+    file,
+    projectId,
+    sessionId,
   };
   state.pendingAttachments.push(draft);
   renderAttachmentList();
   updateControls();
   if (file.size > MAX_ATTACHMENT_BYTES) {
-    Object.assign(draft, { status: "failed", statusText: "超过 25 MiB 上限" });
+    Object.assign(draft, { status: "failed", statusText: "超过 25 MiB 上限", file: null });
     renderAttachmentList();
     updateControls();
     return;
   }
 
+  await startUpload(draft);
+}
+
+async function startUpload(draft) {
+  if (!draft.file || !state.pendingAttachments.includes(draft) ||
+      state.attachmentUploads.has(draft.clientId)) return;
+  if (draft.projectId !== state.projectId || draft.sessionId !== state.sessionId) return;
+  if (!state.connectionReady || state.socket?.readyState !== WebSocket.OPEN) {
+    Object.assign(draft, { status: "queued", statusText: "等待重新连接" });
+    renderAttachmentList();
+    updateControls();
+    return;
+  }
+
+  const { clientId, file, projectId, sessionId } = draft;
+  const generation = state.generation;
   const controller = new AbortController();
   state.attachmentUploads.set(clientId, controller);
+  Object.assign(draft, { status: "preparing", statusText: "正在申请上传票据" });
+  renderAttachmentList();
+  updateControls();
   try {
     const ticket = await request("attachment.ticket.create", {
       originalName: file.name || "未命名文件",
@@ -1306,6 +1354,10 @@ async function uploadFile(file) {
     });
     if (projectId !== state.projectId || sessionId !== state.sessionId) {
       throw new Error("上传期间切换了会话，请重新选择文件。");
+    }
+    if (controller.signal.aborted || !state.pendingAttachments.includes(draft)) return;
+    if (generation !== state.generation || !state.connectionReady) {
+      throw new Error("连接已断开。");
     }
     Object.assign(draft, { status: "uploading", statusText: "正在上传" });
     renderAttachmentList();
@@ -1322,22 +1374,43 @@ async function uploadFile(file) {
       throw error;
     }
     if (!body?.attachment?.id) throw new Error("上传服务没有返回附件 ID。");
+    if (controller.signal.aborted || !state.pendingAttachments.includes(draft) ||
+        projectId !== state.projectId || sessionId !== state.sessionId) return;
     Object.assign(draft, body.attachment, {
       clientId,
       status: "ready",
       statusText: "上传完成",
+      file: null,
     });
     persistCurrentAttachmentDraft();
   } catch (error) {
-    Object.assign(draft, {
-      status: "failed",
-      statusText: error?.name === "AbortError" ? "已取消" : errorMessage(error),
-    });
+    if (!controller.signal.aborted && (generation !== state.generation ||
+        !state.connectionReady || state.socket?.readyState !== WebSocket.OPEN)) {
+      Object.assign(draft, { status: "queued", statusText: "等待重新连接" });
+    } else {
+      Object.assign(draft, {
+        status: "failed",
+        statusText: error?.name === "AbortError" ? "已取消" : errorMessage(error),
+      });
+    }
   } finally {
     state.attachmentUploads.delete(clientId);
     renderAttachmentList();
     updateControls();
+    if (draft.status === "queued" && state.connectionReady && !controller.signal.aborted) {
+      void startUpload(draft);
+    }
   }
+}
+
+async function flushQueuedAttachments() {
+  await Promise.all(state.pendingAttachments
+    .filter((draft) => draft.status === "queued").map((draft) => startUpload(draft)));
+}
+
+function hasUnfinishedUploads() {
+  return state.attachmentUploads.size > 0 ||
+    state.pendingAttachments.some((draft) => draft.status === "queued");
 }
 
 function renderAttachmentList() {
@@ -2117,8 +2190,7 @@ function persistCurrentAttachmentDraft() {
   const key = attachmentDraftKey();
   if (!key) return;
   const drafts = loadAttachmentDrafts();
-  const ready = readyAttachments().map(({ clientId: _clientId, status: _status, statusText: _statusText, ...attachment }) =>
-    attachment);
+  const ready = publicAttachments(readyAttachments());
   if (ready.length > 0) drafts[key] = ready;
   else delete drafts[key];
   const entries = Object.entries(drafts).slice(-50);
@@ -2380,11 +2452,11 @@ function removeInteraction(interactionId) {
 }
 
 function updateControls() {
-  const connected = state.authenticated;
+  const connected = state.authenticated && state.connectionReady;
   const hasSession = Boolean(state.sessionId);
   const hasText = Boolean(elements.messageInput.value.trim());
   const hasAttachments = readyAttachments().length > 0;
-  const uploading = state.attachmentUploads.size > 0;
+  const uploading = hasUnfinishedUploads();
   const busy = state.running || state.commandBusy;
   const navigationBusy = state.navigationBusy || state.sessionLoading;
   const navigationLocked = state.commandBusy || navigationBusy || uploading ||
@@ -2409,7 +2481,7 @@ function updateControls() {
     for (const button of item.querySelectorAll("button")) {
       const opensSession = button.classList.contains("session-open");
       const cannotOpen = opensSession && state.sessionView !== "active";
-      button.disabled = navigationLocked || cannotOpen ||
+      button.disabled = !connected || navigationLocked || cannotOpen ||
         (!opensSession && (state.running || projectHasActiveTask || itemIsActive));
     }
     for (const checkbox of item.querySelectorAll('input[type="checkbox"]')) {

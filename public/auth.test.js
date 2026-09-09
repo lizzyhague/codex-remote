@@ -47,6 +47,8 @@ function harness(fetch, search = "") {
     errorMessage: (error) => error.message,
     slashCommands: { load: async () => {}, close() {} },
     loadProjects: async () => actions.push(["projects"]),
+    flushQueuedAttachments: async () => {},
+    retryOutboxForCurrentSession: async () => {},
     handleSocketMessage() {},
     renderSessionMetrics() {},
     hideThinking() {},
@@ -54,6 +56,7 @@ function harness(fetch, search = "") {
     showNotice() {},
     WebSocket: class {
       listeners = {};
+      readyState = 1;
       static OPEN = 1;
       constructor(url) {
         this.url = url;
