@@ -27,6 +27,7 @@ import {
 import { CookieAuth, secretsEqual } from "./auth.ts";
 import { openViewableFile } from "./files.ts";
 import { MAX_BROWSER_MESSAGE_BYTES } from "./protocol.ts";
+import { WebAssets } from "./web-assets.ts";
 
 export type RemoteServerAddress = {
   host: "127.0.0.1";
@@ -87,6 +88,7 @@ export class RemoteWebSocketServer {
   readonly #heartbeatIntervalMs: number;
   readonly #allowedOrigins: ReadonlySet<string>;
   readonly #webRoot: string;
+  readonly #webAssets: WebAssets;
   readonly #uploads: RemoteWebSocketServerOptions["uploads"];
   readonly #http: Server;
   readonly #webSockets: WebSocketServer;
@@ -108,6 +110,12 @@ export class RemoteWebSocketServer {
     this.#heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     this.#allowedOrigins = new Set(options.allowedOrigins ?? []);
     this.#webRoot = options.webRoot ?? DEFAULT_WEB_ROOT;
+    this.#webAssets = new WebAssets(
+      this.#webRoot,
+      Object.values(STATIC_FILES)
+        .map((asset) => asset.file)
+        .filter((file) => /\.(js|css)$/u.test(file) && file !== "sw.js"),
+    );
     this.#uploads = options.uploads;
     this.#http = createServer((request, response) => {
       void this.#serveHttp(request, response).catch((error: unknown) => {
@@ -353,7 +361,16 @@ export class RemoteWebSocketServer {
     }
 
     const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-    const asset = STATIC_FILES[pathname];
+    let versioned: { body: Buffer; file: string } | null = null;
+    if (pathname.startsWith("/assets/")) {
+      versioned = await this.#webAssets.read(pathname);
+      if (!versioned) {
+        response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+        response.end("Not found\n");
+        return;
+      }
+    }
+    const asset = STATIC_FILES[versioned ? `/${versioned.file}` : pathname];
     if (!asset) {
       response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
       response.end("Not found\n");
@@ -361,11 +378,16 @@ export class RemoteWebSocketServer {
     }
 
     try {
-      const body = await readFile(path.join(this.#webRoot, asset.file));
+      let body = versioned?.body ?? await readFile(path.join(this.#webRoot, asset.file));
+      if (asset.contentType.startsWith("text/html")) body = await this.#webAssets.page(body);
       response.writeHead(200, {
         "content-type": asset.contentType,
         "content-length": body.byteLength,
-        "cache-control": pathname === "/sw.js" ? "no-cache" : "no-cache, must-revalidate",
+        "cache-control": versioned
+          ? "public, max-age=31536000, immutable"
+          : pathname === "/sw.js"
+            ? "no-cache"
+            : "no-cache, must-revalidate",
         "content-security-policy": [
           "default-src 'self'",
           "connect-src 'self' ws: wss:",
@@ -380,9 +402,13 @@ export class RemoteWebSocketServer {
         ...(pathname === "/sw.js" ? { "service-worker-allowed": "/" } : {}),
       });
       response.end(request.method === "HEAD" ? undefined : body);
-    } catch {
-      response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-      response.end("Not found\n");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+        response.end("Not found\n");
+        return;
+      }
+      throw error;
     }
   }
 

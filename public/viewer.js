@@ -1,4 +1,4 @@
-import { renderMarkdown } from "./markdown.js?v=15";
+import { renderMarkdown } from "./markdown.js";
 
 const status = document.getElementById("viewer-status");
 const content = document.getElementById("file-content");

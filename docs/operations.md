@@ -80,10 +80,11 @@ SQLite 用 WAL，不要在服务运行时只复制主库文件而漏掉 `-wal`�
 ## 新增前端文件
 
 `public/` 不是目录服务，是白名单。新增或改名前端文件时要在
-`src/server/http-server.ts` 的 `STATIC_FILES` 里登记 URL、文件名和 Content-Type，在
-`http-server.test.ts` 里验证返回 200，并把带版本号的 URL 加进 `public/sw.js` 的
-`APP_SHELL`、同步 `index.html` 的资源版本和 Service Worker 缓存名。只改已有文件内容
-不用重启，新增静态路由或改后端代码必须重启。
+`src/server/http-server.ts` 的 `STATIC_FILES` 里登记 URL、文件名和 Content-Type，并在
+`http-server.test.ts` 里验证返回 200。脚本和样式由服务端按内容生成 `/assets/<哈希>/`
+地址，保存在 `public/.web-assets/`；只改已有文件内容不必再改 HTML 版本号或 Service
+Worker 缓存名。新增静态路由或改后端代码必须重启。部署时保留 `.web-assets/`，不要清空
+仍可能被已打开页面使用的旧快照。
 
 ## Origin 与反向代理
 
@@ -99,4 +100,6 @@ Caddy、Nginx 都不用额外配置。只有日志里出现"拒绝了来源不�
 能打开但登录不了：令牌不对就核对环境文件；WebSocket 被拒就看日志里的 Origin 和
 Host；页面脚本没启动就看 `boot.js`、`app.js` 是不是都返回 200。
 
-更新后仍像旧版本：彻底关闭已安装的 PWA，再从 HTTPS 地址重新打开。
+联网且部署完整时，普通刷新即可加载当前页面及其对应的脚本、样式，不必关闭已安装的
+PWA。手机可在聊天列表、会话列表顶部或标题栏空白处下拉刷新。页面不会因为
+Service Worker 更新而自动重载。离线只能打开最近一次完整缓存的外壳，会话功能仍需联网。

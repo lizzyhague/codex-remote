@@ -18,6 +18,7 @@
 node_modules/
 dist/
 coverage/
+public/.web-assets/
 *.tsbuildinfo
 
 # Logs and temporary files

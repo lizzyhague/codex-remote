@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -55,8 +55,17 @@ test("serves health and requires a cookie before the WebSocket upgrade", async (
 
     const page = await fetch(`http://${address.host}:${address.port}/`);
     assert.equal(page.status, 200);
-    assert.match(await page.text(), /Codex Remote/);
+    const html = await page.text();
+    assert.match(html, /Codex Remote/);
+    assert.match(html, /\/assets\/[a-f0-9]{64}\/app\.js/u);
+    assert.match(html, /<meta name="codex-remote-assets"/u);
     assert.match(page.headers.get("content-security-policy") ?? "", /default-src 'self'/);
+    assert.match(page.headers.get("cache-control") ?? "", /no-cache/u);
+
+    const worker = await fetch(`http://${address.host}:${address.port}/sw.js`);
+    assert.equal(worker.status, 200);
+    assert.match(worker.headers.get("cache-control") ?? "", /no-cache/u);
+    assert.equal(worker.headers.get("service-worker-allowed"), "/");
 
     for (const asset of ["/boot.js", "/markdown.js", "/slash-menu.js", "/display-timezone.js"]) {
       const response = await fetch("http://" + address.host + ":" + address.port + asset);
@@ -529,3 +538,105 @@ async function loginCookie(
   assert.ok(cookie);
   return cookie;
 }
+
+async function withWebRoot(
+  t: test.TestContext,
+  files: Record<string, string>,
+): Promise<{ base: string; webRoot: string }> {
+  const webRoot = await mkdtemp(path.join(tmpdir(), "codex-pwa-http-"));
+  t.after(() => rm(webRoot, { recursive: true, force: true }));
+  for (const [name, body] of Object.entries(files)) {
+    await writeFile(path.join(webRoot, name), body);
+  }
+  const transport = new EmptyTransport();
+  const approvals = new ApprovalBroker(transport);
+  t.after(() => approvals.dispose());
+  const server = new RemoteWebSocketServer({
+    token: "test-secret",
+    services: emptyServices(transport, approvals),
+    webRoot,
+  });
+  const address = await server.listen(0);
+  t.after(() => server.close());
+  return { webRoot, base: `http://${address.host}:${address.port}` };
+}
+
+test("refresh serves a new resource snapshot while old module URLs survive changes and restarts", async (t) => {
+  const files = {
+    "index.html": '<head><script type="module" src="/app.js"></script><link href="/styles.css" rel="stylesheet"></head>mark-A',
+    "view.html": '<head><script type="module" src="/viewer.js"></script><link href="/viewer.css" rel="stylesheet"></head>',
+    "app.js": 'import "./markdown.js"; window.__PWA_MARK__ = "A";',
+    "markdown.js": "// dependency-A",
+    "styles.css": "body { color: red }",
+    "viewer.js": 'import "./markdown.js";',
+    "viewer.css": ".file-viewer {}",
+    "boot.js": "// boot",
+    "slash-menu.js": "// menu",
+    "display-timezone.js": "// tz",
+    "sw.js": "// sw",
+  };
+  const { webRoot, base } = await withWebRoot(t, files);
+  const first = await fetch(base);
+  assert.match(first.headers.get("cache-control")!, /no-cache/u);
+  const firstHtml = await first.text();
+  assert.match(firstHtml, /mark-A/u);
+  const oldApp = /src="([^"]+)"/u.exec(firstHtml)![1]!;
+  assert.match(oldApp, /^\/assets\/[a-f0-9]{64}\/app.js$/u);
+  assert.match(firstHtml, /<meta name="codex-remote-assets"/u);
+  const oldModule = new URL("./markdown.js", `${base}${oldApp}`).pathname;
+  const asset = await fetch(`${base}${oldApp}`);
+  assert.match(asset.headers.get("cache-control")!, /immutable/u);
+  assert.match(await asset.text(), /__PWA_MARK__ = "A"/u);
+  assert.equal(await (await fetch(`${base}${oldModule}`)).text(), "// dependency-A");
+
+  const view = await (await fetch(`${base}/view`)).text();
+  assert.match(view, /\/assets\/[a-f0-9]{64}\/viewer\.js/u);
+
+  await writeFile(path.join(webRoot, "markdown.js"), "// dependency-B");
+  await writeFile(path.join(webRoot, "index.html"), files["index.html"]!.replace("mark-A", "mark-B"));
+  const secondHtml = await (await fetch(base)).text();
+  assert.match(secondHtml, /mark-B/u);
+  const newApp = /src="([^"]+)"/u.exec(secondHtml)![1]!;
+  assert.notEqual(newApp, oldApp);
+  const newModule = new URL("./markdown.js", `${base}${newApp}`).pathname;
+  assert.equal(await (await fetch(`${base}${newModule}`)).text(), "// dependency-B");
+  assert.equal(await (await fetch(`${base}${oldModule}`)).text(), "// dependency-A");
+
+  const head = await fetch(`${base}${newApp}`, { method: "HEAD" });
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), "");
+  assert.equal((await fetch(`${base}${newApp.replace("app.js", "config.json")}`)).status, 404);
+  assert.equal((await fetch(`${base}/assets/${"0".repeat(64)}/app.js`)).status, 404);
+  assert.equal((await fetch(`${base}/assets/${"0".repeat(64)}/%2e%2e%2findex.html`)).status, 404);
+  assert.equal((await fetch(`${base}/boot.js`)).status, 200);
+});
+
+test("storage failures for versioned assets are not disguised as missing files", async (t) => {
+  const { webRoot, base } = await withWebRoot(t, {
+    "index.html": '<head><script src="/app.js"></script></head>',
+    "app.js": "// app",
+    "markdown.js": "// md",
+    "styles.css": "body {}",
+    "viewer.js": "// viewer",
+    "viewer.css": ".file-viewer {}",
+    "boot.js": "// boot",
+    "slash-menu.js": "// menu",
+    "display-timezone.js": "// tz",
+  });
+  const html = await (await fetch(base)).text();
+  const appUrl = /src="([^"]+)"/u.exec(html)![1]!;
+  const snapshotFile = path.join(webRoot, ".web-assets", appUrl.split("/")[2]!, "app.js");
+  await chmod(snapshotFile, 0);
+  t.after(() => chmod(snapshotFile, 0o644).catch(() => {}));
+  const denied = await fetch(`${base}${appUrl}`);
+  assert.equal(denied.status, 500);
+  assert.notEqual(denied.status, 404);
+});
+
+test("a page that references a missing script is not published as a complete snapshot", async (t) => {
+  const { base } = await withWebRoot(t, {
+    "index.html": '<head><script src="/app.js"></script></head>',
+  });
+  const response = await fetch(base);
+  assert.equal(response.status, 500);
+});

@@ -1,4 +1,4 @@
-import { renderMarkdown, sanitizeHref } from "./markdown.js?v=15";
+import { renderMarkdown, sanitizeHref } from "./markdown.js";
 import {
   DISPLAY_TIMEZONE_KEY,
   deviceTimeZone,
@@ -6,7 +6,7 @@ import {
   loadDisplayTimezonePreference,
   resolveDisplayTimeZone,
   saveDisplayTimezonePreference,
-} from "./display-timezone.js?v=1";
+} from "./display-timezone.js";
 
 const LEGACY_TOKEN_KEY = "codex-remote.token";
 const PROJECT_KEY = "codex-remote.project";
@@ -295,12 +295,6 @@ elements.messageInput.addEventListener("keydown", (event) => {
     if (!state.running) elements.composer.requestSubmit();
   }
 });
-
-if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    void navigator.serviceWorker.register("/sw.js");
-  });
-}
 
 window.codexRemoteReady = true;
 if (typeof window.codexRemoteMarkReady === "function") {

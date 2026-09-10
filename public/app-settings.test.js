@@ -59,14 +59,15 @@ test("follow-device disables the city select and keeps the previous city", () =>
 });
 
 test("page times use the local display preference instead of the host clock", () => {
-  assert.match(app, /from "\.\/display-timezone\.js\?v=1"/u);
+  assert.match(app, /from "\.\/display-timezone\.js"/u);
   assert.match(app, /resolveDisplayTimeZone\(state\.displayTimezone, deviceTimeZone\(\)\)/u);
   assert.match(app, /refreshDisplayedTimes\(\)/u);
   assert.match(app, /loadDisplayTimezonePreference\(\)/u);
   assert.match(app, /value < 1_000_000_000_000 \? value \* 1_000 : value/u);
   assert.doesNotMatch(app, /date\.getHours\(\)/u);
   assert.match(httpServer, /"\/display-timezone\.js"/u);
-  assert.match(sw, /\/display-timezone\.js\?v=1/u);
-  assert.match(html, /styles\.css\?v=29/u);
-  assert.match(html, /app\.js\?v=34/u);
+  assert.match(sw, /codex-remote-assets/u);
+  assert.match(html, /href="\/styles\.css"/u);
+  assert.match(html, /src="\/app\.js"/u);
+  assert.doesNotMatch(html, /\.(?:js|css)\?v=/u);
 });

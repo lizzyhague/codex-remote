@@ -90,7 +90,7 @@ test("service worker never caches file or authentication responses", async () =>
   const handlers = {};
   const puts = [];
   const caches = {
-    open: async () => ({ addAll: async () => {}, put: async (...args) => puts.push(args) }),
+    open: async () => ({ addAll: async () => {}, put: async (...args) => puts.push(args), match: async () => null }),
     match: async () => null,
     keys: async () => [],
     delete: async () => true,
@@ -98,13 +98,13 @@ test("service worker never caches file or authentication responses", async () =>
   vm.runInNewContext(await readFile(new URL("./sw.js", import.meta.url), "utf8"), {
     self: {
       location: { origin: "https://example.com" },
-      clients: { claim: async () => {} },
       addEventListener: (name, handler) => { handlers[name] = handler; },
-      skipWaiting() {},
     },
     caches,
     URL,
+    Request,
     Response,
+    console: { warn() {} },
     fetch: async () => new Response("ok"),
   });
   for (const route of [
@@ -112,21 +112,25 @@ test("service worker never caches file or authentication responses", async () =>
     "/auth/session",
     "/auth/login",
     "/attachments/upload",
-    "/viewer.js?v=1",
-    "/viewer.css?v=1",
+    "/viewer.js",
+    "/viewer.css",
   ]) {
     let intercepted = false;
     handlers.fetch({
       request: { method: route === "/auth/login" ? "POST" : "GET", url: `https://example.com${route}`, mode: "cors" },
       respondWith() { intercepted = true; },
+      waitUntil() {},
     });
     assert.equal(intercepted, false, route);
   }
   let navigation;
+  const pending = [];
   handlers.fetch({
     request: { method: "GET", url: "https://example.com/view?path=note.md", mode: "navigate" },
     respondWith(promise) { navigation = promise; },
+    waitUntil(value) { pending.push(value); },
   });
   await navigation;
+  await Promise.all(pending);
   assert.deepEqual(puts, [], "the viewer navigation must not enter the app-shell cache");
 });
