@@ -41,6 +41,25 @@ export type StoredWorkerEvent = {
   event: Record<string, unknown> & { type: string };
 };
 
+export type AdmitTaskInput = Omit<
+  WorkerTask,
+  "status" | "nativeTurnId" | "updatedAtMs" | "error" | "interruptionReason" | "attachments"
+> & {
+  attachments?: PublicAttachment[];
+};
+
+export type AdmitTaskResult =
+  | { outcome: "accepted"; task: WorkerTask }
+  | { outcome: "duplicate"; task: WorkerTask }
+  | { outcome: "task_already_running"; task: WorkerTask }
+  | { outcome: "project_busy"; task: WorkerTask };
+
+const PENDING_STATUSES: WorkerTaskStatus[] = [
+  "queued",
+  "running",
+  "waiting_for_permission",
+];
+
 export function resolveWorkerStatePath(
   environment: NodeJS.ProcessEnv = process.env,
 ): string {
@@ -144,43 +163,78 @@ export class WorkerStateStore {
     `).run(threadId, enabled ? 1 : 0, nowMs);
   }
 
-  enqueue(task: Omit<WorkerTask, "status" | "nativeTurnId" | "updatedAtMs" | "error" | "interruptionReason" | "attachments"> & {
-    attachments?: PublicAttachment[];
-  }): {
+  enqueue(task: AdmitTaskInput): {
     task: WorkerTask;
     duplicate: boolean;
   } {
-    const existing = this.findByClientMessageId(task.clientMessageId);
-    if (existing) {
-      if (
-        existing.projectId !== task.projectId || existing.threadId !== task.threadId ||
-        existing.kind !== task.kind || existing.payload !== task.payload ||
-        JSON.stringify(existing.attachments) !== JSON.stringify(task.attachments ?? [])
-      ) {
-        throw new Error("clientMessageId 已被另一条消息使用。");
-      }
-      return { task: existing, duplicate: true };
-    }
+    const result = this.#commitAdmit(task, false);
+    if (result.outcome === "accepted") return { task: result.task, duplicate: false };
+    if (result.outcome === "duplicate") return { task: result.task, duplicate: true };
+    throw new Error(`enqueue 不应得到 ${result.outcome}。`);
+  }
 
-    this.#database.prepare(`
-      INSERT INTO worker_tasks (
-        id, client_message_id, project_id, thread_id, kind, payload, attachments_json, status,
-        native_turn_id, permission_mode, created_at_ms, updated_at_ms, error,
-        interruption_reason
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', NULL, ?, ?, ?, NULL, NULL)
-    `).run(
-      task.id,
-      task.clientMessageId,
-      task.projectId,
-      task.threadId,
-      task.kind,
-      task.payload,
-      JSON.stringify(task.attachments ?? []),
-      task.permissionMode,
-      task.createdAtMs,
-      task.createdAtMs,
-    );
-    return { task: this.require(task.id), duplicate: false };
+  /**
+   * 同步原子准入：幂等检查、项目忙检查和插入在同一事务里完成。
+   * 终态记录仍留在同一张表，因此不能靠永久唯一索引禁止第二轮任务。
+   */
+  admit(task: AdmitTaskInput): AdmitTaskResult {
+    return this.#commitAdmit(task, true);
+  }
+
+  #commitAdmit(task: AdmitTaskInput, enforceProjectIdle: boolean): AdmitTaskResult {
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.findByClientMessageId(task.clientMessageId);
+      if (existing) {
+        if (
+          existing.projectId !== task.projectId || existing.threadId !== task.threadId ||
+          existing.kind !== task.kind || existing.payload !== task.payload ||
+          JSON.stringify(existing.attachments) !== JSON.stringify(task.attachments ?? [])
+        ) {
+          throw new Error("clientMessageId 已被另一条消息使用。");
+        }
+        this.#database.exec("COMMIT");
+        return { outcome: "duplicate", task: existing };
+      }
+
+      if (enforceProjectIdle) {
+        const pending = this.pendingForProject(task.projectId);
+        if (pending) {
+          this.#database.exec("COMMIT");
+          return {
+            outcome: pending.threadId === task.threadId
+              ? "task_already_running"
+              : "project_busy",
+            task: pending,
+          };
+        }
+      }
+
+      this.#database.prepare(`
+        INSERT INTO worker_tasks (
+          id, client_message_id, project_id, thread_id, kind, payload, attachments_json, status,
+          native_turn_id, permission_mode, created_at_ms, updated_at_ms, error,
+          interruption_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', NULL, ?, ?, ?, NULL, NULL)
+      `).run(
+        task.id,
+        task.clientMessageId,
+        task.projectId,
+        task.threadId,
+        task.kind,
+        task.payload,
+        JSON.stringify(task.attachments ?? []),
+        task.permissionMode,
+        task.createdAtMs,
+        task.createdAtMs,
+      );
+      const stored = this.require(task.id);
+      this.#database.exec("COMMIT");
+      return { outcome: "accepted", task: stored };
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   require(taskId: string): WorkerTask {
@@ -246,12 +300,23 @@ export class WorkerStateStore {
     permissionMode: WorkerPermissionMode,
     nowMs: number,
   ): WorkerTask {
-    this.#database.prepare(`
+    return this.tryMarkRunning(taskId, nativeTurnId, permissionMode, nowMs) ??
+      this.require(taskId);
+  }
+
+  tryMarkRunning(
+    taskId: string,
+    nativeTurnId: string | null,
+    permissionMode: WorkerPermissionMode,
+    nowMs: number,
+  ): WorkerTask | null {
+    const result = this.#database.prepare(`
       UPDATE worker_tasks
       SET status = 'running', native_turn_id = ?, permission_mode = ?,
           updated_at_ms = ?, error = NULL, interruption_reason = NULL
       WHERE id = ? AND status = 'queued'
     `).run(nativeTurnId, permissionMode, nowMs, taskId);
+    if (Number(result.changes) === 0) return null;
     return this.require(taskId);
   }
 
@@ -301,13 +366,29 @@ export class WorkerStateStore {
     event: Record<string, unknown> & { type: string },
     nowMs: number,
     options: { error?: string | null; interruptionReason?: string | null } = {},
-  ): StoredWorkerEvent {
+  ): StoredWorkerEvent | null {
+    return this.tryFinish(taskId, PENDING_STATUSES, status, event, nowMs, options);
+  }
+
+  tryFinish(
+    taskId: string,
+    expectedStatuses: readonly WorkerTaskStatus[],
+    status: Extract<WorkerTaskStatus, "completed" | "interrupted" | "failed">,
+    event: Record<string, unknown> & { type: string },
+    nowMs: number,
+    options: { error?: string | null; interruptionReason?: string | null } = {},
+  ): StoredWorkerEvent | null {
     this.#database.exec("BEGIN IMMEDIATE");
     try {
+      const current = this.require(taskId);
+      if (!expectedStatuses.includes(current.status)) {
+        this.#database.exec("ROLLBACK");
+        return null;
+      }
       this.#database.prepare(`
         UPDATE worker_tasks
         SET status = ?, updated_at_ms = ?, error = ?, interruption_reason = ?
-        WHERE id = ? AND status IN ('queued', 'running', 'waiting_for_permission')
+        WHERE id = ?
       `).run(
         status,
         nowMs,
@@ -315,7 +396,7 @@ export class WorkerStateStore {
         options.interruptionReason ?? null,
         taskId,
       );
-      const stored = this.appendEvent(taskId, this.require(taskId).threadId, event, nowMs);
+      const stored = this.appendEvent(taskId, current.threadId, event, nowMs);
       this.#database.exec("COMMIT");
       return stored;
     } catch (error) {

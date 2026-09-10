@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   CodexAttachmentError,
+  CodexTurnCancelledError,
   stripPrivateAttachmentInputs,
   type CodexStreamEvent,
   validateCodexTurnAttachments,
@@ -114,8 +115,18 @@ type ActiveWorker = {
   worker: SessionWorker;
   ownerId: string;
   finishing: boolean;
+  cleaned: boolean;
   interruptionReason: string | null;
   startTimer: NodeJS.Timeout | null;
+};
+
+type LaunchingTask = {
+  task: WorkerTask;
+  ownerId: string;
+  worker: SessionWorker | null;
+  cancelRequested: boolean;
+  nativeStartInvoked: boolean;
+  settled: boolean;
 };
 
 type ProvisionalWorker = {
@@ -147,6 +158,7 @@ export class SessionWorkerManager {
   readonly #pathRedactors = new Map<string, AttachmentPathStreamRedactor>();
   readonly #listeners = new Set<(event: WorkerManagerEvent) => void>();
   readonly #workers = new Map<string, ActiveWorker>();
+  readonly #launching = new Map<string, LaunchingTask>();
   readonly #provisionalWorkers = new Map<string, ProvisionalWorker>();
   readonly #authenticatedClients = new Set<string>();
   readonly #clientSessions = new Map<string, string>();
@@ -278,16 +290,24 @@ export class SessionWorkerManager {
         duplicate: true,
       };
     }
+    this.#assertProjectAccepts(projectId, threadId);
     const prepared = await this.prepareMessageAttachments(projectId, threadId, attachmentIds, text);
     try {
-      await this.#registerPreparedAttachments(threadId, clientMessageId, prepared);
+      const queued = this.enqueueMessage(projectId, threadId, clientMessageId, text, prepared);
+      if (!queued.duplicate) {
+        await this.#registerPreparedAttachments(threadId, clientMessageId, prepared).catch(
+          (error: unknown) => {
+            console.error(`登记附件显示映射失败：${errorMessage(error)}`);
+          },
+        );
+      }
+      return queued;
     } catch (error) {
       if (prepared) {
         await this.#releaseAttachmentLease(prepared.taskId, prepared.lease).catch(() => {});
       }
       throw error;
     }
-    return this.enqueueMessage(projectId, threadId, clientMessageId, text, prepared);
   }
 
   clientAuthenticated(clientId: string): void {
@@ -406,12 +426,50 @@ export class SessionWorkerManager {
   }
 
   async stopTask(threadId: string): Promise<{ requested: boolean }> {
+    const launching = this.#launching.get(threadId);
+    if (launching) {
+      launching.cancelRequested = true;
+      const active = this.#workers.get(threadId);
+      if (active) active.interruptionReason = "user_requested";
+      const worker = active?.worker ?? launching.worker;
+      if (worker) {
+        worker.approvals.cancelThread(threadId);
+        worker.interactions.cancelThread(threadId);
+        const requested = await worker.turns.interruptActiveTurn();
+        if (requested) return { requested: true };
+      }
+      return { requested: true };
+    }
+
     const active = this.#workers.get(threadId);
-    if (!active) return { requested: false };
-    active.interruptionReason = "user_requested";
-    active.worker.approvals.cancelThread(threadId);
-    active.worker.interactions.cancelThread(threadId);
-    return { requested: await active.worker.turns.interruptActiveTurn() };
+    if (active) {
+      active.interruptionReason = "user_requested";
+      active.worker.approvals.cancelThread(threadId);
+      active.worker.interactions.cancelThread(threadId);
+      return { requested: await active.worker.turns.interruptActiveTurn() };
+    }
+
+    const pending = this.#store.pendingForThread(threadId);
+    if (pending?.status === "queued") {
+      const stored = this.#store.tryFinish(
+        pending.id,
+        ["queued"],
+        "interrupted",
+        this.#interruptedEvent(pending),
+        this.#now(),
+        { interruptionReason: "user_requested" },
+      );
+      if (stored) {
+        this.#emit(stored, "session");
+        await this.#releaseTaskAttachmentLease(pending.id);
+        this.#schedule();
+        return { requested: true };
+      }
+      if (this.#launching.has(threadId) || this.#workers.has(threadId)) {
+        return this.stopTask(threadId);
+      }
+    }
+    return { requested: false };
   }
 
   async answerInteraction(
@@ -577,6 +635,9 @@ export class SessionWorkerManager {
     if (this.#offlineTimer) clearTimeout(this.#offlineTimer);
     if (this.#queueRetryTimer) clearTimeout(this.#queueRetryTimer);
     if (this.#attachmentLeaseTimer) clearInterval(this.#attachmentLeaseTimer);
+    for (const launching of this.#launching.values()) {
+      launching.cancelRequested = true;
+    }
     await this.#scheduleTail.catch(() => {});
     await Promise.all([...this.#workers.values()].map(async (active) => {
       this.#clearStartTimer(active);
@@ -592,6 +653,7 @@ export class SessionWorkerManager {
       await provisional.worker.close().catch(() => {});
     }));
     this.#workers.clear();
+    this.#launching.clear();
     this.#provisionalWorkers.clear();
     await Promise.all([...this.#attachmentLeases.entries()].map(([taskId, lease]) =>
       this.#releaseAttachmentLease(taskId, lease)
@@ -616,7 +678,7 @@ export class SessionWorkerManager {
       : "manual";
     let result;
     try {
-      result = this.#store.enqueue({
+      result = this.#store.admit({
         id: preparedAttachments?.taskId ?? randomUUID(),
         clientMessageId,
         projectId,
@@ -633,14 +695,25 @@ export class SessionWorkerManager {
       }
       throw error;
     }
+    if (result.outcome === "task_already_running" || result.outcome === "project_busy") {
+      if (preparedAttachments) {
+        void this.#releaseAttachmentLease(preparedAttachments.taskId, preparedAttachments.lease);
+      }
+      throw new WorkerManagerError(
+        result.outcome,
+        result.outcome === "task_already_running"
+          ? "这个会话已有任务正在运行。"
+          : "这个项目已有另一个任务正在运行。",
+      );
+    }
     if (preparedAttachments) {
-      if (result.duplicate) {
+      if (result.outcome === "duplicate") {
         void this.#releaseAttachmentLease(preparedAttachments.taskId, preparedAttachments.lease);
       } else {
         this.#attachmentLeases.set(result.task.id, preparedAttachments.lease);
       }
     }
-    if (!result.duplicate) {
+    if (result.outcome === "accepted") {
       const stored = this.#store.appendEvent(result.task.id, threadId, {
         type: "task.queued",
         sessionId: threadId,
@@ -657,7 +730,7 @@ export class SessionWorkerManager {
       accepted: true,
       taskId: result.task.id,
       status: result.task.status,
-      duplicate: result.duplicate,
+      duplicate: result.outcome === "duplicate",
     };
   }
 
@@ -765,30 +838,58 @@ export class SessionWorkerManager {
     let capacityBlocked = false;
     for (const task of this.#store.queued()) {
       if (this.#threadOperationTails.has(task.threadId)) continue;
+      if (this.#launching.has(task.threadId)) continue;
+      if (this.#workers.has(task.threadId)) continue;
       const provisional = this.#provisionalWorkers.has(task.threadId);
       if (this.#workerCount() - (provisional ? 1 : 0) >= this.#maxWorkers) {
         capacityBlocked = true;
         break;
       }
-      if (this.#workers.has(task.threadId)) continue;
       const ownerId = `worker:${task.threadId}`;
       if (!this.#locks.acquire(task.projectId, ownerId, task.threadId)) continue;
-      if (!provisional && (await this.#memoryGate()).blocked) {
-        this.#locks.release(task.projectId, ownerId);
-        capacityBlocked = true;
-        break;
+      const launching = this.#beginLaunch(task, ownerId);
+      try {
+        if (!provisional && (await this.#memoryGate()).blocked) {
+          if (launching.cancelRequested) {
+            await this.#abandonLaunch(launching);
+          } else {
+            this.#locks.release(task.projectId, ownerId);
+          }
+          capacityBlocked = true;
+          break;
+        }
+        if (launching.cancelRequested) {
+          await this.#abandonLaunch(launching);
+          continue;
+        }
+        await this.#startQueuedTask(launching);
+      } finally {
+        this.#endLaunch(launching);
       }
-      await this.#startQueuedTask(task, ownerId);
     }
     if (capacityBlocked || this.#store.queued().length > 0) this.#armQueueRetry();
   }
 
-  async #startQueuedTask(task: WorkerTask, ownerId: string): Promise<void> {
+  async #startQueuedTask(launching: LaunchingTask): Promise<void> {
+    const task = launching.task;
+    const ownerId = launching.ownerId;
     let worker: SessionWorker | null = null;
     let workerReserved = false;
     try {
+      if (launching.cancelRequested) {
+        await this.#abandonLaunch(launching);
+        return;
+      }
       const attachments = await this.#ensureTaskAttachments(task);
+      if (launching.cancelRequested) {
+        await this.#abandonLaunch(launching);
+        return;
+      }
       await this.#registerTaskAttachments(task.threadId, task.clientMessageId, attachments);
+      if (launching.cancelRequested) {
+        await this.#abandonLaunch(launching);
+        return;
+      }
       const provisional = this.#provisionalWorkers.get(task.threadId);
       if (provisional?.closeTimer) clearTimeout(provisional.closeTimer);
       if (provisional) this.#provisionalWorkers.delete(task.threadId);
@@ -799,23 +900,38 @@ export class SessionWorkerManager {
         workerReserved = true;
         worker = await this.#createWorker(task.projectId, task.threadId);
       }
-      this.#sessionSnapshots.set(task.threadId, worker.opened);
-      const permissionMode = task.permissionMode;
-      await this.#reconcileFullAccess(worker, permissionMode === "full_access");
-      const active: ActiveWorker = {
-        task: this.#store.markRunning(task.id, null, permissionMode, this.#now()),
-        worker,
-        ownerId,
-        finishing: false,
-        interruptionReason: null,
-        startTimer: null,
-      };
-      this.#workers.set(task.threadId, active);
-      this.#applyAttachmentMappings(task.threadId, this.peekAttachmentMappings(task.threadId));
+      launching.worker = worker;
       if (workerReserved) {
         this.#workerReservations -= 1;
         workerReserved = false;
       }
+      if (launching.cancelRequested) {
+        await this.#abandonLaunch(launching);
+        return;
+      }
+      this.#sessionSnapshots.set(task.threadId, worker.opened);
+      const permissionMode = task.permissionMode;
+      await this.#reconcileFullAccess(worker, permissionMode === "full_access");
+      if (launching.cancelRequested) {
+        await this.#abandonLaunch(launching);
+        return;
+      }
+      const marked = this.#store.tryMarkRunning(task.id, null, permissionMode, this.#now());
+      if (!marked) {
+        await this.#abandonLaunch(launching);
+        return;
+      }
+      const active: ActiveWorker = {
+        task: marked,
+        worker,
+        ownerId,
+        finishing: false,
+        cleaned: false,
+        interruptionReason: launching.cancelRequested ? "user_requested" : null,
+        startTimer: null,
+      };
+      this.#workers.set(task.threadId, active);
+      this.#applyAttachmentMappings(task.threadId, this.peekAttachmentMappings(task.threadId));
       active.startTimer = setTimeout(() => {
         if (!active.worker.turns.activeTurnId && !active.finishing) {
           void this.#finishWithoutTurn(active);
@@ -823,20 +939,46 @@ export class SessionWorkerManager {
       }, TASK_START_TIMEOUT_MS);
       active.startTimer.unref();
 
-      const nativeTurnId = task.kind === "message"
-        ? await worker.turns.startTextTurn(task.payload, attachments)
+      if (launching.cancelRequested) {
+        await this.#abandonLaunch(launching);
+        return;
+      }
+
+      launching.nativeStartInvoked = true;
+      const startPromise = task.kind === "message"
+        ? worker.turns.startTextTurn(task.payload, attachments)
         : task.kind === "compact"
-        ? await worker.commands.compact()
-        : await worker.commands.review();
+        ? worker.commands.compact()
+        : worker.commands.review();
+      if (launching.cancelRequested) {
+        active.interruptionReason = "user_requested";
+        active.worker.approvals.cancelThread(task.threadId);
+        active.worker.interactions.cancelThread(task.threadId);
+        await worker.turns.interruptActiveTurn().catch(() => false);
+      }
+      const nativeTurnId = await startPromise;
+      if (launching.cancelRequested && !worker.turns.activeTurnId) {
+        await this.#abandonLaunch(launching);
+        return;
+      }
       if (nativeTurnId && this.#workers.get(task.threadId) === active) {
         this.#store.setNativeTurnId(task.id, nativeTurnId, this.#now());
       }
     } catch (error) {
       if (workerReserved) this.#workerReservations -= 1;
-      if (worker && this.#workers.get(task.threadId)?.worker === worker) {
-        await this.#failActive(this.#workers.get(task.threadId)!, error);
+      if (error instanceof CodexTurnCancelledError || launching.cancelRequested) {
+        await this.#abandonLaunch(launching);
+        return;
+      }
+      const active = this.#workers.get(task.threadId);
+      if (worker && active?.worker === worker) {
+        await this.#failActive(active, error);
       } else {
-        const event = this.#store.finish(task.id, "failed", {
+        const event = this.#store.tryFinish(task.id, [
+          "queued",
+          "running",
+          "waiting_for_permission",
+        ], "failed", {
           type: "task.completed",
           sessionId: task.threadId,
           taskId: task.id,
@@ -846,7 +988,7 @@ export class SessionWorkerManager {
             ? error.message
             : "Worker 无法启动，请查看服务日志。",
         }, this.#now(), { error: errorMessage(error) });
-        this.#emit(event, "session");
+        if (event) this.#emit(event, "session");
         await worker?.close().catch(() => {});
         this.#locks.release(task.projectId, ownerId);
         await this.#releaseTaskAttachmentLease(task.id);
@@ -890,14 +1032,18 @@ export class SessionWorkerManager {
         : event.status === "failed"
         ? "failed"
         : "completed";
-      const stored = this.#store.finish(active.task.id, status, {
+      const stored = this.#store.tryFinish(active.task.id, [
+        "queued",
+        "running",
+        "waiting_for_permission",
+      ], status, {
         ...browserEvent,
         interruptionReason: active.interruptionReason,
       }, this.#now(), {
         error: event.error,
         interruptionReason: active.interruptionReason,
       });
-      this.#emit(stored, "session");
+      if (stored) this.#emit(stored, "session");
       void this.#cleanupActive(active);
       return;
     }
@@ -1068,14 +1214,22 @@ export class SessionWorkerManager {
   async #finishWithoutTurn(active: ActiveWorker): Promise<void> {
     if (active.finishing || this.#workers.get(active.task.threadId) !== active) return;
     active.finishing = true;
-    const stored = this.#store.finish(active.task.id, "completed", {
+    const status = active.interruptionReason === "user_requested" ? "interrupted" : "completed";
+    const stored = this.#store.tryFinish(active.task.id, [
+      "queued",
+      "running",
+      "waiting_for_permission",
+    ], status, {
       type: "task.completed",
       sessionId: active.task.threadId,
       taskId: active.task.id,
-      status: "completed",
+      status,
       error: null,
-    }, this.#now());
-    this.#emit(stored, "session");
+      interruptionReason: active.interruptionReason,
+    }, this.#now(), {
+      interruptionReason: active.interruptionReason,
+    });
+    if (stored) this.#emit(stored, "session");
     await this.#cleanupActive(active);
   }
 
@@ -1083,19 +1237,25 @@ export class SessionWorkerManager {
     if (active.finishing) return;
     active.finishing = true;
     console.error(`会话 Worker ${active.task.threadId} 失败：${errorMessage(error)}`);
-    const stored = this.#store.finish(active.task.id, "failed", {
+    const stored = this.#store.tryFinish(active.task.id, [
+      "queued",
+      "running",
+      "waiting_for_permission",
+    ], "failed", {
       type: "task.completed",
       sessionId: active.task.threadId,
       taskId: active.task.id,
       status: "failed",
       error: "会话 Worker 异常结束，请查看服务日志。",
     }, this.#now(), { error: errorMessage(error) });
-    this.#emit(stored, "session");
+    if (stored) this.#emit(stored, "session");
     await this.#cleanupActive(active);
   }
 
   async #cleanupActive(active: ActiveWorker): Promise<void> {
     this.#clearStartTimer(active);
+    if (active.cleaned) return;
+    active.cleaned = true;
     if (this.#workers.get(active.task.threadId) === active) {
       this.#workers.delete(active.task.threadId);
     }
@@ -1108,6 +1268,86 @@ export class SessionWorkerManager {
       this.#locks.release(active.task.projectId, active.ownerId);
       this.#schedule();
     }
+  }
+
+  #assertProjectAccepts(projectId: string, threadId: string): void {
+    const pending = this.#store.pendingForProject(projectId);
+    if (!pending) return;
+    if (pending.threadId === threadId) {
+      throw new WorkerManagerError("task_already_running", "这个会话已有任务正在运行。");
+    }
+    throw new WorkerManagerError("project_busy", "这个项目已有另一个任务正在运行。");
+  }
+
+  #beginLaunch(task: WorkerTask, ownerId: string): LaunchingTask {
+    const launching: LaunchingTask = {
+      task,
+      ownerId,
+      worker: null,
+      cancelRequested: false,
+      nativeStartInvoked: false,
+      settled: false,
+    };
+    this.#launching.set(task.threadId, launching);
+    return launching;
+  }
+
+  #endLaunch(launching: LaunchingTask): void {
+    if (this.#launching.get(launching.task.threadId) === launching) {
+      this.#launching.delete(launching.task.threadId);
+    }
+  }
+
+  async #abandonLaunch(launching: LaunchingTask): Promise<void> {
+    if (launching.settled) return;
+    launching.settled = true;
+    const task = launching.task;
+    const active = this.#workers.get(task.threadId);
+    if (active && active.ownerId === launching.ownerId) {
+      if (!active.finishing) {
+        active.interruptionReason = "user_requested";
+        active.finishing = true;
+        const stored = this.#store.tryFinish(
+          task.id,
+          ["queued", "running", "waiting_for_permission"],
+          "interrupted",
+          this.#interruptedEvent(task),
+          this.#now(),
+          { interruptionReason: "user_requested" },
+        );
+        if (stored) this.#emit(stored, "session");
+        await this.#cleanupActive(active);
+      }
+      return;
+    }
+    const stored = this.#store.tryFinish(
+      task.id,
+      ["queued", "running", "waiting_for_permission"],
+      "interrupted",
+      this.#interruptedEvent(task),
+      this.#now(),
+      { interruptionReason: "user_requested" },
+    );
+    if (stored) this.#emit(stored, "session");
+    if (launching.worker) {
+      await launching.worker.close().catch((error: unknown) => {
+        console.error(`关闭启动中的会话 Worker 失败：${errorMessage(error)}`);
+      });
+    }
+    this.#locks.release(task.projectId, launching.ownerId);
+    await this.#releaseTaskAttachmentLease(task.id);
+    this.#schedule();
+  }
+
+  #interruptedEvent(task: WorkerTask): Record<string, unknown> & { type: string } {
+    return {
+      type: "task.completed",
+      sessionId: task.threadId,
+      taskId: task.id,
+      status: "interrupted",
+      error: null,
+      interruptionReason: "user_requested",
+    };
   }
 
   #clearStartTimer(active: ActiveWorker): void {

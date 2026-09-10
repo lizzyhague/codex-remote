@@ -110,6 +110,7 @@ const state = {
   mobileSidebarOpen: false,
   noticeAction: null,
   running: false,
+  stopping: false,
   commandBusy: false,
   controlsTask: false,
   fullAccessEnabled: false,
@@ -424,6 +425,7 @@ async function connect(token) {
     state.connectionReady = false;
     state.backgroundWorkers = false;
     state.running = false;
+    state.stopping = false;
     state.commandBusy = false;
     state.controlsTask = false;
     hideThinking();
@@ -623,20 +625,21 @@ async function startSession() {
   }
 }
 
-async function resumeSession(sessionId) {
+async function resumeSession(sessionId, options = {}) {
+  const force = options.force === true;
   const selected = findSessionSummary(sessionId);
   if (selected && !directoryAvailable(selected.projectId)) {
     showAlert("这个会话的工作目录已经不在了。", "无法打开会话");
     return;
   }
   if (selected?.projectId && selected.projectId !== state.projectId) {
-    if (state.running && !state.backgroundWorkers) return;
+    if (!force && state.running && !state.backgroundWorkers) return;
     state.projectId = selected.projectId;
     stateSet(PROJECT_KEY, state.projectId);
     elements.projectSelect.value = state.projectId;
     await loadSessions();
   }
-  if (!state.projectId || (state.running && !state.backgroundWorkers)) return;
+  if (!state.projectId || (!force && state.running && !state.backgroundWorkers)) return;
   setNavigationBusy(true);
   hideNotice();
   try {
@@ -663,6 +666,7 @@ function applyOpenedSession(opened, { preserveAttachments = false, retryOutbox =
   state.sessionTitle = opened.session.title || "新会话";
   state.running = Boolean(opened.activeTaskId);
   state.controlsTask = Boolean(opened.controlsActiveTask);
+  if (!state.running) state.stopping = false;
   state.fullAccessEnabled = opened.fullAccessEnabled === true;
   if (!preserveAttachments) loadAttachmentDraftForCurrentSession();
   stateSet(SESSION_KEY, state.sessionId);
@@ -1113,6 +1117,7 @@ function resetCurrentSession() {
   renderSessionMetrics();
   state.sessionTitle = "";
   state.running = false;
+  state.stopping = false;
   state.controlsTask = false;
   state.fullAccessEnabled = false;
   state.pendingAttachments = [];
@@ -1292,6 +1297,7 @@ async function sendMessage() {
     // 白写一次——尤其是长消息被后端拒绝或连接刚好断开的时候。
     optimistic.remove();
     state.running = false;
+    state.stopping = false;
     state.controlsTask = false;
     setCurrentSessionState("idle");
     hideThinking();
@@ -1501,12 +1507,20 @@ function displayTextWithAttachments(text, attachments) {
 }
 
 async function stopTask() {
-  if (!state.running || !state.controlsTask) return;
+  if (!state.running || !state.controlsTask || state.stopping) return;
+  state.stopping = true;
   elements.taskButton.disabled = true;
   elements.taskButton.textContent = "停止中";
   try {
-    await request("task.stop");
+    const result = await request("task.stop");
+    if (result?.requested === false) {
+      state.stopping = false;
+      if (state.sessionId) await resumeSession(state.sessionId, { force: true });
+      showNotice("任务已经结束或状态已变化");
+      return;
+    }
   } catch (error) {
+    state.stopping = false;
     showNotice(errorMessage(error));
   } finally {
     updateControls();
@@ -1591,6 +1605,7 @@ function handleServerEvent(event, replay = false) {
       if (!replay) void refreshSessionMetrics();
       state.running = false;
       state.controlsTask = false;
+      state.stopping = false;
       setCurrentSessionState("idle");
       hideThinking();
       if (event.error) showNotice(event.error);
@@ -2523,13 +2538,20 @@ function updateControls() {
   document.getElementById("model-picker-button").disabled = controlsDisabled;
   document.getElementById("permission-picker-button").disabled = controlsDisabled;
   if (controlsDisabled) { closeComposerPicker(); slashCommands.close(); }
-  elements.taskButton.textContent = state.running ? "停止" : "发送";
-  elements.taskButton.classList.toggle("primary", !state.running);
-  elements.taskButton.classList.toggle("danger", state.running);
-  elements.taskButton.disabled = state.running
-    ? !connected || !state.controlsTask
-    : !connected || !hasSession || state.commandBusy || uploading ||
-      (!hasText && !hasAttachments);
+  if (state.stopping) {
+    elements.taskButton.textContent = "停止中";
+    elements.taskButton.classList.toggle("primary", false);
+    elements.taskButton.classList.toggle("danger", true);
+    elements.taskButton.disabled = true;
+  } else {
+    elements.taskButton.textContent = state.running ? "停止" : "发送";
+    elements.taskButton.classList.toggle("primary", !state.running);
+    elements.taskButton.classList.toggle("danger", state.running);
+    elements.taskButton.disabled = state.running
+      ? !connected || !state.controlsTask
+      : !connected || !hasSession || state.commandBusy || uploading ||
+        (!hasText && !hasAttachments);
+  }
 }
 
 function setNavigationBusy(busy) {

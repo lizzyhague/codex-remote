@@ -6,7 +6,10 @@ import path from "node:path";
 import test from "node:test";
 
 import type { ApprovalEvent, ApprovalRequest } from "../approvals/broker.ts";
-import type { CodexStreamEvent } from "../app-server/turn-session.ts";
+import {
+  CodexTurnCancelledError,
+  type CodexStreamEvent,
+} from "../app-server/turn-session.ts";
 import type { ProjectCatalog } from "../projects/catalog.ts";
 import type { TrashStore } from "../sessions/trash-store.ts";
 import { ProjectTaskLocks } from "../server/project-locks.ts";
@@ -445,6 +448,295 @@ test("accepts a PDF attachment and hides its storage path from browser events", 
   assert.ok(serialized.includes("附件：report.pdf") || serialized.includes("report.pdf"));
 });
 
+test("rejects another thread in the same project before the first task ends", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 10 });
+  fixture.manager.start();
+  const first = fixture.manager.enqueueMessage("project-1", "thread-1", "message-b", "B 在跑");
+  await fixture.waitForWorker("thread-1");
+
+  assert.throws(
+    () => fixture.manager.enqueueMessage("project-1", "thread-2", "message-a", "A 想发"),
+    (error: unknown) => error instanceof WorkerManagerError && error.code === "project_busy",
+  );
+  assert.equal(fixture.store.findByClientMessageId("message-a"), null);
+  assert.equal(fixture.store.eventsForTask(first.taskId).some((item) =>
+    item.event.type === "task.queued"
+  ), true);
+  fixture.workers[0]!.complete("completed");
+  await waitFor(() => fixture.store.require(first.taskId).status === "completed");
+  await delay(20);
+  assert.equal(fixture.store.findByClientMessageId("message-a"), null);
+});
+
+test("rejects a second message on the same thread", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 10 });
+  fixture.manager.start();
+  fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "第一条");
+  await fixture.waitForWorker();
+  assert.throws(
+    () => fixture.manager.enqueueMessage("project-1", "thread-1", "message-2", "第二条"),
+    (error: unknown) =>
+      error instanceof WorkerManagerError && error.code === "task_already_running",
+  );
+  assert.equal(fixture.store.findByClientMessageId("message-2"), null);
+});
+
+test("duplicate clientMessageId retries are not blocked by the busy check", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 10 });
+  fixture.manager.start();
+  const first = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "同一条");
+  const retried = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "同一条");
+  assert.equal(retried.duplicate, true);
+  assert.equal(retried.taskId, first.taskId);
+  assert.equal(fixture.store.findByClientMessageId("message-1")?.id, first.taskId);
+});
+
+test("different projects stay independent and capacity still queues", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 10, maxWorkers: 1 });
+  fixture.manager.start();
+  const first = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "项目一");
+  await fixture.waitForWorker("thread-1");
+  const second = fixture.manager.enqueueMessage("project-2", "thread-2", "message-2", "项目二");
+  assert.equal(second.duplicate, false);
+  assert.equal(fixture.store.require(second.taskId).status, "queued");
+  fixture.workers[0]!.complete("completed");
+  await waitFor(() => fixture.store.require(second.taskId).status === "running");
+});
+
+test("stopping a queued task never starts a Worker", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 10, maxWorkers: 1 });
+  await fixture.manager.startSession("project-2");
+  fixture.manager.start();
+  const accepted = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "排队");
+  await waitFor(() => fixture.store.require(accepted.taskId).status === "queued");
+  const stopped = await fixture.manager.stopTask("thread-1");
+  assert.equal(stopped.requested, true);
+  await waitFor(() => fixture.store.require(accepted.taskId).status === "interrupted");
+  assert.equal(fixture.store.require(accepted.taskId).interruptionReason, "user_requested");
+  assert.equal(fixture.workers.some((worker) => worker.startTurnCalls > 0), false);
+  assert.equal(
+    fixture.store.eventsForTask(accepted.taskId).filter((item) =>
+      item.event.type === "task.completed"
+    ).length,
+    1,
+  );
+  assert.equal(fixture.locks.acquire("project-1", "probe", "thread-x"), true);
+  fixture.locks.release("project-1", "probe");
+});
+
+test("stopping a launching task never calls startTextTurn", async (context) => {
+  let releaseCreate!: () => void;
+  let reportCreateStarted!: () => void;
+  const createStarted = new Promise<void>((resolve) => {
+    reportCreateStarted = resolve;
+  });
+  const createGate = new Promise<void>((resolve) => {
+    releaseCreate = resolve;
+  });
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    beforeWorkerCreate: async () => {
+      reportCreateStarted();
+      await createGate;
+    },
+  });
+  context.after(() => releaseCreate());
+  fixture.manager.start();
+  const accepted = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "启动中");
+  await createStarted;
+  const stopped = await fixture.manager.stopTask("thread-1");
+  assert.equal(stopped.requested, true);
+  releaseCreate();
+  await waitFor(() => fixture.store.require(accepted.taskId).status === "interrupted");
+  assert.equal(fixture.workers.some((worker) => worker.startTurnCalls > 0), false);
+  assert.equal(fixture.locks.acquire("project-1", "probe", "thread-x"), true);
+  fixture.locks.release("project-1", "probe");
+});
+
+test("stopping during turn/start interrupts once and keeps the project busy", async (context) => {
+  let releaseStart!: () => void;
+  let reportStartStarted!: () => void;
+  const startStarted = new Promise<void>((resolve) => {
+    reportStartStarted = resolve;
+  });
+  const startGate = new Promise<void>((resolve) => {
+    releaseStart = resolve;
+  });
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    autoCompleteOnInterrupt: false,
+    beforeStartTurn: async () => {
+      reportStartStarted();
+      await startGate;
+    },
+  });
+  context.after(() => releaseStart());
+  fixture.manager.start();
+  const accepted = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "飞行中");
+  await startStarted;
+  const firstStop = fixture.manager.stopTask("thread-1");
+  const secondStop = fixture.manager.stopTask("thread-1");
+  releaseStart();
+  assert.equal((await firstStop).requested, true);
+  assert.equal((await secondStop).requested, true);
+  await waitFor(() => fixture.workers[0]?.interruptCount === 1);
+  assert.equal(fixture.workers[0]!.interruptCount, 1);
+  assert.throws(
+    () => fixture.manager.enqueueMessage("project-1", "thread-2", "message-2", "还不能发"),
+    (error: unknown) => error instanceof WorkerManagerError && error.code === "project_busy",
+  );
+  fixture.workers[0]!.complete("interrupted");
+  await waitFor(() => fixture.store.require(accepted.taskId).status === "interrupted");
+  const next = fixture.manager.enqueueMessage("project-1", "thread-2", "message-3", "现在可以");
+  assert.equal(next.duplicate, false);
+});
+
+test("stopping compact before native start does not compact", async (context) => {
+  let releaseCreate!: () => void;
+  let reportCreateStarted!: () => void;
+  const createStarted = new Promise<void>((resolve) => {
+    reportCreateStarted = resolve;
+  });
+  const createGate = new Promise<void>((resolve) => {
+    releaseCreate = resolve;
+  });
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    beforeWorkerCreate: async () => {
+      reportCreateStarted();
+      await createGate;
+    },
+  });
+  context.after(() => releaseCreate());
+  fixture.manager.start();
+  const accepted = fixture.manager.enqueueCommandTask(
+    "project-1",
+    "thread-1",
+    "compact-1",
+    "compact",
+  );
+  await createStarted;
+  assert.equal((await fixture.manager.stopTask("thread-1")).requested, true);
+  releaseCreate();
+  await waitFor(() => fixture.store.require(accepted.taskId).status === "interrupted");
+  assert.equal(fixture.workers.reduce((sum, worker) => sum + worker.compactCalls, 0), 0);
+});
+
+test("stopping review before native start does not review", async (context) => {
+  let releaseCreate!: () => void;
+  let reportCreateStarted!: () => void;
+  const createStarted = new Promise<void>((resolve) => {
+    reportCreateStarted = resolve;
+  });
+  const createGate = new Promise<void>((resolve) => {
+    releaseCreate = resolve;
+  });
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    beforeWorkerCreate: async () => {
+      reportCreateStarted();
+      await createGate;
+    },
+  });
+  context.after(() => releaseCreate());
+  fixture.manager.start();
+  const accepted = fixture.manager.enqueueCommandTask(
+    "project-1",
+    "thread-1",
+    "review-1",
+    "review",
+  );
+  await createStarted;
+  assert.equal((await fixture.manager.stopTask("thread-1")).requested, true);
+  releaseCreate();
+  await waitFor(() => fixture.store.require(accepted.taskId).status === "interrupted");
+  assert.equal(fixture.workers.reduce((sum, worker) => sum + worker.reviewCalls, 0), 0);
+});
+
+test("busy attachment messages release the lease and leave no mapping", async (context) => {
+  let released = 0;
+  const uploads: NonNullable<SessionWorkerManagerOptions["uploads"]> = {
+    async createLease(binding, ownerId, attachmentIds) {
+      return {
+        leaseId: `lease-${ownerId}`,
+        ownerId,
+        expiresAtMs: Date.now() + 900_000,
+        attachments: attachmentIds.map((id) => ({
+          id,
+          ...binding,
+          originalName: "note.txt",
+          path: "/private/uploads/note.txt",
+          declaredMime: "text/plain",
+          detectedMime: "text/plain",
+          kind: "file" as const,
+          size: 4,
+          sha256: "c".repeat(64),
+          createdAtMs: 1,
+          expiresAtMs: 2,
+        })),
+      };
+    },
+    async renewLease(leaseId) {
+      return { leaseId, expiresAtMs: Date.now() + 900_000 };
+    },
+    async releaseLease() {
+      released += 1;
+    },
+  };
+  const fixture = await managerFixture(context, { offlineGraceMs: 10, uploads });
+  fixture.manager.start();
+  await fixture.manager.enqueueMessageWithAttachments(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "先跑",
+    ["attachment-1"],
+  );
+  await fixture.waitForWorker("thread-1");
+  const prepared = await fixture.manager.prepareMessageAttachments(
+    "project-1",
+    "thread-2",
+    ["attachment-2"],
+    "看附件",
+  );
+  assert.throws(
+    () => fixture.manager.enqueueMessage(
+      "project-1",
+      "thread-2",
+      "message-2",
+      "看附件",
+      prepared,
+    ),
+    (error: unknown) => error instanceof WorkerManagerError && error.code === "project_busy",
+  );
+  await waitFor(() => released === 1);
+  assert.equal(fixture.store.findByClientMessageId("message-2"), null);
+  assert.deepEqual(fixture.attachmentIndex.peek("thread-2"), []);
+});
+
+test("repeated stop on a running task interrupts once", async (context) => {
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    autoCompleteOnInterrupt: false,
+  });
+  fixture.manager.start();
+  const accepted = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "重复停");
+  const worker = await fixture.waitForWorker();
+  const first = fixture.manager.stopTask("thread-1");
+  const second = fixture.manager.stopTask("thread-1");
+  assert.equal((await first).requested, true);
+  assert.equal((await second).requested, true);
+  assert.equal(worker.interruptCount, 1);
+  worker.complete("interrupted");
+  await waitFor(() => fixture.store.require(accepted.taskId).status === "interrupted");
+  assert.equal(
+    fixture.store.eventsForTask(accepted.taskId).filter((item) =>
+      item.event.type === "task.completed"
+    ).length,
+    1,
+  );
+});
+
 async function managerFixture(
   context: test.TestContext,
   options: {
@@ -456,6 +748,10 @@ async function managerFixture(
     minAvailableMemoryBytes?: number;
     availableMemory?: SessionWorkerManagerOptions["availableMemory"];
     beforeWorkerCreate?: () => Promise<void>;
+    beforeStartTurn?: () => Promise<void>;
+    beforeCompact?: () => Promise<void>;
+    beforeReview?: () => Promise<void>;
+    autoCompleteOnInterrupt?: boolean;
     uploads?: SessionWorkerManagerOptions["uploads"];
   },
 ) {
@@ -466,11 +762,12 @@ async function managerFixture(
     store.setSessionFullAccess("thread-1", options.persistedFullAccess, 1);
   }
   const workers: FakeWorker[] = [];
+  const locks = new ProjectTaskLocks();
   const manager = new SessionWorkerManager({
     store,
     projects: {} as ProjectCatalog,
     trash: {} as TrashStore,
-    locks: new ProjectTaskLocks(),
+    locks,
     ...(options.maxWorkers ? { maxWorkers: options.maxWorkers } : {}),
     offlineGraceMs: options.offlineGraceMs,
     queueRetryMs: 5,
@@ -486,6 +783,14 @@ async function managerFixture(
         workerOptions,
         options.fullAccess === true,
         options.toggleFullAccessFails === true,
+        {
+          ...(options.beforeStartTurn ? { beforeStartTurn: options.beforeStartTurn } : {}),
+          ...(options.beforeCompact ? { beforeCompact: options.beforeCompact } : {}),
+          ...(options.beforeReview ? { beforeReview: options.beforeReview } : {}),
+          ...(options.autoCompleteOnInterrupt === undefined
+            ? {}
+            : { autoCompleteOnInterrupt: options.autoCompleteOnInterrupt }),
+        },
       );
       workers.push(worker);
       return worker as unknown as SessionWorker;
@@ -502,40 +807,23 @@ async function managerFixture(
     manager,
     store,
     workers,
-    waitForWorker: async () => {
-      await waitFor(() => workers.length > 0 && workers[0]!.started);
-      return workers[0]!;
+    locks,
+    attachmentIndex,
+    waitForWorker: async (threadId?: string) => {
+      await waitFor(() =>
+        workers.some((worker) => worker.started && (!threadId || worker.threadId === threadId))
+      );
+      return workers.find((worker) =>
+        worker.started && (!threadId || worker.threadId === threadId)
+      )!;
     },
   };
 }
 
+let fakeThreadSerial = 0;
+
 class FakeWorker {
-  readonly opened = {
-    session: {
-      id: "thread-1",
-      sessionId: "native-session-1",
-      title: "测试会话",
-      preview: "",
-      createdAt: 1,
-      updatedAt: 1,
-      lastReplyAt: null,
-      state: "idle" as const,
-      projectId: "workspace/alpha",
-      marked: false,
-      deletedAt: null,
-      purgeAt: null,
-    },
-    turns: [],
-    activeTurnId: null,
-    runtime: {
-      cwd: "/tmp/project",
-      model: "test",
-      reasoningEffort: null,
-      approvalPolicy: "on-request",
-      sandboxPolicy: { type: "workspace-write" },
-      activePermissionProfile: null,
-    },
-  };
+  readonly opened;
   readonly commands;
   readonly turns;
   readonly approvals;
@@ -546,24 +834,74 @@ class FakeWorker {
   };
   started = false;
   startedAttachments: Array<{ path: string }> = [];
+  startTurnCalls = 0;
+  compactCalls = 0;
+  reviewCalls = 0;
   interruptCount = 0;
   closeCount = 0;
   cancelledApprovals = 0;
   approved = 0;
+  readonly autoCompleteOnInterrupt: boolean;
+  #threadId: string;
   #activeTurnId: string | null = null;
+  #starting = false;
+  #pendingInterrupt = false;
+  #interruptPromise: Promise<boolean> | null = null;
+  #interruptRequested = false;
+  #pendingResolve: ((value: boolean) => void) | null = null;
   #pendingApproval: ApprovalRequest | null = null;
   readonly #options: SessionWorkerOptions;
   #fullAccess: boolean;
   readonly #toggleFullAccessFails: boolean;
+  readonly #beforeStartTurn?: (() => Promise<void>) | undefined;
+  readonly #beforeCompact?: (() => Promise<void>) | undefined;
+  readonly #beforeReview?: (() => Promise<void>) | undefined;
 
   constructor(
     options: SessionWorkerOptions,
     fullAccess: boolean,
     toggleFullAccessFails: boolean,
+    extras: {
+      beforeStartTurn?: (() => Promise<void>) | undefined;
+      beforeCompact?: (() => Promise<void>) | undefined;
+      beforeReview?: (() => Promise<void>) | undefined;
+      autoCompleteOnInterrupt?: boolean | undefined;
+    } = {},
   ) {
     this.#options = options;
+    this.#threadId = options.threadId ?? `new-thread-${++fakeThreadSerial}`;
     this.#fullAccess = fullAccess;
     this.#toggleFullAccessFails = toggleFullAccessFails;
+    this.#beforeStartTurn = extras.beforeStartTurn;
+    this.#beforeCompact = extras.beforeCompact;
+    this.#beforeReview = extras.beforeReview;
+    this.autoCompleteOnInterrupt = extras.autoCompleteOnInterrupt !== false;
+    this.opened = {
+      session: {
+        id: this.#threadId,
+        sessionId: "native-session-1",
+        title: "测试会话",
+        preview: "",
+        createdAt: 1,
+        updatedAt: 1,
+        lastReplyAt: null,
+        state: "idle" as const,
+        projectId: options.projectId,
+        marked: false,
+        deletedAt: null,
+        purgeAt: null,
+      },
+      turns: [],
+      activeTurnId: null,
+      runtime: {
+        cwd: "/tmp/project",
+        model: "test",
+        reasoningEffort: null,
+        approvalPolicy: "on-request",
+        sandboxPolicy: { type: "workspace-write" },
+        activePermissionProfile: null,
+      },
+    };
     this.commands = {
       fullAccessEnabled: () => this.#fullAccess,
       toggleFullAccess: async () => {
@@ -573,28 +911,84 @@ class FakeWorker {
           fullAccessEnabled: this.#fullAccess,
         };
       },
-      compact: async () => "native-turn-1",
-      review: async () => "native-turn-1",
+      compact: async () => {
+        await this.#beforeCompact?.();
+        this.compactCalls += 1;
+        this.#activeTurnId = "native-turn-1";
+        this.#stream({
+          type: "turn_started",
+          threadId: this.#threadId,
+          turnId: "native-turn-1",
+        });
+        return "native-turn-1";
+      },
+      review: async () => {
+        await this.#beforeReview?.();
+        this.reviewCalls += 1;
+        this.#activeTurnId = "native-turn-1";
+        this.#stream({
+          type: "turn_started",
+          threadId: this.#threadId,
+          turnId: "native-turn-1",
+        });
+        return "native-turn-1";
+      },
     };
+    const thisOwner = this;
     this.turns = {
       get activeTurnId() {
         return thisOwner.#activeTurnId;
       },
       setAttachmentMappings: () => {},
       startTextTurn: async (_text: string, attachments: Array<{ path: string }> = []) => {
-        this.started = true;
-        this.startedAttachments = attachments;
-        this.#activeTurnId = "native-turn-1";
-        this.#stream({ type: "turn_started", threadId: "thread-1", turnId: "native-turn-1" });
-        return "native-turn-1";
+        thisOwner.#starting = true;
+        try {
+          if (thisOwner.#pendingInterrupt) {
+            thisOwner.#resolvePending(true);
+            throw new CodexTurnCancelledError();
+          }
+          await thisOwner.#beforeStartTurn?.();
+          thisOwner.startTurnCalls += 1;
+          thisOwner.started = true;
+          thisOwner.startedAttachments = attachments;
+          thisOwner.#activeTurnId = "native-turn-1";
+          thisOwner.#stream({
+            type: "turn_started",
+            threadId: thisOwner.#threadId,
+            turnId: "native-turn-1",
+          });
+          if (thisOwner.#pendingInterrupt) {
+            thisOwner.#interruptRequested = true;
+            thisOwner.interruptCount += 1;
+            thisOwner.#resolvePending(true);
+            if (thisOwner.autoCompleteOnInterrupt) thisOwner.complete("interrupted");
+          }
+          return "native-turn-1";
+        } finally {
+          thisOwner.#starting = false;
+        }
       },
       interruptActiveTurn: async () => {
-        this.interruptCount += 1;
-        this.complete("interrupted");
-        return true;
+        if (thisOwner.#interruptPromise) return thisOwner.#interruptPromise;
+        if (thisOwner.#activeTurnId) {
+          if (thisOwner.#interruptRequested) return true;
+          thisOwner.#interruptRequested = true;
+          thisOwner.interruptCount += 1;
+          if (thisOwner.autoCompleteOnInterrupt) thisOwner.complete("interrupted");
+          return true;
+        }
+        if (thisOwner.#starting) {
+          thisOwner.#pendingInterrupt = true;
+          thisOwner.#interruptPromise = new Promise<boolean>((resolve) => {
+            thisOwner.#pendingResolve = resolve;
+          }).finally(() => {
+            thisOwner.#interruptPromise = null;
+          });
+          return thisOwner.#interruptPromise;
+        }
+        return false;
       },
     };
-    const thisOwner = this;
     this.approvals = {
       pendingForThread: () => this.#pendingApproval ? [this.#pendingApproval] : [],
       answer: (id: string, answer: string) => {
@@ -624,7 +1018,13 @@ class FakeWorker {
   }
 
   get threadId(): string {
-    return "thread-1";
+    return this.#threadId;
+  }
+
+  #resolvePending(value: boolean): void {
+    this.#pendingInterrupt = false;
+    this.#pendingResolve?.(value);
+    this.#pendingResolve = null;
   }
 
   get fullAccessEnabled(): boolean {
@@ -635,7 +1035,7 @@ class FakeWorker {
     this.#pendingApproval = {
       id: "approval-1",
       kind: "file_change",
-      threadId: "thread-1",
+      threadId: this.#threadId,
       turnId: "native-turn-1",
       itemId: "item-1",
       reason: "写文件",
@@ -651,7 +1051,7 @@ class FakeWorker {
     if (!this.#activeTurnId) return;
     this.#stream({
       type: "assistant_text_completed",
-      threadId: "thread-1",
+      threadId: this.#threadId,
       turnId: this.#activeTurnId,
       itemId: "assistant-1",
       text,
@@ -662,7 +1062,7 @@ class FakeWorker {
     if (!this.#activeTurnId) return;
     this.#stream({
       type: "turn_completed",
-      threadId: "thread-1",
+      threadId: this.#threadId,
       turnId: this.#activeTurnId,
       status,
       error: null,

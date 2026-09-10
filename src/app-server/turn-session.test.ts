@@ -330,6 +330,37 @@ test("does not restore a turn that completed before start response", async () =>
   assert.equal(session.activeTurnId, null);
 });
 
+test("interrupts a turn whose start response has not arrived yet", async () => {
+  const transport = new FakeTransport();
+  let finishStart!: (value: unknown) => void;
+  transport.requestHandler = (method) => {
+    if (method === "turn/start") {
+      return new Promise((resolve) => {
+        finishStart = resolve;
+      });
+    }
+    return Promise.resolve({});
+  };
+  const session = new CodexTurnSession(transport, "thread-1");
+
+  const start = session.startTextTurn("启动中停止");
+  const first = session.interruptActiveTurn();
+  const second = session.interruptActiveTurn();
+  finishStart({ turn: { id: "turn-1" } });
+
+  assert.equal(await start, "turn-1");
+  assert.equal(await first, true);
+  assert.equal(await second, true);
+  assert.deepEqual(
+    transport.requests.filter((item) => item.method === "turn/interrupt"),
+    [{
+      method: "turn/interrupt",
+      params: { threadId: "thread-1", turnId: "turn-1" },
+    }],
+  );
+  assert.equal(session.activeTurnId, "turn-1");
+});
+
 test("sends only one interrupt request for repeated stop clicks", async () => {
   const transport = new FakeTransport();
   const session = new CodexTurnSession(transport, "thread-1", "turn-1");

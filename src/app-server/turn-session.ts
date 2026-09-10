@@ -105,6 +105,13 @@ export class CodexAttachmentError extends Error {
   }
 }
 
+export class CodexTurnCancelledError extends Error {
+  constructor() {
+    super("任务在启动前已取消。");
+    this.name = "CodexTurnCancelledError";
+  }
+}
+
 /**
  * 管理一个 Codex 会话中的当前任务，并把 app-server 通知缩成前端需要的事件。
  * 它不负责 WebSocket，也不会把 app-server 的原始协议暴露给浏览器。
@@ -120,6 +127,12 @@ export class CodexTurnSession {
   #rawExecTools = new Map<string, { turnId: string; tool: PublicToolView }>();
   #interruptPromise: Promise<boolean> | null = null;
   #interruptRequestedFor: string | null = null;
+  #pendingInterrupt = false;
+  #startingInterrupt: {
+    promise: Promise<boolean>;
+    resolve: (value: boolean) => void;
+    reject: (error: unknown) => void;
+  } | null = null;
   #submittedUserText: string | null = null;
   #attachmentMappings: AttachmentDisplayMapping[] = [];
 
@@ -168,6 +181,10 @@ export class CodexTurnSession {
     validateCodexTurnAttachments(attachments, text);
     this.#starting = true;
     try {
+      if (this.#pendingInterrupt) {
+        this.#resolveStartingInterrupt(true);
+        throw new CodexTurnCancelledError();
+      }
       const displayText = attachmentDisplayText(text, attachments);
       const input: UserInput[] = [
         { type: "text", text: displayText, text_elements: [] },
@@ -189,6 +206,10 @@ export class CodexTurnSession {
         threadId: this.#threadId,
         input,
       };
+      if (this.#pendingInterrupt) {
+        this.#resolveStartingInterrupt(true);
+        throw new CodexTurnCancelledError();
+      }
       this.#submittedUserText = displayText;
       const response = await this.#transport.request<TurnStartResponse>(
         "turn/start",
@@ -202,7 +223,19 @@ export class CodexTurnSession {
       if (!this.#completedBeforeStartResponse.delete(turnId)) {
         this.#activeTurnId = turnId;
       }
+      if (this.#pendingInterrupt) {
+        if (this.#activeTurnId) {
+          await this.#sendInterrupt(this.#activeTurnId);
+        } else {
+          this.#resolveStartingInterrupt(true);
+        }
+      }
       return turnId;
+    } catch (error) {
+      if (this.#pendingInterrupt && !(error instanceof CodexTurnCancelledError)) {
+        this.#rejectStartingInterrupt(error);
+      }
+      throw error;
     } finally {
       this.#starting = false;
       this.#completedBeforeStartResponse.clear();
@@ -215,10 +248,23 @@ export class CodexTurnSession {
     }
 
     const turnId = this.#activeTurnId;
-    if (!turnId) {
-      return Promise.resolve(false);
+    if (turnId) {
+      return this.#sendInterrupt(turnId);
     }
+    if (this.#starting) {
+      this.#pendingInterrupt = true;
+      const pending = this.#ensureStartingInterrupt();
+      this.#interruptPromise = pending.promise.finally(() => {
+        this.#interruptPromise = null;
+      });
+      return this.#interruptPromise;
+    }
+    return Promise.resolve(false);
+  }
+
+  #sendInterrupt(turnId: string): Promise<boolean> {
     if (this.#interruptRequestedFor === turnId) {
+      this.#resolveStartingInterrupt(true);
       return Promise.resolve(true);
     }
 
@@ -229,15 +275,47 @@ export class CodexTurnSession {
     this.#interruptRequestedFor = turnId;
     this.#interruptPromise = this.#transport
       .request<TurnInterruptResponse>("turn/interrupt", params)
-      .then(() => true)
+      .then(() => {
+        this.#resolveStartingInterrupt(true);
+        return true;
+      })
       .catch((error: unknown) => {
         this.#interruptRequestedFor = null;
+        this.#rejectStartingInterrupt(error);
         throw error;
       })
       .finally(() => {
         this.#interruptPromise = null;
       });
     return this.#interruptPromise;
+  }
+
+  #ensureStartingInterrupt(): {
+    promise: Promise<boolean>;
+    resolve: (value: boolean) => void;
+    reject: (error: unknown) => void;
+  } {
+    if (this.#startingInterrupt) return this.#startingInterrupt;
+    let resolve!: (value: boolean) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<boolean>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    this.#startingInterrupt = { promise, resolve, reject };
+    return this.#startingInterrupt;
+  }
+
+  #resolveStartingInterrupt(value: boolean): void {
+    this.#pendingInterrupt = false;
+    this.#startingInterrupt?.resolve(value);
+    this.#startingInterrupt = null;
+  }
+
+  #rejectStartingInterrupt(error: unknown): void {
+    this.#pendingInterrupt = false;
+    this.#startingInterrupt?.reject(error);
+    this.#startingInterrupt = null;
   }
 
   dispose(): void {
@@ -312,12 +390,14 @@ export class CodexTurnSession {
         return;
       }
       this.#activeTurnId = turn.id;
-      this.#interruptRequestedFor = null;
       this.#emit({
         type: "turn_started",
         threadId: this.#threadId,
         turnId: turn.id,
       });
+      if (this.#pendingInterrupt) {
+        void this.#sendInterrupt(turn.id).catch(() => {});
+      }
       return;
     }
 
@@ -345,6 +425,9 @@ export class CodexTurnSession {
       if (this.#activeTurnId === turn.id) {
         this.#activeTurnId = null;
         this.#interruptRequestedFor = null;
+      }
+      if (this.#pendingInterrupt) {
+        this.#resolveStartingInterrupt(true);
       }
       if (this.#starting) {
         this.#completedBeforeStartResponse.add(turn.id);
