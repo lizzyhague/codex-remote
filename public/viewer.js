@@ -5,6 +5,44 @@ const content = document.getElementById("file-content");
 const login = document.getElementById("viewer-login");
 const params = new URLSearchParams(location.search);
 const filePath = params.get("path");
+const VIEWABLE_PATH = /\.(?:md|svg|png|jpe?g|gif|webp|avif|bmp|ico)$/i;
+
+function rewriteRelativeLinks(root) {
+  const base = filePath.split("/");
+  base.pop();
+  for (const link of root.querySelectorAll("a[href]")) {
+    const href = link.getAttribute("href");
+    if (!href || /^(?:https?:|mailto:|\/|#)/i.test(href)) continue;
+    const hashStart = href.indexOf("#");
+    const relative = hashStart < 0 ? href : href.slice(0, hashStart);
+    const hash = hashStart < 0 ? "" : href.slice(hashStart);
+    if (!relative) continue;
+
+    let decoded;
+    try {
+      decoded = decodeURIComponent(relative);
+    } catch {
+      continue;
+    }
+    const segments = [...base];
+    let aboveRoot = false;
+    for (const segment of decoded.split("/")) {
+      if (!segment || segment === ".") continue;
+      if (segment === "..") {
+        if (segments.length <= 1) {
+          aboveRoot = true;
+          break;
+        }
+        segments.pop();
+      } else {
+        segments.push(segment);
+      }
+    }
+    const resolved = segments.join("/");
+    if (aboveRoot || !resolved.startsWith("/") || !VIEWABLE_PATH.test(resolved)) continue;
+    link.href = `/view?${new URLSearchParams({ path: resolved })}${hash}`;
+  }
+}
 
 async function loadFile() {
   if (!filePath || params.getAll("path").length !== 1) {
@@ -29,6 +67,7 @@ async function loadFile() {
   }
   if (markdown) {
     content.append(renderMarkdown(await response.text()));
+    rewriteRelativeLinks(content);
   } else if (response.headers.get("content-type")?.startsWith("image/")) {
     const image = document.createElement("img");
     image.alt = name;

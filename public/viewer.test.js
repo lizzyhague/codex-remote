@@ -20,6 +20,18 @@ async function view(filePath, response) {
       hidden: false,
       append(...children) { this.children.push(...children); },
       addEventListener(type, listener) { this.listeners[type] = listener; },
+      getAttribute(name) { return this[name] ?? null; },
+      querySelectorAll(selector) {
+        const matches = [];
+        function visit(node) {
+          if (selector === "a[href]" && node.tagName === "a" && node.href !== undefined) {
+            matches.push(node);
+          }
+          for (const child of node.children ?? []) visit(child);
+        }
+        for (const child of this.children) visit(child);
+        return matches;
+      },
       setAttribute(name, value) { this[name] = value; },
     };
   }
@@ -84,6 +96,48 @@ test("viewer reports missing files without offering a download", async () => {
   assert.equal(elements.get("file-content").children.length, 0);
   assert.match(elements.get("viewer-status").textContent, /文件不存在/u);
   assert.equal(elements.get("viewer-login").hidden, true);
+});
+
+test("viewer rewrites only supported relative file links", async () => {
+  const source = [
+    "[same](spec.md)",
+    "[parent](../remotes/open-questions.md)",
+    "![image](img/a.png)",
+    "[http](http://example.com/a.md)",
+    "[https](https://example.com/a.md)",
+    "[mail](mailto:test@example.com)",
+    "[absolute](/view?path=%2Fprojects%2Fexisting.md)",
+    "[anchor](#章节)",
+    "[source](../src/main.ts)",
+    "[section](../guide.md#章节)",
+    "[unicode](子目录/%E8%AF%B4%E6%98%8E%20%E6%96%87%E4%BB%B6.md)",
+    "[malformed](bad%ZZ.md)",
+    "[escape](../../../../outside.md)",
+  ].join("\n\n");
+  const { elements } = await view("/projects/notes/plans/current.md", new Response(source));
+  const markdown = elements.get("file-content").children[0];
+  const links = Object.fromEntries(markdown.querySelectorAll("a[href]").map((link) => [
+    link.children[0].textContent,
+    link,
+  ]));
+  const pathOf = (label) => new URL(links[label].href, "https://example.com").searchParams.get("path");
+
+  assert.equal(pathOf("same"), "/projects/notes/plans/spec.md");
+  assert.equal(pathOf("parent"), "/projects/notes/remotes/open-questions.md");
+  assert.equal(pathOf("图片：image"), "/projects/notes/plans/img/a.png");
+  assert.equal(links["图片：image"].className, "markdown-image-link");
+  assert.equal(links.http.href, "http://example.com/a.md");
+  assert.equal(links.https.href, "https://example.com/a.md");
+  assert.equal(links.mail.href, "mailto:test@example.com");
+  assert.equal(links.absolute.href, "/view?path=%2Fprojects%2Fexisting.md");
+  assert.equal(links.anchor.href, "#章节");
+  assert.equal(links.source.href, "../src/main.ts");
+  assert.equal(pathOf("section"), "/projects/notes/guide.md");
+  assert.equal(decodeURIComponent(new URL(links.section.href, "https://example.com").hash), "#章节");
+  assert.equal(pathOf("unicode"), "/projects/notes/plans/子目录/说明 文件.md");
+  assert.equal(links.malformed.href, "bad%ZZ.md");
+  assert.equal(links.escape.href, "../../../../outside.md");
+  assert.equal(links.same.target, undefined);
 });
 
 test("service worker never caches file or authentication responses", async () => {
