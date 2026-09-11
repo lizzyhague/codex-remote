@@ -10,6 +10,7 @@ import { resolveTrashStatePath, TrashStore } from "../sessions/trash-store.ts";
 import { resolveMarkStatePath, MarkStore } from "../sessions/mark-store.ts";
 import { RemoteWebSocketServer } from "./http-server.ts";
 import { ProjectTaskLocks } from "./project-locks.ts";
+import { buildViewableRoots, ensurePreviewRoot } from "./viewable-roots.ts";
 import { AttachmentDisplayIndex } from "../workers/attachment-index.ts";
 import {
   resolveWorkerStateDirectory,
@@ -37,6 +38,7 @@ export async function main(): Promise<void> {
   const uploads = new SharedUploadClient(resolveSharedUploadSocket());
 
   const projects = await ProjectCatalog.fromConfigFile(configPath);
+  const previewRoot = await ensurePreviewRoot();
   const appServer = new RestartableAppServer({ workingDirectory: process.cwd() });
   let approvals: ApprovalBroker | null = null;
   let remote: RemoteWebSocketServer | null = null;
@@ -83,7 +85,7 @@ export async function main(): Promise<void> {
     cleanupTimer.unref();
     remote = new RemoteWebSocketServer({
       token,
-      fileRoots: projects.rootPaths(),
+      fileRoots: buildViewableRoots(projects.rootPaths(), [previewRoot]),
       allowedOrigins: readAllowedOrigins(process.env.CODEX_REMOTE_ALLOWED_ORIGINS),
       uploads,
       onWritersIdle: async () => {

@@ -9,6 +9,7 @@ import { CodexSessionService } from "../sessions/service.ts";
 import { resolveTrashStatePath, TrashStore } from "../sessions/trash-store.ts";
 import { RemoteWebSocketServer } from "./http-server.ts";
 import { ProjectTaskLocks } from "./project-locks.ts";
+import { buildViewableRoots, ensurePreviewRoot } from "./viewable-roots.ts";
 
 const token = "codex-remote-smoke-token-not-a-secret";
 const appServer = new AppServerClient({ workingDirectory: process.cwd() });
@@ -29,11 +30,12 @@ try {
     },
   });
   const projects = await ProjectCatalog.fromConfigFile("config/projects.json");
+  const previewRoot = await ensurePreviewRoot();
   const trash = await TrashStore.open(resolveTrashStatePath());
   approvals = new ApprovalBroker(appServer);
   remote = new RemoteWebSocketServer({
     token,
-    fileRoots: projects.rootPaths(),
+    fileRoots: buildViewableRoots(projects.rootPaths(), [previewRoot]),
     services: {
       projects,
       sessions: new CodexSessionService(appServer, projects, trash),

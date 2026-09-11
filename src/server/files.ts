@@ -28,6 +28,21 @@ async function insideRoot(root: string, candidate: string): Promise<boolean> {
   }
 }
 
+async function insideRootSafe(root: string, candidate: string): Promise<boolean> {
+  try {
+    return await insideRoot(root, candidate);
+  } catch {
+    return false;
+  }
+}
+
+async function insideAnyRoot(roots: readonly string[], candidate: string): Promise<boolean> {
+  for (const root of roots) {
+    if (await insideRootSafe(root, candidate)) return true;
+  }
+  return false;
+}
+
 export async function openViewableFile(roots: readonly string[], input: string): Promise<{
   handle: FileHandle;
   size: number;
@@ -38,17 +53,14 @@ export async function openViewableFile(roots: readonly string[], input: string):
   let handle: FileHandle | undefined;
   try {
     const resolved = await realpath(input);
-    const allowed = (await Promise.all(roots.map((root) => insideRoot(root, resolved))))
-      .some(Boolean);
+    const allowed = await insideAnyRoot(roots, resolved);
     // 白名单后缀的软链接也不能借目标文件的其他后缀绕过类型限制。
     if (!allowed || TYPES[path.extname(resolved).toLowerCase()] !== contentType) return null;
     handle = await open(resolved, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const info = await handle.stat();
     const currentResolved = await realpath(resolved);
     const current = await stat(currentResolved);
-    const stillAllowed = (await Promise.all(
-      roots.map((root) => insideRoot(root, currentResolved)),
-    )).some(Boolean);
+    const stillAllowed = await insideAnyRoot(roots, currentResolved);
     if (!info.isFile() || info.dev !== current.dev || info.ino !== current.ino ||
         !stillAllowed) {
       await handle.close();
