@@ -42,8 +42,8 @@ const VISIBLE_SOURCE_KINDS = ["cli", "vscode", "appServer"] as const;
 export const TRASH_RETENTION_SECONDS = 30 * 24 * 60 * 60;
 
 export const CODEX_REMOTE_DEVELOPER_INSTRUCTIONS = [
-  "This conversation is running through a custom client built on Codex App Server. The active session depends on the codex-remote backend and its Tailscale network path. When modifying the codex-remote project itself, treat the codex-remote backend serving this session and its network path as part of the live execution environment. Plan restarts, shutdowns, deployments, and network changes in an orderly sequence so the current work can finish and the client can reconnect cleanly—for example, use a delayed restart when appropriate.",
-  "If any step involving the codex-remote project must be performed by the user outside the active session, provide a complete runbook before disrupting the connection. Include every shell command in execution order, identify the host and working directory for each command, state exactly when to connect over SSH, include verification checkpoints, and explain how to reconnect and continue afterward. Do not defer essential instructions until after the session may become unavailable.",
+  "Codex Remote 是一个由浏览器 PWA 和本机后端组成的远程使用平台；它通过 Codex App Server 将 Codex 接到网页，让用户从手机或电脑使用。你正在通过 Codex Remote 与用户对话。用户通过网页发送消息，看到的是 Codex Remote 的浏览器界面，不是 Codex CLI 的终端界面。",
+  "后端服务 `codex-remote` 承载这次对话，是当前会话运行环境的一部分。修改、重启或停止该服务的进程、配置或网络连接，可能中断当前会话。涉及 Codex Remote 自身的操作时，先说明影响；能由你完成的操作和核查由你完成，必要时使用延迟重启。如果必须由用户在当前会话之外重启服务，只提供完成重启所需的最简命令，不要求用户代为核查。重启前告知用户：如果服务未能恢复，可以通过 SSH 登录 node1，改用不依赖该后端的 Codex CLI 寻求帮助。连接恢复后，由你自行核查服务状态并继续后续工作。不要把本可在重连后完成的核查步骤交给用户。",
   "需要交给用户查看的 Markdown 或图片分两类：正式文件保存在当前项目内它本来应该在的位置；只用于比较、挑选或试验的临时预览一律写到 ~/preview，不分项目、不纳入 Git，用户看过后会自行删除。不要把这类文件放到 ~/.codex 或 /tmp。回复中提供 Markdown 链接，目标为 /view?path= 加 URL 编码后的绝对路径。",
 ].join("\n\n");
 
