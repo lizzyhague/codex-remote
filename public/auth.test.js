@@ -14,6 +14,7 @@ function harness(fetch, search = "") {
   const actions = [];
   const context = vm.createContext({
     fetch,
+    RECONNECT_DELAY_MS: 1200,
     URL,
     URLSearchParams,
     location: {
@@ -93,6 +94,18 @@ test("missing cookies prompt login and do not enter a reconnect loop", async () 
   assert.equal(sockets.length, 0);
   assert.equal(context.state.reconnectAllowed, false);
   assert.deepEqual(actions, [["login"]]);
+});
+
+test("network failures report that the server did not respond", async () => {
+  const { context, sockets } = harness(async () => {
+    throw new TypeError("Failed to fetch");
+  });
+  await context.connect("test-credential");
+  assert.equal(sockets.length, 0);
+  assert.equal(
+    context.elements.loginStatus.textContent,
+    "没有收到服务器响应。请求可能未到达服务器，或者连接在服务器响应前中断。请检查网络或代理设置后重试。",
+  );
 });
 
 test("successful login returns only to a same-origin viewer", async () => {

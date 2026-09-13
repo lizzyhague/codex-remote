@@ -327,14 +327,21 @@ async function connect(token) {
   setConnectionStatus("connecting", "正在连接");
 
   try {
-    const response = token
-      ? await fetch("/auth/login", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token }),
-        cache: "no-store",
-      })
-      : await fetch("/auth/session", { cache: "no-store" });
+    let response;
+    try {
+      response = token
+        ? await fetch("/auth/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token }),
+          cache: "no-store",
+        })
+        : await fetch("/auth/session", { cache: "no-store" });
+    } catch {
+      throw new Error(
+        "没有收到服务器响应。请求可能未到达服务器，或者连接在服务器响应前中断。请检查网络或代理设置后重试。",
+      );
+    }
     if (generation !== state.generation) return;
     if (response.status === 401) {
       state.reconnectAllowed = false;
