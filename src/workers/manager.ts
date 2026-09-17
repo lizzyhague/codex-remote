@@ -37,6 +37,7 @@ import type {
 import { ProjectTaskLocks } from "../server/project-locks.ts";
 import { redactBrowserStreamEvent, toBrowserStreamEvent } from "../server/stream-events.ts";
 import { SessionWorker, type SessionWorkerOptions } from "./session-worker.ts";
+import type { ApplicationSettingsStore } from "../settings/store.ts";
 import type {
   WorkerInteractionEvent,
   WorkerInteractionRequest,
@@ -103,6 +104,7 @@ export type SessionWorkerManagerOptions = {
     "createLease" | "renewLease" | "releaseLease"
   >;
   attachmentIndex?: AttachmentDisplayIndex;
+  settings?: ApplicationSettingsStore;
 };
 
 export type PreparedTaskAttachments = {
@@ -155,6 +157,7 @@ export class SessionWorkerManager {
   readonly #availableMemory: () => Promise<MemoryReading>;
   readonly #uploads: SessionWorkerManagerOptions["uploads"];
   readonly #attachmentIndex: AttachmentDisplayIndex | null;
+  readonly #settings: ApplicationSettingsStore | undefined;
   readonly #pathRedactors = new Map<string, AttachmentPathStreamRedactor>();
   readonly #listeners = new Set<(event: WorkerManagerEvent) => void>();
   readonly #workers = new Map<string, ActiveWorker>();
@@ -197,6 +200,7 @@ export class SessionWorkerManager {
     this.#availableMemory = options.availableMemory ?? readAvailableMemory;
     this.#uploads = options.uploads;
     this.#attachmentIndex = options.attachmentIndex ?? null;
+    this.#settings = options.settings;
     this.#store.recoverInterrupted(this.#now());
   }
 
@@ -1004,6 +1008,7 @@ export class SessionWorkerManager {
       ...(threadId ? { threadId } : {}),
       ...(this.#codexBinary ? { codexBinary: this.#codexBinary } : {}),
       ...(this.#workingDirectory ? { workingDirectory: this.#workingDirectory } : {}),
+      ...(this.#settings ? { settings: this.#settings } : {}),
       onMetricsNotification: (message) => this.metrics.observe(message),
       onStreamEvent: (event) => this.#handleStreamEvent(event),
       onApprovalEvent: (event) => this.#handleApprovalEvent(event),

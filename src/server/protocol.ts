@@ -1,4 +1,5 @@
 import { isCommandName, type CommandName } from "../commands/catalog.ts";
+import { MAX_DEVELOPER_INSTRUCTIONS_LENGTH } from "../settings/store.ts";
 
 export type BrowserSessionView = "active" | "archived" | "trash";
 export type BrowserSessionMutationAction =
@@ -60,6 +61,12 @@ export type BrowserRequest =
     title: string;
   }
   | { type: "session.metrics"; requestId: string }
+  | { type: "settings.get"; requestId: string }
+  | {
+    type: "settings.update";
+    requestId: string;
+    developerInstructions: string;
+  }
   | { type: "history.older"; requestId: string }
   | { type: "commands.list"; requestId: string }
   | {
@@ -164,6 +171,14 @@ export function parseBrowserRequest(source: string): BrowserRequest {
   switch (value.type) {
     case "session.metrics":
       return { type: "session.metrics", requestId };
+    case "settings.get":
+      return { type: "settings.get", requestId };
+    case "settings.update":
+      return {
+        type: "settings.update",
+        requestId,
+        developerInstructions: requireDeveloperInstructions(value.developerInstructions, requestId),
+      };
     case "projects.list":
       return { type: "projects.list", requestId };
     case "sessions.list":
@@ -410,6 +425,20 @@ function requireAnswers(value: unknown, requestId: string): Record<string, strin
       requireString(entry, "回答", requestId, 4_096));
   }
   return result;
+}
+
+function requireDeveloperInstructions(value: unknown, requestId: string): string {
+  if (typeof value !== "string") {
+    throw new ProtocolError("invalid_field", "附加 Developer 指令必须是字符串。", requestId);
+  }
+  if (value.length > MAX_DEVELOPER_INSTRUCTIONS_LENGTH) {
+    throw new ProtocolError(
+      "invalid_field",
+      `附加 Developer 指令过长。上限是 ${MAX_DEVELOPER_INSTRUCTIONS_LENGTH} 个字符。`,
+      requestId,
+    );
+  }
+  return value;
 }
 
 function requireBoolean(value: unknown, label: string, requestId: string): boolean {

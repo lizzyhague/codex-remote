@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { MAX_DEVELOPER_INSTRUCTIONS_LENGTH } from "../settings/store.ts";
 import {
   MAX_BROWSER_MESSAGE_BYTES,
   parseBrowserRequest,
@@ -176,6 +177,31 @@ test("parses the small stable browser protocol", () => {
     type: "permissions.full-access.toggle",
     requestId: "permissions-toggle-1",
   });
+  assert.deepEqual(parseBrowserRequest(JSON.stringify({
+    type: "settings.get",
+    requestId: "settings-1",
+  })), {
+    type: "settings.get",
+    requestId: "settings-1",
+  });
+  assert.deepEqual(parseBrowserRequest(JSON.stringify({
+    type: "settings.update",
+    requestId: "settings-2",
+    developerInstructions: "",
+  })), {
+    type: "settings.update",
+    requestId: "settings-2",
+    developerInstructions: "",
+  });
+  assert.deepEqual(parseBrowserRequest(JSON.stringify({
+    type: "settings.update",
+    requestId: "settings-3",
+    developerInstructions: "始终用中文回复。",
+  })), {
+    type: "settings.update",
+    requestId: "settings-3",
+    developerInstructions: "始终用中文回复。",
+  });
 });
 
 test("rejects arbitrary paths and unknown operations", () => {
@@ -216,6 +242,21 @@ test("rejects arbitrary paths and unknown operations", () => {
       projectId: "projects/demo",
       sessionId: "session-1",
       title: "名".repeat(161),
+    })),
+    (error: unknown) => error instanceof ProtocolError && error.code === "invalid_field",
+  );
+  assert.throws(
+    () => parseBrowserRequest(JSON.stringify({
+      type: "settings.update",
+      requestId: "settings-too-long",
+      developerInstructions: "字".repeat(MAX_DEVELOPER_INSTRUCTIONS_LENGTH + 1),
+    })),
+    (error: unknown) => error instanceof ProtocolError && error.code === "invalid_field",
+  );
+  assert.throws(
+    () => parseBrowserRequest(JSON.stringify({
+      type: "settings.update",
+      requestId: "settings-missing",
     })),
     (error: unknown) => error instanceof ProtocolError && error.code === "invalid_field",
   );

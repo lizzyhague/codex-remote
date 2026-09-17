@@ -20,6 +20,7 @@ import {
 } from "./manager.ts";
 import type { SessionWorker, SessionWorkerOptions } from "./session-worker.ts";
 import { WorkerStateStore } from "./state-store.ts";
+import { ApplicationSettingsStore } from "../settings/store.ts";
 
 test("keeps an accepted turn running after the browser disconnects", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 10 });
@@ -180,6 +181,25 @@ test("opens the session with a notice when the memory reading degrades", async (
   assert.equal(fixture.workers.length, 1);
   assert.match(String(opened.notice), /已经放行/u);
   assert.match(String(opened.notice), /compressor/u);
+});
+
+test("passes application settings into session workers without mutating an active one", async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-manager-settings-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const settings = await ApplicationSettingsStore.open(path.join(directory, "settings.json"));
+  await settings.update("始终用中文回复。");
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 5,
+    settings,
+  });
+  fixture.manager.start();
+  const opened = await fixture.manager.startSession("project-1");
+  assert.equal(fixture.createdOptions[0]?.settings, settings);
+  const firstWorker = fixture.workers[0];
+  const resumed = await fixture.manager.resumeSession("project-1", opened.opened.session.id);
+  assert.equal(resumed.opened.session.id, opened.opened.session.id);
+  assert.equal(fixture.workers.length, 1);
+  assert.equal(fixture.workers[0], firstWorker);
 });
 
 test("keeps a brand-new empty thread only while a browser is attached", async (context) => {
@@ -753,6 +773,7 @@ async function managerFixture(
     beforeReview?: () => Promise<void>;
     autoCompleteOnInterrupt?: boolean;
     uploads?: SessionWorkerManagerOptions["uploads"];
+    settings?: ApplicationSettingsStore;
   },
 ) {
   const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-manager-"));
@@ -762,12 +783,14 @@ async function managerFixture(
     store.setSessionFullAccess("thread-1", options.persistedFullAccess, 1);
   }
   const workers: FakeWorker[] = [];
+  const createdOptions: SessionWorkerOptions[] = [];
   const locks = new ProjectTaskLocks();
   const manager = new SessionWorkerManager({
     store,
     projects: {} as ProjectCatalog,
     trash: {} as TrashStore,
     locks,
+    ...(options.settings ? { settings: options.settings } : {}),
     ...(options.maxWorkers ? { maxWorkers: options.maxWorkers } : {}),
     offlineGraceMs: options.offlineGraceMs,
     queueRetryMs: 5,
@@ -778,6 +801,7 @@ async function managerFixture(
       source: "linux-meminfo" as const,
     })),
     workerFactory: async (workerOptions) => {
+      createdOptions.push(workerOptions);
       await options.beforeWorkerCreate?.();
       const worker = new FakeWorker(
         workerOptions,
@@ -807,6 +831,7 @@ async function managerFixture(
     manager,
     store,
     workers,
+    createdOptions,
     locks,
     attachmentIndex,
     waitForWorker: async (threadId?: string) => {

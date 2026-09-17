@@ -19,6 +19,7 @@ import {
   InteractionBroker,
   type WorkerInteractionEvent,
 } from "./interaction-broker.ts";
+import type { ApplicationSettingsStore } from "../settings/store.ts";
 
 export type SessionWorkerOptions = {
   projectId: string;
@@ -32,6 +33,7 @@ export type SessionWorkerOptions = {
   onApprovalEvent?: (event: ApprovalEvent) => void;
   onInteractionEvent?: (event: WorkerInteractionEvent) => void;
   onUnexpectedExit?: (threadId: string, error: Error) => void;
+  settings?: ApplicationSettingsStore;
 };
 
 /**
@@ -82,7 +84,9 @@ export class SessionWorker {
     });
     try {
       await client.initialize(codexRemoteInitializeParams());
-      const sessions = new CodexSessionService(client, options.projects, options.trash);
+      const sessions = new CodexSessionService(client, options.projects, options.trash, {
+        ...(options.settings ? { settings: options.settings } : {}),
+      });
       const opened = options.threadId
         ? await sessions.resume(options.projectId, options.threadId)
         : await sessions.start(options.projectId);

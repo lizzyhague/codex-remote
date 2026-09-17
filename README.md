@@ -140,6 +140,7 @@ Codex 运行在权限边界明确的非 root Unix 用户下。
 | `CODEX_REMOTE_ALLOWED_ORIGINS` | 额外允许的浏览器 Origin，逗号分隔；通常留空 |
 | `CODEX_REMOTE_PROJECTS_CONFIG` | 项目根目录配置文件，默认 `config/projects.json` |
 | `CODEX_REMOTE_STATE_FILE` | 回收站登记文件路径 |
+| `CODEX_REMOTE_SETTINGS_FILE` | 应用设置 JSON 路径；未设置时为状态目录下的 `settings.json` |
 | `CODEX_REMOTE_WORK_STATE_FILE` | 已接受任务与事件日志的 SQLite 路径 |
 | `AI_REMOTE_UPLOAD_SOCKET` | 共享上传服务 Unix socket；默认 `~/.local/share/ai-remote/upload.sock` |
 | `CODEX_REMOTE_MAX_WORKERS` | 最大活动 Worker 数，默认 `2` |
@@ -158,6 +159,8 @@ Codex 仍负责保存原生会话和完整历史。为了支持后台执行，Co
 状态库中保存已接受消息、任务状态、脱敏后的流事件和中断原因；这份日志可能包含对话
 正文、附件公开元数据和工具输出，应按与 Codex 会话数据相同的敏感级别保护。附件
 字节由独立上传服务保存，默认仍保留 30 天。回收站登记仍单独保存，默认保留 30 天。
+应用设置（当前是附加 Developer 指令）保存在同一私有状态目录的 `settings.json`，
+由后端写入，不进仓库。空字符串表示不追加用户内容。
 
 浏览器登录时把访问令牌交给 HTTP 登录端点，随后只保存服务签发的 `HttpOnly` 签名
 cookie，令牌本身不写入浏览器存储。cookie 不依赖内存会话表，服务重启后仍然有效；

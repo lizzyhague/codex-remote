@@ -36,6 +36,11 @@ import {
   type ManagedSessionOpen,
   type WorkerManagerEvent,
 } from "../workers/manager.ts";
+import {
+  ApplicationSettingsError,
+  type ApplicationSettings,
+  type ApplicationSettingsStore,
+} from "../settings/store.ts";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -93,6 +98,7 @@ export type BrowserConnectionServices = {
   /** 生产环境使用；省略时保留原有单连接状态机，供现有单元测试逐步迁移。 */
   workers?: SessionWorkerManager;
   uploads?: Pick<SharedUploadClient, "createTicket">;
+  settings?: ApplicationSettingsStore;
 };
 
 export class BrowserRequestError extends Error {
@@ -114,6 +120,7 @@ export class BrowserConnection {
   readonly #unsubscribeApprovals: () => void;
   readonly #unsubscribeSessionChanges: () => void;
   readonly #unsubscribeWorkerEvents: () => void;
+  readonly #unsubscribeSettings: () => void;
   readonly #completionWaiters = new Map<string, () => void>();
   readonly #unsubscribeMetrics: () => void;
   readonly #metrics = new SessionMetricsStore();
@@ -151,6 +158,9 @@ export class BrowserConnection {
     }) ?? (() => {});
     this.#unsubscribeWorkerEvents = services.workers?.onEvent((event) => {
       this.#handleWorkerEvent(event);
+    }) ?? (() => {});
+    this.#unsubscribeSettings = services.settings?.onChange((settings) => {
+      this.#handleSettingsChange(settings);
     }) ?? (() => {});
     services.workers?.clientAuthenticated(this.#id);
   }
@@ -206,7 +216,7 @@ export class BrowserConnection {
       this.#send({ type: "response", requestId: request.requestId, ok: true, data });
     } catch (error) {
       const code = error instanceof BrowserRequestError || error instanceof WorkerManagerError ||
-          error instanceof SharedUploadError
+          error instanceof SharedUploadError || error instanceof ApplicationSettingsError
         ? error.code
         : "request_failed";
       this.#sendFailure(request.requestId, code, publicErrorMessage(error));
@@ -263,6 +273,10 @@ export class BrowserConnection {
           request.projectId,
           await this.#services.sessions.resume(request.projectId, request.sessionId),
         );
+      case "settings.get":
+        return this.#requireSettings().get();
+      case "settings.update":
+        return this.#requireSettings().update(request.developerInstructions);
       case "session.metrics": {
         const sessionId = this.#services.workers
           ? this.#requireManagedSession().sessionId : this.#requireOpenSession().threadId;
@@ -822,6 +836,24 @@ export class BrowserConnection {
     }
   }
 
+  #handleSettingsChange(settings: ApplicationSettings): void {
+    if (!this.#authenticated) return;
+    this.#send({
+      type: "event",
+      event: {
+        type: "settings.updated",
+        developerInstructions: settings.developerInstructions,
+      },
+    });
+  }
+
+  #requireSettings(): ApplicationSettingsStore {
+    if (!this.#services.settings) {
+      throw new BrowserRequestError("settings_unavailable", "当前后端没有启用应用设置。");
+    }
+    return this.#services.settings;
+  }
+
   #handleSessionChange(event: SessionChangeEvent): void {
     if (!this.#authenticated) return;
     const currentSessionId = this.#currentSessionId();
@@ -891,6 +923,7 @@ export class BrowserConnection {
     this.#unsubscribeSessionChanges();
     this.#unsubscribeMetrics();
     this.#unsubscribeWorkerEvents();
+    this.#unsubscribeSettings();
     await this.#queue;
     if (this.#services.workers) {
       this.#services.workers.clientDisconnected(this.#id);

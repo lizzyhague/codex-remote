@@ -463,7 +463,8 @@ button.app-settings-button svg {
 }
 
 .application-settings-dialog {
-  width: min(400px, calc(100vw - 1.5rem));
+  width: min(560px, calc(100vw - 1.5rem));
+  max-height: min(860px, calc(100dvh - 1.5rem));
   padding: 0;
   color: #eceef2;
   background: var(--panel);
@@ -472,8 +473,24 @@ button.app-settings-button svg {
   overflow: hidden;
 }
 
+.application-settings-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
 .application-settings-dialog::backdrop {
   background: rgb(0 0 0 / 55%);
+}
+
+.application-settings-card {
+  min-height: 0;
+  flex: 1;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
 }
 
 .application-settings-heading {
@@ -491,8 +508,27 @@ button.app-settings-button svg {
 
 .application-settings-body {
   display: grid;
-  gap: 0.75rem;
+  align-content: start;
+  gap: 0.9rem;
   padding: 0 1.05rem 1.05rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  anchor-name: --application-settings-body;
+}
+
+.application-settings-section {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.85rem;
+  border-radius: 10px;
+  background: #14171d;
+}
+
+.application-settings-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
 }
 
 .application-settings-title {
@@ -501,6 +537,21 @@ button.app-settings-button svg {
   font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.1em;
+}
+
+.application-settings-title label {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+
+.application-settings-section textarea {
+  width: 100%;
+  padding: 0.65rem;
+  background: #0f1116;
+  color: #fff;
+  resize: vertical;
+  line-height: 1.45;
 }
 
 .application-settings-row {
@@ -537,11 +588,140 @@ button.app-settings-button svg {
   opacity: 0.45;
 }
 
-.application-settings-help {
+.field-help {
   margin: 0;
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--border);
   color: var(--muted);
   font-size: 0.78rem;
   line-height: 1.55;
+}
+
+.field-info[popovertarget="info-developer-instructions"] {
+  anchor-name: --info-developer-instructions;
+}
+
+#info-developer-instructions {
+  position-anchor: --info-developer-instructions;
+}
+
+.field-info {
+  position: relative;
+  display: inline-flex;
+  width: 1rem;
+  height: 1rem;
+  min-height: 0;
+  margin-inline-start: 0.35rem;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.68rem;
+  font-style: italic;
+  line-height: 1;
+  text-transform: none;
+  letter-spacing: normal;
+  vertical-align: baseline;
+}
+
+.field-info::after {
+  content: "";
+  position: absolute;
+  inset: -0.45rem;
+}
+
+.field-info:hover:not(:disabled),
+.field-info:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.field-info-popover {
+  position: fixed;
+  inset: auto;
+  top: anchor(bottom);
+  left: anchor(--application-settings-body left);
+  right: anchor(--application-settings-body right);
+  margin: 0.35rem 1.9rem 0;
+  position-try-fallbacks: flip-block;
+  max-height: 60dvh;
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-raised);
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  overflow-y: auto;
+  box-shadow: 0 18px 44px rgb(0 0 0 / 52%);
+}
+
+.field-info-popover:not(:popover-open) {
+  display: none;
+}
+
+.field-info-popover p {
+  margin: 0;
+}
+
+.application-settings-footer {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.8rem 1.05rem 1.05rem;
+  border-top: 1px solid var(--border);
+  background: var(--panel-raised);
+}
+
+.application-settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
+.application-settings-status {
+  margin: 0;
+  min-height: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.application-settings-status:empty {
+  display: none;
+}
+
+.application-settings-status[data-kind="error"] {
+  color: var(--danger);
+}
+
+@media (max-width: 640px) {
+  .application-settings-dialog {
+    width: calc(100vw - 0.75rem);
+    max-height: calc(100dvh - 0.75rem);
+  }
+
+  .application-settings-heading {
+    padding: 0.85rem 0.85rem 0.7rem;
+  }
+
+  .application-settings-body {
+    gap: 0.75rem;
+    padding: 0 0.85rem 0.85rem;
+  }
+
+  .application-settings-section {
+    padding: 0.7rem;
+  }
+
+  .application-settings-footer {
+    padding: 0.7rem 0.85rem 0.85rem;
+  }
 }
 
 .app-alert-dialog {
@@ -1237,7 +1417,8 @@ button:focus-visible {
 @media (hover: hover) and (pointer: fine) {
   .session-list,
   .timeline,
-  .composer textarea {
+  .composer textarea,
+  .application-settings-body {
     scrollbar-width: thin;
     scrollbar-color: transparent transparent;
   }
@@ -1245,25 +1426,29 @@ button:focus-visible {
   .session-sidebar:hover .session-list,
   .timeline:hover,
   .composer textarea:hover,
-  .composer textarea:focus {
+  .composer textarea:focus,
+  .application-settings-body:hover {
     scrollbar-color: #5f6673 transparent;
   }
 
   .session-list::-webkit-scrollbar,
   .timeline::-webkit-scrollbar,
-  .composer textarea::-webkit-scrollbar {
+  .composer textarea::-webkit-scrollbar,
+  .application-settings-body::-webkit-scrollbar {
     width: 10px;
   }
 
   .session-list::-webkit-scrollbar-track,
   .timeline::-webkit-scrollbar-track,
-  .composer textarea::-webkit-scrollbar-track {
+  .composer textarea::-webkit-scrollbar-track,
+  .application-settings-body::-webkit-scrollbar-track {
     background: transparent;
   }
 
   .session-list::-webkit-scrollbar-thumb,
   .timeline::-webkit-scrollbar-thumb,
-  .composer textarea::-webkit-scrollbar-thumb {
+  .composer textarea::-webkit-scrollbar-thumb,
+  .application-settings-body::-webkit-scrollbar-thumb {
     border: 2px solid transparent;
     border-radius: 999px;
     background: transparent;
@@ -1273,7 +1458,8 @@ button:focus-visible {
   .session-sidebar:hover .session-list::-webkit-scrollbar-thumb,
   .timeline:hover::-webkit-scrollbar-thumb,
   .composer textarea:hover::-webkit-scrollbar-thumb,
-  .composer textarea:focus::-webkit-scrollbar-thumb {
+  .composer textarea:focus::-webkit-scrollbar-thumb,
+  .application-settings-body:hover::-webkit-scrollbar-thumb {
     background-color: #5f6673;
   }
 }

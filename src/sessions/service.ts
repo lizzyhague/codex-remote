@@ -27,6 +27,7 @@ import {
   type TrashOrigin,
 } from "./trash-store.ts";
 import { MarkStore } from "./mark-store.ts";
+import type { ApplicationSettingsStore } from "../settings/store.ts";
 
 const PAGE_SIZE = 50;
 const REPLY_LOOKUP_PAGE_SIZE = 20;
@@ -46,6 +47,12 @@ export const CODEX_REMOTE_DEVELOPER_INSTRUCTIONS = [
   "后端服务 `codex-remote` 承载这次对话，是当前会话运行环境的一部分。修改、重启或停止该服务的进程、配置或网络连接，可能中断当前会话。涉及 Codex Remote 自身的操作时，先说明影响；能由你完成的操作和核查由你完成，必要时使用延迟重启。如果必须由用户在当前会话之外重启服务，只提供完成重启所需的最简命令，不要求用户代为核查。重启前告知用户：如果服务未能恢复，可以通过 SSH 登录 node1，改用不依赖该后端的 Codex CLI 寻求帮助。连接恢复后，由你自行核查服务状态并继续后续工作。不要把本可在重连后完成的核查步骤交给用户。",
   "需要交给用户查看的 Markdown 或图片分两类：正式文件保存在当前项目内它本来应该在的位置；只用于比较、挑选或试验的临时预览一律写到 ~/preview，不分项目、不纳入 Git，用户看过后会自行删除。不要把这类文件放到 ~/.codex 或 /tmp。回复中提供 Markdown 链接，目标为 /view?path= 加 URL 编码后的绝对路径。",
 ].join("\n\n");
+
+export function composeDeveloperInstructions(custom = ""): string {
+  return custom.trim()
+    ? `${CODEX_REMOTE_DEVELOPER_INSTRUCTIONS}\n\n${custom}`
+    : CODEX_REMOTE_DEVELOPER_INSTRUCTIONS;
+}
 
 export interface AppServerRequester {
   request<Result = unknown>(method: string, params: unknown): Promise<Result>;
@@ -126,6 +133,7 @@ export class CodexSessionService {
   readonly #projects: ProjectCatalog;
   readonly #trash: TrashStore;
   readonly #marks: MarkStore | null;
+  readonly #settings: ApplicationSettingsStore | null;
   readonly #now: () => number;
   readonly #changeListeners = new Set<(event: SessionChangeEvent) => void>();
   readonly #replyLookups = new Map<
@@ -138,13 +146,22 @@ export class CodexSessionService {
     transport: AppServerRequester,
     projects: ProjectCatalog,
     trash: TrashStore,
-    options: { now?: () => number; marks?: MarkStore } = {},
+    options: {
+      now?: () => number;
+      marks?: MarkStore;
+      settings?: ApplicationSettingsStore;
+    } = {},
   ) {
     this.#transport = transport;
     this.#projects = projects;
     this.#trash = trash;
     this.#marks = options.marks ?? null;
+    this.#settings = options.settings ?? null;
     this.#now = options.now ?? (() => Math.floor(Date.now() / 1_000));
+  }
+
+  #developerInstructions(): string {
+    return composeDeveloperInstructions(this.#settings?.get().developerInstructions ?? "");
   }
 
   isMarked(threadId: string): boolean {
@@ -234,7 +251,7 @@ export class CodexSessionService {
       cwd: project.path,
       ephemeral: false,
       serviceName: "codex_remote",
-      developerInstructions: CODEX_REMOTE_DEVELOPER_INSTRUCTIONS,
+      developerInstructions: this.#developerInstructions(),
     };
     const response = await this.#transport.request<ThreadStartResponse>(
       "thread/start",
@@ -268,7 +285,7 @@ export class CodexSessionService {
     const resumeParams: ThreadResumeParams = {
       threadId,
       cwd: project.path,
-      developerInstructions: CODEX_REMOTE_DEVELOPER_INSTRUCTIONS,
+      developerInstructions: this.#developerInstructions(),
     };
     const response = await this.#transport.request<ThreadResumeResponse>(
       "thread/resume",

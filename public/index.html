@@ -165,29 +165,57 @@
     </div>
 
     <dialog id="app-settings-dialog" class="application-settings-dialog" aria-labelledby="app-settings-title">
-      <form method="dialog" class="application-settings-card">
+      <form id="app-settings-form" method="dialog" class="application-settings-card">
         <div class="application-settings-heading">
           <h2 id="app-settings-title">应用设置</h2>
           <button id="app-settings-close-button" class="quiet small" type="button" aria-label="关闭">关闭</button>
         </div>
         <div class="application-settings-body">
-          <h3 class="application-settings-title">显示时区</h3>
-          <label class="application-settings-row">
-            <span>跟随设备</span>
-            <input id="follow-device-timezone-input" type="checkbox">
-          </label>
-          <label class="application-settings-row">
-            <span>城市</span>
-            <select id="display-timezone-city-select">
-              <option value="Asia/Shanghai">上海</option>
-              <option value="Asia/Tokyo">东京</option>
-              <option value="Europe/London">伦敦</option>
-              <option value="Europe/Paris">巴黎</option>
-              <option value="America/New_York">纽约</option>
-              <option value="America/Los_Angeles">洛杉矶</option>
-            </select>
-          </label>
-          <p class="application-settings-help">仅影响这台设备上的时间显示，自动考虑夏令时。</p>
+          <section class="application-settings-section">
+            <div class="application-settings-section-head">
+              <h3 class="application-settings-title"><label for="developer-instructions-input">附加 Developer 指令</label><button id="developer-instructions-info-button" type="button" class="field-info" popovertarget="info-developer-instructions" aria-label="关于附加 Developer 指令的说明">i</button></h3>
+            </div>
+            <div id="info-developer-instructions" class="field-info-popover" popover>
+              <p>这段内容由 Codex Remote 后端保存。连到同一后端的设备共用这一份；不同后端之间不会同步。</p>
+              <p>新建或重新载入会话时，会通过 Codex App Server 的 developerInstructions 注入。</p>
+              <p>Developer 指令的优先级高于用户消息。</p>
+              <p>它不会替换 Codex 自带的基础指令，也不能用来控制完整的系统提示词。</p>
+              <p>留空时只使用 Codex Remote 内置的 Developer 指令。改动不会影响已经在运行的任务。</p>
+            </div>
+            <textarea
+              id="developer-instructions-input"
+              rows="5"
+              maxlength="131072"
+              placeholder="输入希望 Codex 始终遵循的附加指令……"
+            ></textarea>
+            <p class="field-help">用于补充 Codex 的协作方式；在新建或重新载入会话时生效。</p>
+          </section>
+          <section class="application-settings-section">
+            <h3 class="application-settings-title">显示时区</h3>
+            <label class="application-settings-row">
+              <span>跟随设备</span>
+              <input id="follow-device-timezone-input" type="checkbox">
+            </label>
+            <label class="application-settings-row">
+              <span>城市</span>
+              <select id="display-timezone-city-select">
+                <option value="Asia/Shanghai">上海</option>
+                <option value="Asia/Tokyo">东京</option>
+                <option value="Europe/London">伦敦</option>
+                <option value="Europe/Paris">巴黎</option>
+                <option value="America/New_York">纽约</option>
+                <option value="America/Los_Angeles">洛杉矶</option>
+              </select>
+            </label>
+            <p class="field-help">仅影响这台设备上的时间显示，自动考虑夏令时。</p>
+          </section>
+        </div>
+        <div class="application-settings-footer">
+          <p id="app-settings-status" class="application-settings-status" aria-live="polite"></p>
+          <div class="application-settings-actions">
+            <button id="app-settings-cancel-button" class="quiet" type="button">取消</button>
+            <button id="app-settings-save-button" class="primary" type="submit">保存</button>
+          </div>
         </div>
       </form>
     </dialog>

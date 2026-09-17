@@ -38,7 +38,13 @@ const elements = {
   collapseSidebarButton: byId("collapse-sidebar-button"),
   appSettingsButton: byId("app-settings-button"),
   appSettingsDialog: byId("app-settings-dialog"),
+  appSettingsForm: byId("app-settings-form"),
   appSettingsCloseButton: byId("app-settings-close-button"),
+  appSettingsCancelButton: byId("app-settings-cancel-button"),
+  appSettingsSaveButton: byId("app-settings-save-button"),
+  appSettingsStatus: byId("app-settings-status"),
+  developerInstructionsInput: byId("developer-instructions-input"),
+  developerInstructionsInfoButton: byId("developer-instructions-info-button"),
   followDeviceTimezoneInput: byId("follow-device-timezone-input"),
   displayTimezoneCitySelect: byId("display-timezone-city-select"),
   sidebarBackdrop: byId("sidebar-backdrop"),
@@ -107,6 +113,8 @@ const state = {
   selectedSessions: new Set(),
   sidebarCollapsed: stateGet(SIDEBAR_COLLAPSED_KEY) === "1",
   displayTimezone: loadDisplayTimezonePreference(),
+  developerInstructions: "",
+  appSettingsBusy: false,
   mobileSidebarOpen: false,
   noticeAction: null,
   running: false,
@@ -178,8 +186,22 @@ elements.projectSelect.addEventListener("change", () => {
 elements.openSidebarButton.addEventListener("click", openSidebar);
 elements.collapseSidebarButton.addEventListener("click", closeSidebar);
 elements.sidebarBackdrop.addEventListener("click", closeSidebar);
-elements.appSettingsButton.addEventListener("click", openAppSettings);
+elements.appSettingsButton.addEventListener("click", () => {
+  void openAppSettings();
+});
 elements.appSettingsCloseButton.addEventListener("click", closeAppSettings);
+elements.appSettingsCancelButton.addEventListener("click", closeAppSettings);
+elements.appSettingsForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void saveAppSettings();
+});
+elements.appSettingsDialog.addEventListener("cancel", (event) => {
+  if (state.appSettingsBusy) event.preventDefault();
+});
+elements.appSettingsDialog.addEventListener("close", () => {
+  closeFieldInfoPopovers();
+  setAppSettingsStatus("");
+});
 elements.followDeviceTimezoneInput.addEventListener("change", commitDisplayTimezonePreference);
 elements.displayTimezoneCitySelect.addEventListener("change", commitDisplayTimezonePreference);
 window.addEventListener("storage", (event) => {
@@ -1555,6 +1577,9 @@ function handleServerEvent(event, replay = false) {
       updateControls();
       break;
     }
+    case "settings.updated":
+      applySettingsUpdated(event);
+      break;
     case "sessions.changed":
       if (event.closedSessionId === state.sessionId) {
         resetCurrentSession();
@@ -2733,13 +2758,24 @@ function formatLastReplyDate(value) {
   return formatDate(value);
 }
 
-function openAppSettings() {
+async function openAppSettings() {
+  if (state.appSettingsBusy) return;
   syncAppSettingsForm();
+  setAppSettingsStatus("");
+  await loadDeveloperInstructions();
   if (!elements.appSettingsDialog.open) elements.appSettingsDialog.showModal();
 }
 
 function closeAppSettings() {
+  if (state.appSettingsBusy) return;
+  closeFieldInfoPopovers();
   if (elements.appSettingsDialog.open) elements.appSettingsDialog.close();
+}
+
+function closeFieldInfoPopovers() {
+  for (const popover of elements.appSettingsDialog.querySelectorAll(".field-info-popover")) {
+    if (popover.matches(":popover-open")) popover.hidePopover();
+  }
 }
 
 function syncAppSettingsForm() {
@@ -2747,6 +2783,68 @@ function syncAppSettingsForm() {
   elements.followDeviceTimezoneInput.checked = prefs.followDevice;
   elements.displayTimezoneCitySelect.value = prefs.cityTimeZone;
   elements.displayTimezoneCitySelect.disabled = prefs.followDevice;
+}
+
+function developerInstructionsDirty() {
+  return elements.developerInstructionsInput.value !== state.developerInstructions;
+}
+
+function applySettingsUpdated(event) {
+  const value = typeof event.developerInstructions === "string" ? event.developerInstructions : "";
+  const dialogOpen = elements.appSettingsDialog.open;
+  const preserveForm = dialogOpen && (state.appSettingsBusy || developerInstructionsDirty());
+  state.developerInstructions = value;
+  if (dialogOpen && !preserveForm) {
+    elements.developerInstructionsInput.value = value;
+  }
+}
+
+async function loadDeveloperInstructions() {
+  try {
+    const data = await request("settings.get");
+    const value = typeof data?.developerInstructions === "string" ? data.developerInstructions : "";
+    state.developerInstructions = value;
+    elements.developerInstructionsInput.value = value;
+    setAppSettingsStatus("");
+  } catch (error) {
+    setAppSettingsStatus(errorMessage(error), "error");
+  }
+}
+
+async function saveAppSettings() {
+  if (state.appSettingsBusy) return;
+  state.appSettingsBusy = true;
+  setAppSettingsStatus("正在保存……");
+  updateAppSettingsControls();
+  try {
+    const data = await request("settings.update", {
+      developerInstructions: elements.developerInstructionsInput.value,
+    });
+    const value = typeof data?.developerInstructions === "string" ? data.developerInstructions : "";
+    state.developerInstructions = value;
+    elements.developerInstructionsInput.value = value;
+    elements.appSettingsDialog.close();
+  } catch (error) {
+    setAppSettingsStatus(errorMessage(error), "error");
+  } finally {
+    state.appSettingsBusy = false;
+    updateAppSettingsControls();
+  }
+}
+
+function setAppSettingsStatus(text, kind = "") {
+  elements.appSettingsStatus.textContent = text;
+  if (kind) elements.appSettingsStatus.dataset.kind = kind;
+  else delete elements.appSettingsStatus.dataset.kind;
+}
+
+function updateAppSettingsControls() {
+  const disabled = state.appSettingsBusy;
+  elements.developerInstructionsInput.disabled = disabled;
+  elements.developerInstructionsInfoButton.disabled = disabled;
+  elements.appSettingsCancelButton.disabled = disabled;
+  elements.appSettingsCloseButton.disabled = disabled;
+  elements.appSettingsSaveButton.disabled = disabled;
 }
 
 function commitDisplayTimezonePreference() {

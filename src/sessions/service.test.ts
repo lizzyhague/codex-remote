@@ -8,9 +8,11 @@ import { ProjectCatalog } from "../projects/catalog.ts";
 import {
   CODEX_REMOTE_DEVELOPER_INSTRUCTIONS,
   CodexSessionService,
+  composeDeveloperInstructions,
   TRASH_RETENTION_SECONDS,
   type AppServerRequester,
 } from "./service.ts";
+import { ApplicationSettingsStore } from "../settings/store.ts";
 import { TrashStore } from "./trash-store.ts";
 import { MarkStore } from "./mark-store.ts";
 
@@ -46,7 +48,10 @@ async function createFixture(context: TestContext) {
   const catalog = await ProjectCatalog.fromRoots([{ id: "workspace", path: root }]);
   const trash = await TrashStore.open(path.join(temporaryDirectory, "trash.json"));
   const marks = await MarkStore.open(path.join(temporaryDirectory, "marks.json"));
-  return { catalog, project, outside, trash, marks };
+  const settings = await ApplicationSettingsStore.open(
+    path.join(temporaryDirectory, "settings.json"),
+  );
+  return { catalog, project, outside, trash, marks, settings };
 }
 
 function thread(
@@ -141,6 +146,15 @@ test("lists only sessions in the selected allowlisted project", async (context) 
   );
 });
 
+test("composeDeveloperInstructions keeps the built-in text and appends nonblank custom copy", () => {
+  assert.equal(composeDeveloperInstructions(""), CODEX_REMOTE_DEVELOPER_INSTRUCTIONS);
+  assert.equal(composeDeveloperInstructions("   \n"), CODEX_REMOTE_DEVELOPER_INSTRUCTIONS);
+  assert.equal(
+    composeDeveloperInstructions("始终用中文回复。"),
+    `${CODEX_REMOTE_DEVELOPER_INSTRUCTIONS}\n\n始终用中文回复。`,
+  );
+});
+
 test("starts a persistent session with a catalog-resolved cwd", async (context) => {
   const { catalog, project, trash } = await createFixture(context);
   const transport = new FakeTransport();
@@ -163,6 +177,46 @@ test("starts a persistent session with a catalog-resolved cwd", async (context) 
       developerInstructions: CODEX_REMOTE_DEVELOPER_INSTRUCTIONS,
     },
   });
+});
+
+test("injects saved developerInstructions on start and resume", async (context) => {
+  const { catalog, project, trash, settings } = await createFixture(context);
+  await settings.update("始终用中文回复。");
+  const transport = new FakeTransport();
+  const service = new CodexSessionService(transport, catalog, trash, { settings });
+  const expected = `${CODEX_REMOTE_DEVELOPER_INSTRUCTIONS}\n\n始终用中文回复。`;
+
+  transport.results.push({ thread: thread("thread-new", project) });
+  await service.start("workspace/alpha");
+  assert.equal(
+    (transport.requests[0]?.params as { developerInstructions?: string }).developerInstructions,
+    expected,
+  );
+  assert.equal(
+    "baseInstructions" in (transport.requests[0]?.params as object),
+    false,
+  );
+
+  transport.results.push(
+    { thread: thread("thread-old", project) },
+    { thread: thread("thread-old", project) },
+  );
+  await service.resume("workspace/alpha", "thread-old");
+  const resume = transport.requests.find((request) => request.method === "thread/resume");
+  assert.equal(
+    (resume?.params as { developerInstructions?: string }).developerInstructions,
+    expected,
+  );
+  assert.equal("baseInstructions" in (resume?.params as object), false);
+
+  await settings.update("   ");
+  transport.results.push({ thread: thread("thread-blank", project) });
+  await service.start("workspace/alpha");
+  assert.equal(
+    (transport.requests.at(-1)?.params as { developerInstructions?: string })
+      .developerInstructions,
+    CODEX_REMOTE_DEVELOPER_INSTRUCTIONS,
+  );
 });
 
 test("checks ownership before resuming and returns stored turns", async (context) => {

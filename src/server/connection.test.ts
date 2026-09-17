@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+
+import { ApplicationSettingsStore } from "../settings/store.ts";
 
 import type { AppServerMessageListener, JsonObject } from "../app-server/client.ts";
 import type { AppServerTransport } from "../app-server/turn-session.ts";
@@ -811,6 +816,87 @@ test("releases the project lock when the open session goes away", async () => {
   assert.equal(socket.messages.at(-1)?.ok, true);
   assert.equal(services.locks.owns("projects/demo", "phone"), false);
 
+  await connection.disconnect();
+  approvals.dispose();
+});
+
+test("reads and updates backend settings and notifies other browsers", async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-conn-settings-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const settings = await ApplicationSettingsStore.open(path.join(directory, "settings.json"));
+  const { services, approvals } = setup();
+  services.settings = settings;
+  const firstSocket = new FakeSocket();
+  const secondSocket = new FakeSocket();
+  const first = new BrowserConnection("phone", firstSocket, services);
+  const second = new BrowserConnection("computer", secondSocket, services);
+
+  first.receiveText(request("settings.get", "get-1"));
+  await first.whenIdle();
+  assert.deepEqual(firstSocket.messages.at(-1), {
+    type: "response",
+    requestId: "get-1",
+    ok: true,
+    data: { developerInstructions: "" },
+  });
+
+  first.receiveText(request("settings.update", "save-1", {
+    developerInstructions: "始终用中文回复。",
+  }));
+  await first.whenIdle();
+  assert.deepEqual(firstSocket.messages.at(-1), {
+    type: "response",
+    requestId: "save-1",
+    ok: true,
+    data: { developerInstructions: "始终用中文回复。" },
+  });
+  assert.deepEqual(
+    secondSocket.messages.filter((message) => message.type === "event"),
+    [{
+      type: "event",
+      event: { type: "settings.updated", developerInstructions: "始终用中文回复。" },
+    }],
+  );
+  assert.ok(firstSocket.messages.some((message) =>
+    message.type === "event" &&
+    (message.event as { type?: string }).type === "settings.updated"
+  ));
+
+  second.receiveText(request("settings.get", "get-2"));
+  await second.whenIdle();
+  assert.deepEqual(secondSocket.messages.at(-1), {
+    type: "response",
+    requestId: "get-2",
+    ok: true,
+    data: { developerInstructions: "始终用中文回复。" },
+  });
+
+  const before = secondSocket.messages.length;
+  first.receiveText(request("settings.update", "save-2", {
+    developerInstructions: "始终用中文回复。",
+  }));
+  await first.whenIdle();
+  assert.equal(
+    secondSocket.messages.slice(before).some((message) => message.type === "event"),
+    false,
+  );
+
+  await first.disconnect();
+  await second.disconnect();
+  approvals.dispose();
+});
+
+test("rejects settings requests when the backend has no settings store", async () => {
+  const { services, approvals } = setup();
+  const socket = new FakeSocket();
+  const connection = new BrowserConnection("phone", socket, services);
+  connection.receiveText(request("settings.get", "get-missing"));
+  await connection.whenIdle();
+  assert.equal(socket.messages.at(-1)?.ok, false);
+  assert.equal(
+    (socket.messages.at(-1) as { error?: { code?: string } }).error?.code,
+    "settings_unavailable",
+  );
   await connection.disconnect();
   approvals.dispose();
 });

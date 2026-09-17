@@ -8,6 +8,10 @@ import { ProjectCatalog } from "../projects/catalog.ts";
 import { CodexSessionService } from "../sessions/service.ts";
 import { resolveTrashStatePath, TrashStore } from "../sessions/trash-store.ts";
 import { resolveMarkStatePath, MarkStore } from "../sessions/mark-store.ts";
+import {
+  ApplicationSettingsStore,
+  resolveSettingsStatePath,
+} from "../settings/store.ts";
 import { RemoteWebSocketServer } from "./http-server.ts";
 import { ProjectTaskLocks } from "./project-locks.ts";
 import { buildViewableRoots, ensurePreviewRoot } from "./viewable-roots.ts";
@@ -33,6 +37,7 @@ export async function main(): Promise<void> {
     path.resolve("config/projects.json");
   const trash = await TrashStore.open(resolveTrashStatePath());
   const marks = await MarkStore.open(resolveMarkStatePath());
+  const settings = await ApplicationSettingsStore.open(resolveSettingsStatePath());
   const workerState = await WorkerStateStore.open(resolveWorkerStatePath());
   const attachmentIndex = await AttachmentDisplayIndex.open(resolveWorkerStateDirectory());
   const uploads = new SharedUploadClient(resolveSharedUploadSocket());
@@ -48,12 +53,13 @@ export async function main(): Promise<void> {
   try {
     await appServer.initialize(codexRemoteInitializeParams());
     approvals = new ApprovalBroker(appServer);
-    const sessions = new CodexSessionService(appServer, projects, trash, { marks });
+    const sessions = new CodexSessionService(appServer, projects, trash, { marks, settings });
     const locks = new ProjectTaskLocks();
     workers = new SessionWorkerManager({
       store: workerState,
       projects,
       trash,
+      settings,
       locks,
       uploads,
       attachmentIndex,
@@ -101,6 +107,7 @@ export async function main(): Promise<void> {
         approvals,
         locks,
         workers,
+        settings,
         uploads,
       },
     });

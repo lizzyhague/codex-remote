@@ -72,6 +72,7 @@ CSP。
 | 变量 | 内容 | 敏感度 |
 | --- | --- | --- |
 | `CODEX_REMOTE_STATE_FILE` | 回收站登记：thread ID、项目 ID、删除时间、恢复目标 | 低 |
+| `CODEX_REMOTE_SETTINGS_FILE` | 应用设置 JSON：当前是附加 Developer 指令；未设置时与回收站同目录的 `settings.json` | 中，按用户指令对待 |
 | `CODEX_REMOTE_WORK_STATE_FILE` | Worker SQLite：已接受消息、任务状态、脱敏事件、工具输出 | 高，按对话数据对待 |
 
 SQLite 用 WAL，不要在服务运行时只复制主库文件而漏掉 `-wal`。可靠做法是无活动任务时
