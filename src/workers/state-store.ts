@@ -13,7 +13,7 @@ export type WorkerTaskStatus =
   | "interrupted"
   | "failed";
 
-export type WorkerTaskKind = "message" | "compact" | "review";
+export type WorkerTaskKind = "message" | "compact";
 export type WorkerPermissionMode = "manual" | "full_access";
 
 export type WorkerTask = {
@@ -490,7 +490,7 @@ function readEventRow(value: unknown): StoredWorkerEvent {
 }
 
 function readKind(value: unknown): WorkerTaskKind {
-  if (value === "message" || value === "compact" || value === "review") return value;
+  if (value === "message" || value === "compact") return value;
   throw new Error("Worker 任务类型无法识别。");
 }
 

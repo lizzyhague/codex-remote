@@ -558,11 +558,6 @@ export class BrowserConnection {
           "正在压缩会话",
           () => runner.compact(),
         );
-      case "review":
-        return this.#startCommandTask(
-          "正在检查未提交的改动",
-          () => runner.review(),
-        );
       case "rewind":
         return this.#rewindOneTurn(runner);
       case "model":

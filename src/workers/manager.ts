@@ -424,7 +424,7 @@ export class SessionWorkerManager {
     projectId: string,
     threadId: string,
     clientMessageId: string,
-    kind: Extract<WorkerTaskKind, "compact" | "review">,
+    kind: Extract<WorkerTaskKind, "compact">,
   ): { accepted: true; taskId: string; status: WorkerTask["status"]; duplicate: boolean } {
     return this.#enqueue(projectId, threadId, clientMessageId, kind, "");
   }
@@ -513,7 +513,7 @@ export class SessionWorkerManager {
     option: string | null,
     argument: string | null,
   ): Promise<Record<string, unknown>> {
-    if (command === "compact" || command === "review") {
+    if (command === "compact") {
       const queued = this.enqueueCommandTask(
         projectId,
         threadId,
@@ -522,7 +522,7 @@ export class SessionWorkerManager {
       );
       return {
         kind: "task",
-        title: command === "compact" ? "正在压缩会话" : "正在检查未提交的改动",
+        title: "正在压缩会话",
         lines: ["任务已由后端接收，可以关闭页面。"],
         ...queued,
       };
@@ -951,9 +951,7 @@ export class SessionWorkerManager {
       launching.nativeStartInvoked = true;
       const startPromise = task.kind === "message"
         ? worker.turns.startTextTurn(task.payload, attachments)
-        : task.kind === "compact"
-        ? worker.commands.compact()
-        : worker.commands.review();
+        : worker.commands.compact();
       if (launching.cancelRequested) {
         active.interruptionReason = "user_requested";
         active.worker.approvals.cancelThread(task.threadId);

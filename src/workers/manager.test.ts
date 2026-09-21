@@ -642,37 +642,6 @@ test("stopping compact before native start does not compact", async (context) =>
   assert.equal(fixture.workers.reduce((sum, worker) => sum + worker.compactCalls, 0), 0);
 });
 
-test("stopping review before native start does not review", async (context) => {
-  let releaseCreate!: () => void;
-  let reportCreateStarted!: () => void;
-  const createStarted = new Promise<void>((resolve) => {
-    reportCreateStarted = resolve;
-  });
-  const createGate = new Promise<void>((resolve) => {
-    releaseCreate = resolve;
-  });
-  const fixture = await managerFixture(context, {
-    offlineGraceMs: 10,
-    beforeWorkerCreate: async () => {
-      reportCreateStarted();
-      await createGate;
-    },
-  });
-  context.after(() => releaseCreate());
-  fixture.manager.start();
-  const accepted = fixture.manager.enqueueCommandTask(
-    "project-1",
-    "thread-1",
-    "review-1",
-    "review",
-  );
-  await createStarted;
-  assert.equal((await fixture.manager.stopTask("thread-1")).requested, true);
-  releaseCreate();
-  await waitFor(() => fixture.store.require(accepted.taskId).status === "interrupted");
-  assert.equal(fixture.workers.reduce((sum, worker) => sum + worker.reviewCalls, 0), 0);
-});
-
 test("busy attachment messages release the lease and leave no mapping", async (context) => {
   let released = 0;
   const uploads: NonNullable<SessionWorkerManagerOptions["uploads"]> = {
@@ -770,7 +739,6 @@ async function managerFixture(
     beforeWorkerCreate?: () => Promise<void>;
     beforeStartTurn?: () => Promise<void>;
     beforeCompact?: () => Promise<void>;
-    beforeReview?: () => Promise<void>;
     autoCompleteOnInterrupt?: boolean;
     uploads?: SessionWorkerManagerOptions["uploads"];
     settings?: ApplicationSettingsStore;
@@ -810,7 +778,6 @@ async function managerFixture(
         {
           ...(options.beforeStartTurn ? { beforeStartTurn: options.beforeStartTurn } : {}),
           ...(options.beforeCompact ? { beforeCompact: options.beforeCompact } : {}),
-          ...(options.beforeReview ? { beforeReview: options.beforeReview } : {}),
           ...(options.autoCompleteOnInterrupt === undefined
             ? {}
             : { autoCompleteOnInterrupt: options.autoCompleteOnInterrupt }),
@@ -861,7 +828,6 @@ class FakeWorker {
   startedAttachments: Array<{ path: string }> = [];
   startTurnCalls = 0;
   compactCalls = 0;
-  reviewCalls = 0;
   interruptCount = 0;
   closeCount = 0;
   cancelledApprovals = 0;
@@ -880,7 +846,6 @@ class FakeWorker {
   readonly #toggleFullAccessFails: boolean;
   readonly #beforeStartTurn?: (() => Promise<void>) | undefined;
   readonly #beforeCompact?: (() => Promise<void>) | undefined;
-  readonly #beforeReview?: (() => Promise<void>) | undefined;
 
   constructor(
     options: SessionWorkerOptions,
@@ -889,7 +854,6 @@ class FakeWorker {
     extras: {
       beforeStartTurn?: (() => Promise<void>) | undefined;
       beforeCompact?: (() => Promise<void>) | undefined;
-      beforeReview?: (() => Promise<void>) | undefined;
       autoCompleteOnInterrupt?: boolean | undefined;
     } = {},
   ) {
@@ -899,7 +863,6 @@ class FakeWorker {
     this.#toggleFullAccessFails = toggleFullAccessFails;
     this.#beforeStartTurn = extras.beforeStartTurn;
     this.#beforeCompact = extras.beforeCompact;
-    this.#beforeReview = extras.beforeReview;
     this.autoCompleteOnInterrupt = extras.autoCompleteOnInterrupt !== false;
     this.opened = {
       session: {
@@ -939,17 +902,6 @@ class FakeWorker {
       compact: async () => {
         await this.#beforeCompact?.();
         this.compactCalls += 1;
-        this.#activeTurnId = "native-turn-1";
-        this.#stream({
-          type: "turn_started",
-          threadId: this.#threadId,
-          turnId: "native-turn-1",
-        });
-        return "native-turn-1";
-      },
-      review: async () => {
-        await this.#beforeReview?.();
-        this.reviewCalls += 1;
         this.#activeTurnId = "native-turn-1";
         this.#stream({
           type: "turn_started",

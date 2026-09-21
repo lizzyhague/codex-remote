@@ -4,7 +4,6 @@ export const COMMAND_NAMES = [
   "permissions",
   "plan",
   "rename",
-  "review",
   "rewind",
 ] as const;
 
@@ -49,12 +48,6 @@ export const COMMAND_CATALOG: readonly CommandDescriptor[] = [
     title: "重命名会话",
     description: "给当前会话起一个容易找到的名字。",
     action: "argument",
-  },
-  {
-    name: "review",
-    title: "检查改动",
-    description: "让 Codex 检查当前项目里尚未提交的改动。",
-    action: "immediate",
   },
   {
     name: "rewind",

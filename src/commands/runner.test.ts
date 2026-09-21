@@ -57,9 +57,6 @@ class FakeTransport implements AppServerTransport {
         ],
       } as Result;
     }
-    if (method === "review/start") {
-      return { turn: { id: "review-1" }, reviewThreadId: "thread-1" } as Result;
-    }
     if (method === "thread/rollback") {
       return {
         thread: {
@@ -143,7 +140,6 @@ test("publishes the seven commands in alphabetical order", () => {
     "permissions",
     "plan",
     "rename",
-    "review",
     "rewind",
   ]);
   assert.match(COMMAND_CATALOG.find((command) => command.name === "rewind")?.confirmation ?? "", /不会撤销/);
@@ -166,7 +162,7 @@ test("builds dynamic model and permission menus", async () => {
   runner.dispose();
 });
 
-test("runs all seven commands through app-server methods", async () => {
+test("runs all six commands through app-server methods", async () => {
   const transport = new FakeTransport();
   const runner = createRunner(transport);
 
@@ -180,7 +176,6 @@ test("runs all seven commands through app-server methods", async () => {
   assert.equal((await runner.rename("测试会话")).sessionName, "测试会话");
 
   assert.equal(await runner.compact(), null);
-  assert.equal(await runner.review(), "review-1");
   assert.deepEqual(
     (await runner.rewind()).map((turn) => turn.id),
     ["turn-after-rewind"],
@@ -190,7 +185,6 @@ test("runs all seven commands through app-server methods", async () => {
   assert.ok(methods.includes("thread/settings/update"));
   assert.ok(methods.includes("thread/name/set"));
   assert.ok(methods.includes("thread/compact/start"));
-  assert.ok(methods.includes("review/start"));
   assert.deepEqual(transport.requests.find((request) => request.method === "thread/rollback"), {
     method: "thread/rollback",
     params: { threadId: "thread-1", numTurns: 1 },

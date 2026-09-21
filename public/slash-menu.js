@@ -19,8 +19,9 @@ export class SlashCommandMenu {
   async load() {
     try {
       const data = await this._request("commands.list");
+      // model 与 permissions 由输入框旁的下拉按钮承担，不再进斜杠菜单。
       this._commands = Array.isArray(data?.commands)
-        ? data.commands.filter(command => !["usage", "status", "review", "model", "permissions"].includes(command.name)) : [];
+        ? data.commands.filter(command => !["model", "permissions"].includes(command.name)) : [];
       this.handleInput();
     } catch (error) {
       this._onError(error);
@@ -97,10 +98,6 @@ export class SlashCommandMenu {
       this._onRename(argument);
       return true;
     }
-    if (command.action === "options" && !argument) {
-      await this._openOptions(command);
-      return true;
-    }
     if (command.action === "argument" && !argument) {
       this._setInput(`/${command.name} `);
       this.close();
@@ -109,11 +106,7 @@ export class SlashCommandMenu {
     if (command.action === "confirm" && !confirmCommand(command)) {
       return true;
     }
-    await this._execute(
-      command,
-      command.action === "options" ? argument : null,
-      command.action === "options" ? null : argument,
-    );
+    await this._execute(command, null, argument);
     return true;
   }
 
@@ -163,10 +156,6 @@ export class SlashCommandMenu {
       this._onRename();
       return;
     }
-    if (command.action === "options") {
-      await this._openOptions(command);
-      return;
-    }
     if (command.action === "argument") {
       this._setInput(`/${command.name} `);
       this.close();
@@ -174,74 +163,6 @@ export class SlashCommandMenu {
     }
     if (command.action === "confirm" && !confirmCommand(command)) return;
     await this._execute(command, null, null);
-  }
-
-  async _openOptions(command) {
-    await this._withBusy(async () => {
-      const data = await this._request("command.options", { command: command.name });
-      this._renderOptions(command, data);
-    }, false);
-  }
-
-  _renderOptions(command, data) {
-    const items = Array.isArray(data?.items) ? data.items : [];
-    this._renderOptionLevel(
-      data?.title || `/${command.name}`,
-      items,
-      () => {
-        if (this._fromButton) this._renderCommands(this._commands.filter(command => command.name !== "rename"), true);
-        else { this._setInput("/"); this.handleInput(); }
-      },
-      (item) => {
-        if (Array.isArray(item.items) && item.items.length) {
-          this._renderEffortOptions(command, item, data);
-          return;
-        }
-        void this._execute(command, item.id, null);
-      },
-    );
-  }
-
-  _renderEffortOptions(command, model, parentData) {
-    const modelLabel = typeof model.label === "string"
-      ? model.label.replace(/^✓\s*/, "")
-      : model.id;
-    this._renderOptionLevel(
-      `${modelLabel} · 选择思考强度`,
-      model.items,
-      () => this._renderOptions(command, parentData),
-      (effort) => void this._execute(command, model.id, effort.id),
-    );
-  }
-
-  _renderOptionLevel(titleText, items, onBack, onSelect) {
-    const fragment = document.createDocumentFragment();
-    const heading = document.createElement("div");
-    heading.className = "slash-heading";
-    const back = document.createElement("button");
-    back.type = "button";
-    back.className = "slash-back";
-    back.textContent = "‹ 返回";
-    back.addEventListener("click", onBack);
-    const title = document.createElement("strong");
-    title.textContent = titleText;
-    heading.append(back, title);
-    fragment.append(heading);
-
-    const buttons = items.map((item) => {
-      const button = commandButton(item.label || item.id, item.description || "");
-      button.disabled = item.disabled === true;
-      button.dataset.danger = item.danger === true ? "true" : "false";
-      button.addEventListener("click", () => {
-        if (item.danger === true && !window.confirm(
-          "完全访问会让 Codex 不受项目沙箱限制地操作主机。确定只为当前会话选择吗？",
-        )) return;
-        onSelect(item);
-      });
-      fragment.append(button);
-      return button;
-    });
-    this._show(fragment, buttons);
   }
 
   async _execute(command, option, argument, clearInput = !this._fromButton) {

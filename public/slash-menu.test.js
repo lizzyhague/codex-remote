@@ -14,7 +14,6 @@ function setup() {
     request: async (type, args) => {
       calls.push({ type, args });
       return type === "commands.list" ? { commands: [
-        { name: "review", action: "immediate" },
         { name: "rename", action: "argument" },
         { name: "compact", action: "confirm" },
         { name: "rewind", action: "confirm" },
@@ -29,14 +28,14 @@ function setup() {
   return { menu, input, calls, errors, renamed };
 }
 
-test("removed commands are unavailable while remaining commands are retained", async () => {
+test("commands with their own control are unavailable while the rest are retained", async () => {
   const { menu, calls, errors } = setup();
   await menu.load();
   assert.deepEqual(menu._commands.map(item => item.name), ["rename", "compact", "rewind", "plan"]);
-  for (const command of ["review", "model", "permissions"]) {
+  for (const command of ["model", "permissions"]) {
     assert.equal(await menu.submit(`/${command}`), true);
   }
-  assert.equal(errors.length, 3);
+  assert.equal(errors.length, 2);
   assert.equal(calls.filter(call => call.type === "command.run").length, 0);
 });
 

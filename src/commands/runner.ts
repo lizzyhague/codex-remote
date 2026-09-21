@@ -263,19 +263,6 @@ export class CommandRunner {
     return null;
   }
 
-  async review(): Promise<string> {
-    const response = asObject(await this.#transport.request("review/start", {
-      threadId: this.#threadId,
-      delivery: "inline",
-      target: { type: "uncommittedChanges" },
-    }));
-    const turn = asObject(response?.turn);
-    if (!turn || typeof turn.id !== "string") {
-      throw new Error("Codex 返回了无法识别的检查任务。");
-    }
-    return turn.id;
-  }
-
   async rewind(): Promise<Turn[]> {
     if (this.#runtime.historyMode === "paginated") {
       return this.#rewindPaginated();
