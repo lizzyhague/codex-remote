@@ -19,7 +19,7 @@ interface AppServerProcess {
 
 type AppServerProcessFactory = (options: AppServerClientOptions) => AppServerProcess;
 
-export type RestartableAppServerOptions =
+export type DirectoryAppServerOptions =
   & Omit<AppServerClientOptions, "onNotification" | "onServerRequest">
   & {
     /** 测试替身入口；生产环境始终使用真实的 stdio app-server。 */
@@ -30,7 +30,7 @@ export type RestartableAppServerOptions =
  * 目录 App Server 子进程。会话列表、恢复和账号额度走这一个共享进程；turn 属于
  * 每个会话自己的 Worker，不在这里执行，因此它不会加载可写的 rollout。
  */
-export class RestartableAppServer {
+export class DirectoryAppServer {
   readonly #clientOptions: Omit<
     AppServerClientOptions,
     "onNotification" | "onServerRequest"
@@ -45,7 +45,7 @@ export class RestartableAppServer {
   #current: AppServerProcess | null = null;
   #closed = false;
 
-  constructor(options: RestartableAppServerOptions = {}) {
+  constructor(options: DirectoryAppServerOptions = {}) {
     const { clientFactory, ...clientOptions } = options;
     this.#clientOptions = clientOptions;
     this.#clientFactory = clientFactory ?? ((spawnOptions) =>

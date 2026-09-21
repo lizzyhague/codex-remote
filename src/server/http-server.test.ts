@@ -182,10 +182,13 @@ test("streams same-origin uploads through the local attachment adapter", async (
   }
 });
 
-test("HTTP login survives restarts and token rotation revokes its cookie", async () => {
+test("HTTP login survives restarts and token rotation revokes its cookie", async (t) => {
   const transport = new EmptyTransport();
   const services = emptyServices(transport);
   const first = new RemoteWebSocketServer({ token: "test-secret", services });
+  // close() 可以重复调用；注册清理是为了断言失败时服务器不会留着不放，
+  // 否则测试进程不会退出，一次断言失败会表现成整套测试挂住。
+  t.after(() => first.close());
   const firstAddress = await first.listen(0);
   const cookie = await loginCookie(firstAddress);
   const session = await fetch(
@@ -198,6 +201,7 @@ test("HTTP login survives restarts and token rotation revokes its cookie", async
   await first.close();
 
   const restarted = new RemoteWebSocketServer({ token: "test-secret", services });
+  t.after(() => restarted.close());
   const restartedAddress = await restarted.listen(0);
   assert.equal((await fetch(
     `http://${restartedAddress.host}:${restartedAddress.port}/auth/session`,
@@ -206,6 +210,7 @@ test("HTTP login survives restarts and token rotation revokes its cookie", async
   await restarted.close();
 
   const rotated = new RemoteWebSocketServer({ token: "rotated-secret", services });
+  t.after(() => rotated.close());
   const rotatedAddress = await rotated.listen(0);
   assert.equal((await fetch(
     `http://${rotatedAddress.host}:${rotatedAddress.port}/auth/session`,

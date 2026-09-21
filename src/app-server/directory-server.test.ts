@@ -8,7 +8,7 @@ import type {
   AppServerClientOptions,
   JsonObject,
 } from "./client.ts";
-import { RestartableAppServer } from "./runtime.ts";
+import { DirectoryAppServer } from "./directory-server.ts";
 
 const INITIALIZE_PARAMS: InitializeParams = {
   clientInfo: {
@@ -73,7 +73,7 @@ class FakeAppServerProcess {
 
 function setupRuntime() {
   const processes: FakeAppServerProcess[] = [];
-  const runtime = new RestartableAppServer({
+  const runtime = new DirectoryAppServer({
     clientFactory: (options) => {
       const process = new FakeAppServerProcess(processes.length + 1, options);
       processes.push(process);

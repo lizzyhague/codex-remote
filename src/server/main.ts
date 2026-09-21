@@ -1,7 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { RestartableAppServer } from "../app-server/runtime.ts";
+import { DirectoryAppServer } from "../app-server/directory-server.ts";
 import { codexRemoteInitializeParams } from "../app-server/initialize.ts";
 import { ProjectCatalog } from "../projects/catalog.ts";
 import { CodexSessionService } from "../sessions/service.ts";
@@ -43,7 +43,7 @@ export async function main(): Promise<void> {
 
   const projects = await ProjectCatalog.fromConfigFile(configPath);
   const previewRoot = await ensurePreviewRoot();
-  const appServer = new RestartableAppServer({ workingDirectory: process.cwd() });
+  const appServer = new DirectoryAppServer({ workingDirectory: process.cwd() });
   let remote: RemoteWebSocketServer | null = null;
   let workers: SessionWorkerManager | null = null;
   let cleanupTimer: NodeJS.Timeout | null = null;
