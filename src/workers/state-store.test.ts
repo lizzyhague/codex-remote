@@ -239,3 +239,101 @@ test("tryMarkRunning and tryFinish only succeed once", async (context) => {
   assert.equal(store.eventsForTask("task-1").length, 1);
   assert.equal(store.require("task-1").status, "interrupted");
 });
+
+test("drops a finished task's events and keeps the ones still replayable", async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-worker-prune-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const store = await WorkerStateStore.open(path.join(directory, "work.sqlite"));
+  context.after(() => store.close());
+
+  store.enqueue({
+    id: "task-1",
+    clientMessageId: "message-1",
+    projectId: "project-1",
+    threadId: "thread-1",
+    kind: "message",
+    payload: "你好",
+    permissionMode: "manual",
+    createdAtMs: 100,
+  });
+  store.markRunning("task-1", "native-turn-1", "manual", 110);
+  store.appendEvent("task-1", "thread-1", { type: "message.delta", delta: "一" }, 120);
+  assert.equal(store.eventsForTask("task-1").length, 1);
+
+  store.finish("task-1", "completed", {
+    type: "task.completed",
+    sessionId: "thread-1",
+    taskId: "task-1",
+    status: "completed",
+  }, 130);
+  assert.deepEqual(store.eventsForTask("task-1"), []);
+
+  store.enqueue({
+    id: "task-2",
+    clientMessageId: "message-2",
+    projectId: "project-1",
+    threadId: "thread-1",
+    kind: "message",
+    payload: "再来",
+    permissionMode: "manual",
+    createdAtMs: 200,
+  });
+  store.markRunning("task-2", "native-turn-2", "manual", 210);
+  store.appendEvent("task-2", "thread-1", { type: "message.delta", delta: "二" }, 220);
+  store.finish("task-2", "interrupted", {
+    type: "task.completed",
+    sessionId: "thread-1",
+    taskId: "task-2",
+    status: "interrupted",
+  }, 230, { interruptionReason: "user_requested" });
+
+  // 中断的最后一个任务仍要能补上中断前那一屏。
+  assert.equal(store.eventsForTask("task-2").length, 2);
+
+  store.enqueue({
+    id: "task-3",
+    clientMessageId: "message-3",
+    projectId: "project-1",
+    threadId: "thread-1",
+    kind: "message",
+    payload: "第三次",
+    permissionMode: "manual",
+    createdAtMs: 300,
+  });
+
+  // 有了更新的任务之后，那一屏不会再被回放。
+  assert.deepEqual(store.eventsForTask("task-2"), []);
+});
+
+test("clears events left behind by older builds when the store reopens", async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-worker-backlog-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "work.sqlite");
+  let store = await WorkerStateStore.open(file);
+
+  store.enqueue({
+    id: "task-1",
+    clientMessageId: "message-1",
+    projectId: "project-1",
+    threadId: "thread-1",
+    kind: "message",
+    payload: "你好",
+    permissionMode: "manual",
+    createdAtMs: 100,
+  });
+  store.markRunning("task-1", "native-turn-1", "manual", 110);
+  store.finish("task-1", "completed", {
+    type: "task.completed",
+    sessionId: "thread-1",
+    taskId: "task-1",
+    status: "completed",
+  }, 120);
+  // 旧版本在任务结束后仍然留着事件。
+  store.appendEvent("task-1", "thread-1", { type: "message.delta", delta: "残留" }, 130);
+  assert.equal(store.eventsForTask("task-1").length, 1);
+  store.close();
+
+  store = await WorkerStateStore.open(file);
+  context.after(() => store.close());
+  assert.deepEqual(store.eventsForTask("task-1"), []);
+});

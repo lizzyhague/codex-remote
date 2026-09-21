@@ -131,6 +131,8 @@ test("fails before starting a turn when Full access cannot be restored", async (
     toggleFullAccessFails: true,
   });
   fixture.manager.start();
+  const events: Array<Record<string, unknown>> = [];
+  fixture.manager.onEvent((event) => events.push(event.event));
   const accepted = fixture.manager.enqueueMessage(
     "project-1",
     "thread-1",
@@ -139,8 +141,7 @@ test("fails before starting a turn when Full access cannot be restored", async (
   );
   await waitFor(() => fixture.store.require(accepted.taskId).status === "failed");
   assert.equal(fixture.workers[0]?.started, false);
-  const events = fixture.store.eventsForTask(accepted.taskId);
-  const completed = events.at(-1)?.event;
+  const completed = events.at(-1);
   assert.match(String(completed?.error), /权限/u);
 });
 test("blocks a new session when a trusted reading is below the memory threshold", async (context) => {

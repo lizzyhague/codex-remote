@@ -141,6 +141,7 @@ export class WorkerStateStore {
     if (!taskColumns.includes("attachments_json")) {
       database.exec("ALTER TABLE worker_tasks ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'");
     }
+    if (pruneObsoleteEvents(database) > 0) database.exec("VACUUM");
     return new WorkerStateStore(database);
   }
 
@@ -229,6 +230,7 @@ export class WorkerStateStore {
         task.createdAtMs,
       );
       const stored = this.require(task.id);
+      this.#pruneThreadEvents(task.threadId, task.id);
       this.#database.exec("COMMIT");
       return { outcome: "accepted", task: stored };
     } catch (error) {
@@ -397,12 +399,36 @@ export class WorkerStateStore {
         taskId,
       );
       const stored = this.appendEvent(taskId, current.threadId, event, nowMs);
+      this.#pruneThreadEvents(
+        current.threadId,
+        status === "interrupted" ? taskId : null,
+      );
       this.#database.exec("COMMIT");
       return stored;
     } catch (error) {
       this.#database.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  /**
+   * 删掉这个会话里已经不会再被回放的事件。
+   *
+   * 事件日志只服务两种回放：任务仍在进行时重连看进度，以及最后一个任务停在中断
+   * 状态时补上中断前那一屏。对话历史本身由 Codex 自己的会话文件提供，不读这里。
+   * 因此终态任务的事件没有下一个读取方，留着只会让库无限增长。
+   * `keepTaskId` 是当前仍需回放的那个任务；传 null 表示这个会话一条都不必留。
+   */
+  #pruneThreadEvents(threadId: string, keepTaskId: string | null): void {
+    this.#database.prepare(`
+      DELETE FROM worker_events
+      WHERE thread_id = ?
+        AND task_id IS NOT ?
+        AND task_id IN (
+          SELECT id FROM worker_tasks
+          WHERE thread_id = ? AND status IN ('completed', 'interrupted', 'failed')
+        )
+    `).run(threadId, keepTaskId, threadId);
   }
 
   eventsForTask(taskId: string): StoredWorkerEvent[] {
@@ -437,6 +463,29 @@ export class WorkerStateStore {
     this.#database.close();
   }
 
+}
+
+/**
+ * 启动时清掉存量里已经不会再被回放的事件：只有仍在进行的任务，以及停在中断状态的
+ * 会话最后一个任务，才需要留着。返回删掉的行数。
+ */
+function pruneObsoleteEvents(database: DatabaseSync): number {
+  const result = database.prepare(`
+    DELETE FROM worker_events
+    WHERE task_id IN (
+      SELECT task.id FROM worker_tasks task
+      WHERE task.status IN ('completed', 'interrupted', 'failed')
+        AND NOT (
+          task.status = 'interrupted'
+          AND task.id = (
+            SELECT latest.id FROM worker_tasks latest
+            WHERE latest.thread_id = task.thread_id
+            ORDER BY latest.created_at_ms DESC LIMIT 1
+          )
+        )
+    )
+  `).run();
+  return Number(result.changes);
 }
 
 function readTaskRow(value: unknown): WorkerTask {
