@@ -3,7 +3,6 @@ import { pathToFileURL } from "node:url";
 
 import { RestartableAppServer } from "../app-server/runtime.ts";
 import { codexRemoteInitializeParams } from "../app-server/initialize.ts";
-import { ApprovalBroker } from "../approvals/broker.ts";
 import { ProjectCatalog } from "../projects/catalog.ts";
 import { CodexSessionService } from "../sessions/service.ts";
 import { resolveTrashStatePath, TrashStore } from "../sessions/trash-store.ts";
@@ -45,14 +44,12 @@ export async function main(): Promise<void> {
   const projects = await ProjectCatalog.fromConfigFile(configPath);
   const previewRoot = await ensurePreviewRoot();
   const appServer = new RestartableAppServer({ workingDirectory: process.cwd() });
-  let approvals: ApprovalBroker | null = null;
   let remote: RemoteWebSocketServer | null = null;
   let workers: SessionWorkerManager | null = null;
   let cleanupTimer: NodeJS.Timeout | null = null;
 
   try {
     await appServer.initialize(codexRemoteInitializeParams());
-    approvals = new ApprovalBroker(appServer);
     const sessions = new CodexSessionService(appServer, projects, trash, { marks, settings });
     const locks = new ProjectTaskLocks();
     workers = new SessionWorkerManager({
@@ -94,17 +91,10 @@ export async function main(): Promise<void> {
       fileRoots: buildViewableRoots(projects.rootPaths(), [previewRoot]),
       allowedOrigins: readAllowedOrigins(process.env.CODEX_REMOTE_ALLOWED_ORIGINS),
       uploads,
-      onWritersIdle: async () => {
-        // 理论上 BrowserConnection 已取消自己任务的审批；这里再清一次，避免旧
-        // app-server 进程退出后 ApprovalBroker 留下无法回答的请求。
-        approvals?.cancelAll();
-        await appServer.releaseWriters();
-      },
       services: {
         projects,
         sessions,
         turnTransport: appServer,
-        approvals,
         locks,
         workers,
         settings,
@@ -133,13 +123,8 @@ export async function main(): Promise<void> {
     if (cleanupTimer) clearInterval(cleanupTimer);
     await remote?.close();
     await workers?.close();
-    try {
-      approvals?.cancelAll();
-    } finally {
-      approvals?.dispose();
-      await appServer.close();
-      workerState.close();
-    }
+    await appServer.close();
+    workerState.close();
   }
 }
 

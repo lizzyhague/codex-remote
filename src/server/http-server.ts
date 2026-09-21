@@ -37,8 +37,6 @@ export type RemoteServerAddress = {
 export type RemoteWebSocketServerOptions = {
   token: string;
   services: BrowserConnectionServices;
-  /** 最后一个使用过 thread writer 的浏览器完成断线清理后调用。 */
-  onWritersIdle?: () => Promise<void>;
   fileRoots?: string[];
   heartbeatIntervalMs?: number;
   /** 额外允许的浏览器 Origin。与 Host 同源的请求始终允许。 */
@@ -85,7 +83,6 @@ export class RemoteWebSocketServer {
   readonly #auth: CookieAuth;
   readonly #fileRoots: readonly string[];
   readonly #services: BrowserConnectionServices;
-  readonly #onWritersIdle: (() => Promise<void>) | null;
   readonly #heartbeatIntervalMs: number;
   readonly #allowedOrigins: ReadonlySet<string>;
   readonly #webRoot: string;
@@ -94,9 +91,6 @@ export class RemoteWebSocketServer {
   readonly #http: Server;
   readonly #webSockets: WebSocketServer;
   readonly #connections = new Map<WebSocket, BrowserConnection>();
-  #disconnecting = 0;
-  #writerReleaseNeeded = false;
-  #idleTransition: Promise<void> = Promise.resolve();
   #listening = false;
 
   constructor(options: RemoteWebSocketServerOptions) {
@@ -107,7 +101,6 @@ export class RemoteWebSocketServer {
     this.#auth = new CookieAuth(options.token);
     this.#fileRoots = options.fileRoots ?? [];
     this.#services = options.services;
-    this.#onWritersIdle = options.onWritersIdle ?? null;
     this.#heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     this.#allowedOrigins = new Set(options.allowedOrigins ?? []);
     this.#webRoot = options.webRoot ?? DEFAULT_WEB_ROOT;
@@ -211,10 +204,7 @@ export class RemoteWebSocketServer {
   }
 
   #authentication(): Record<string, unknown> {
-    return {
-      authenticated: true,
-      ...(this.#services.workers ? { features: { backgroundWorkers: true } } : {}),
-    };
+    return { authenticated: true };
   }
 
   async #login(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -529,42 +519,11 @@ export class RemoteWebSocketServer {
     webSocket.once("close", () => {
       clearInterval(heartbeatTimer);
       this.#connections.delete(webSocket);
-      this.#disconnecting += 1;
-      void connection.disconnect().then((result) => {
-        this.#writerReleaseNeeded ||= result.usedThreadWriter;
-      }).catch((error: unknown) => {
+      void connection.disconnect().catch((error: unknown) => {
         console.error(
           `浏览器断线清理失败：${error instanceof Error ? error.message : String(error)}`,
         );
-      }).finally(() => {
-        this.#disconnecting -= 1;
-        this.#scheduleWriterRelease();
       });
-    });
-  }
-
-  #scheduleWriterRelease(): void {
-    if (
-      !this.#listening || !this.#onWritersIdle || !this.#writerReleaseNeeded ||
-      this.#connections.size > 0 || this.#disconnecting > 0
-    ) {
-      return;
-    }
-
-    this.#writerReleaseNeeded = false;
-    const transition = this.#idleTransition.then(async () => {
-      // 排队期间如果浏览器已经重连，保留标记，等下一次真正空闲再释放。
-      if (!this.#listening) return;
-      if (this.#connections.size > 0 || this.#disconnecting > 0) {
-        this.#writerReleaseNeeded = true;
-        return;
-      }
-      await this.#onWritersIdle?.();
-    });
-    this.#idleTransition = transition.catch((error: unknown) => {
-      console.error(
-        `释放 Codex 会话 writer 失败：${error instanceof Error ? error.message : String(error)}`,
-      );
     });
   }
 }

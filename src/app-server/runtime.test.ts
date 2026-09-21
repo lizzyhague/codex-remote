@@ -83,38 +83,38 @@ function setupRuntime() {
   return { runtime, processes };
 }
 
-test("rebuilds the child process and keeps listeners attached", async () => {
+test("forwards notifications from the child and closes it on shutdown", async () => {
   const { runtime, processes } = setupRuntime();
   const notifications: JsonObject[] = [];
   runtime.onNotification((message) => notifications.push(message));
 
   await runtime.initialize(INITIALIZE_PARAMS);
-  const before = await runtime.request<{ generation: number }>("test/read", {});
-  assert.equal(before.generation, 1);
-  processes[0]?.notify({ method: "test/before" });
-
-  const releasing = runtime.releaseWriters();
-  // 这个请求在 releaseWriters 之后发出，必须等待第二个子进程，而不是写入旧 stdin。
-  const during = runtime.request<{ generation: number }>("test/read", {});
-  await releasing;
-  assert.equal((await during).generation, 2);
-  assert.equal(processes[0]?.closed, true);
-  assert.equal(processes.length, 2);
-
-  processes[1]?.notify({ method: "test/after" });
-  assert.deepEqual(notifications.map((message) => message.method), [
-    "test/before",
-    "test/after",
-  ]);
+  const read = await runtime.request<{ generation: number }>("test/read", {});
+  assert.equal(read.generation, 1);
+  processes[0]?.notify({ method: "test/notified" });
+  assert.deepEqual(notifications.map((message) => message.method), ["test/notified"]);
 
   await runtime.close();
-  assert.equal(processes[1]?.closed, true);
+  assert.equal(processes[0]?.closed, true);
+  assert.equal(processes.length, 1, "目录 App Server 不会在运行期间重建");
 });
 
-test("reports only unexpected child exits as fatal", async () => {
+test("reports an unexpected child exit as fatal", async () => {
   const { runtime, processes } = setupRuntime();
   await runtime.initialize(INITIALIZE_PARAMS);
   processes[0]?.crash();
   await runtime.whenExited();
   await runtime.close();
+});
+
+test("a deliberate close is not reported as a fatal exit", async () => {
+  // main.ts 用 whenExited() 决定要不要以退出码 1 结束进程；正常停止必须保持 0。
+  const { runtime } = setupRuntime();
+  await runtime.initialize(INITIALIZE_PARAMS);
+  await runtime.close();
+  const settled = await Promise.race([
+    runtime.whenExited().then(() => "exited" as const),
+    new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 20)),
+  ]);
+  assert.equal(settled, "pending");
 });

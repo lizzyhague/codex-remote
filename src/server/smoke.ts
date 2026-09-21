@@ -1,19 +1,27 @@
 import { once } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import WebSocket from "ws";
 
 import { AppServerClient } from "../app-server/client.ts";
-import { ApprovalBroker } from "../approvals/broker.ts";
 import { ProjectCatalog } from "../projects/catalog.ts";
 import { CodexSessionService } from "../sessions/service.ts";
 import { resolveTrashStatePath, TrashStore } from "../sessions/trash-store.ts";
+import { SessionWorkerManager } from "../workers/manager.ts";
+import { WorkerStateStore } from "../workers/state-store.ts";
 import { RemoteWebSocketServer } from "./http-server.ts";
 import { ProjectTaskLocks } from "./project-locks.ts";
 import { buildViewableRoots, ensurePreviewRoot } from "./viewable-roots.ts";
 
 const token = "codex-remote-smoke-token-not-a-secret";
 const appServer = new AppServerClient({ workingDirectory: process.cwd() });
-let approvals: ApprovalBroker | null = null;
+// 这个脚本只读项目和会话列表，不启动任何任务，所以状态库放在临时目录，
+// 不碰主机上真正的 work.sqlite。
+const stateDirectory = await mkdtemp(path.join(tmpdir(), "codex-remote-smoke-"));
+let workerState: WorkerStateStore | null = null;
+let workers: SessionWorkerManager | null = null;
 let remote: RemoteWebSocketServer | null = null;
 let webSocket: WebSocket | null = null;
 
@@ -32,7 +40,9 @@ try {
   const projects = await ProjectCatalog.fromConfigFile("config/projects.json");
   const previewRoot = await ensurePreviewRoot();
   const trash = await TrashStore.open(resolveTrashStatePath());
-  approvals = new ApprovalBroker(appServer);
+  const locks = new ProjectTaskLocks();
+  workerState = await WorkerStateStore.open(path.join(stateDirectory, "work.sqlite"));
+  workers = new SessionWorkerManager({ store: workerState, projects, trash, locks });
   remote = new RemoteWebSocketServer({
     token,
     fileRoots: buildViewableRoots(projects.rootPaths(), [previewRoot]),
@@ -40,8 +50,8 @@ try {
       projects,
       sessions: new CodexSessionService(appServer, projects, trash),
       turnTransport: appServer,
-      approvals,
-      locks: new ProjectTaskLocks(),
+      locks,
+      workers,
     },
   });
   const address = await remote.listen(0);
@@ -89,8 +99,10 @@ try {
     await closed;
   }
   await remote?.close();
-  approvals?.dispose();
+  await workers?.close();
+  workerState?.close();
   await appServer.close();
+  await rm(stateDirectory, { recursive: true, force: true });
 }
 
 async function sendRequest(

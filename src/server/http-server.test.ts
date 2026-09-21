@@ -10,12 +10,13 @@ import WebSocket from "ws";
 
 import type { AppServerMessageListener } from "../app-server/client.ts";
 import type { AppServerTransport } from "../app-server/turn-session.ts";
-import { ApprovalBroker, type ApprovalTransport } from "../approvals/broker.ts";
+import type { ApprovalTransport } from "../approvals/broker.ts";
 import type { RequestId } from "../generated/RequestId.ts";
 import type { OpenedSession, SessionPage } from "../sessions/service.ts";
 import type { BrowserConnectionServices } from "./connection.ts";
 import { RemoteWebSocketServer } from "./http-server.ts";
 import { ProjectTaskLocks } from "./project-locks.ts";
+import type { SessionWorkerManager } from "../workers/manager.ts";
 
 class EmptyTransport implements AppServerTransport, ApprovalTransport {
   readonly #notifications = new Set<AppServerMessageListener>();
@@ -37,8 +38,7 @@ class EmptyTransport implements AppServerTransport, ApprovalTransport {
 
 test("serves health and requires a cookie before the WebSocket upgrade", async () => {
   const transport = new EmptyTransport();
-  const approvals = new ApprovalBroker(transport);
-  const services = emptyServices(transport, approvals);
+  const services = emptyServices(transport);
   const server = new RemoteWebSocketServer({
     token: "test-secret",
     services,
@@ -122,17 +122,15 @@ test("serves health and requires a cookie before the WebSocket upgrade", async (
       await withTimeout(closed, "关闭 WebSocket");
     }
     await withTimeout(server.close(), "关闭服务器");
-    approvals.dispose();
   }
 });
 
 test("streams same-origin uploads through the local attachment adapter", async () => {
   const transport = new EmptyTransport();
-  const approvals = new ApprovalBroker(transport);
   const received: Buffer[] = [];
   const server = new RemoteWebSocketServer({
     token: "test-secret",
-    services: emptyServices(transport, approvals),
+    services: emptyServices(transport),
     uploads: {
       async upload(ticket, contentLength, source) {
         assert.equal(ticket, "ticket-secret");
@@ -181,14 +179,12 @@ test("streams same-origin uploads through the local attachment adapter", async (
     assert.equal(crossOrigin.status, 403);
   } finally {
     await server.close();
-    approvals.dispose();
   }
 });
 
 test("HTTP login survives restarts and token rotation revokes its cookie", async () => {
   const transport = new EmptyTransport();
-  const approvals = new ApprovalBroker(transport);
-  const services = emptyServices(transport, approvals);
+  const services = emptyServices(transport);
   const first = new RemoteWebSocketServer({ token: "test-secret", services });
   const firstAddress = await first.listen(0);
   const cookie = await loginCookie(firstAddress);
@@ -225,7 +221,6 @@ test("HTTP login survives restarts and token rotation revokes its cookie", async
   });
   assert.equal(crossSite.status, 403);
   await rotated.close();
-  approvals.dispose();
 });
 
 test("raw serves only caged Markdown and images with sandbox headers", async (t) => {
@@ -247,16 +242,14 @@ test("raw serves only caged Markdown and images with sandbox headers", async (t)
   await symlink(secret, path.join(firstRoot, "escape.md"));
 
   const transport = new EmptyTransport();
-  const approvals = new ApprovalBroker(transport);
   const server = new RemoteWebSocketServer({
     token: "test-secret",
-    services: emptyServices(transport, approvals),
+    services: emptyServices(transport),
     fileRoots: [await realpath(firstRoot), await realpath(secondRoot)],
   });
   const address = await server.listen(0);
   t.after(async () => {
     await server.close();
-    approvals.dispose();
   });
   const origin = `http://${address.host}:${address.port}`;
   const cookie = await loginCookie(address);
@@ -295,67 +288,19 @@ test("raw serves only caged Markdown and images with sandbox headers", async (t)
   }
 });
 
-test("releases writers only after the last thread-using browser disconnects", async () => {
-  const transport = new EmptyTransport();
-  const approvals = new ApprovalBroker(transport);
-  const services = emptyServices(transport, approvals);
-  let nextSession = 1;
-  services.sessions.start = async () => openedSession(`session-${nextSession++}`);
-
-  let idleCalls = 0;
-  let resolveIdle!: () => void;
-  const idle = new Promise<void>((resolve) => {
-    resolveIdle = resolve;
-  });
-  const server = new RemoteWebSocketServer({
-    token: "test-secret",
-    services,
-    onWritersIdle: async () => {
-      idleCalls += 1;
-      resolveIdle();
-    },
-  });
-  const address = await server.listen(0);
-  const url = `ws://${address.host}:${address.port}/ws`;
-  const cookie = await loginCookie(address);
-  const first = new WebSocket(url, { headers: { cookie } });
-  const second = new WebSocket(url, { headers: { cookie } });
-
-  try {
-    await Promise.all([
-      withTimeout(once(first, "open"), "打开第一个 WebSocket"),
-      withTimeout(once(second, "open"), "打开第二个 WebSocket"),
-    ]);
-    for (const socket of [first, second]) {
-      await sendRequest(socket, {
-        type: "session.start",
-        requestId: "open",
-        projectId: "projects/demo",
-      });
-    }
-
-    const firstClosed = once(first, "close");
-    first.close();
-    await withTimeout(firstClosed, "关闭第一个 WebSocket");
-    await delay(20);
-    assert.equal(idleCalls, 0);
-
-    const secondClosed = once(second, "close");
-    second.close();
-    await withTimeout(secondClosed, "关闭第二个 WebSocket");
-    await withTimeout(idle, "等待 writer 释放");
-    assert.equal(idleCalls, 1);
-  } finally {
-    first.terminate();
-    second.terminate();
-    await withTimeout(server.close(), "关闭服务器");
-    approvals.dispose();
-  }
-});
+/** 这些测试只验证 HTTP 与升级路径，Worker 管理器只需要能被订阅和断开。 */
+function stubWorkers(): SessionWorkerManager {
+  return {
+    onEvent: () => () => {},
+    clientAuthenticated() {},
+    clientDisconnected() {},
+    detachSession() {},
+    activeTask: () => null,
+  } as unknown as SessionWorkerManager;
+}
 
 function emptyServices(
   transport: EmptyTransport,
-  approvals: ApprovalBroker,
 ): BrowserConnectionServices {
   return {
     projects: {
@@ -425,8 +370,8 @@ function emptyServices(
       },
     },
     turnTransport: transport,
-    approvals,
     locks: new ProjectTaskLocks(),
+    workers: stubWorkers(),
   };
 }
 
@@ -485,10 +430,9 @@ function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
 
 test("only accepts WebSocket upgrades from its own page", async () => {
   const transport = new EmptyTransport();
-  const approvals = new ApprovalBroker(transport);
   const server = new RemoteWebSocketServer({
     token: "test-secret",
-    services: emptyServices(transport, approvals),
+    services: emptyServices(transport),
     allowedOrigins: ["https://vps.example.ts.net"],
   });
   const address = await server.listen(0);
@@ -526,7 +470,6 @@ test("only accepts WebSocket upgrades from its own page", async () => {
     headless.close();
   } finally {
     await withTimeout(server.close(), "关闭服务器");
-    approvals.dispose();
   }
 });
 
@@ -555,11 +498,9 @@ async function withWebRoot(
     await writeFile(path.join(webRoot, name), body);
   }
   const transport = new EmptyTransport();
-  const approvals = new ApprovalBroker(transport);
-  t.after(() => approvals.dispose());
   const server = new RemoteWebSocketServer({
     token: "test-secret",
-    services: emptyServices(transport, approvals),
+    services: emptyServices(transport),
     webRoot,
   });
   const address = await server.listen(0);

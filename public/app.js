@@ -101,7 +101,6 @@ const state = {
   reconnectAllowed: true,
   authenticated: false,
   connectionReady: false,
-  backgroundWorkers: false,
   projectId: null,
   projects: [],
   sessionId: null,
@@ -185,7 +184,6 @@ elements.tokenForm.addEventListener("submit", (event) => {
 });
 
 elements.projectSelect.addEventListener("change", () => {
-  if (state.running && !state.backgroundWorkers) return;
   state.projectId = elements.projectSelect.value || null;
   resetCurrentSession();
   elements.sessionSearchInput.value = "";
@@ -381,7 +379,6 @@ async function connect(token) {
     if (!response.ok) throw new Error("登录服务暂时不可用。");
     const authentication = await response.json();
     if (generation !== state.generation) return;
-    state.backgroundWorkers = authentication?.features?.backgroundWorkers === true;
     elements.tokenInput.value = "";
     const returnTo = new URLSearchParams(location.search).get("returnTo");
     if (returnTo?.startsWith("/view?")) {
@@ -463,13 +460,11 @@ async function connect(token) {
 
   socket.addEventListener("close", () => {
     if (generation !== state.generation) return;
-    const backgroundWorkers = state.backgroundWorkers;
     state.metrics = null;
     renderSessionMetrics();
     state.socket = null;
     state.authenticated = false;
     state.connectionReady = false;
-    state.backgroundWorkers = false;
     state.running = false;
     state.stopping = false;
     state.commandBusy = false;
@@ -483,9 +478,7 @@ async function connect(token) {
 
     if (state.reconnectAllowed) {
       if (!elements.appView.hidden) {
-        showNotice(backgroundWorkers
-          ? "连接中断；已接受的任务会由主机后台继续处理。正在重新连接……"
-          : "连接中断，主机会停止正在进行的任务。正在重新连接……", {
+        showNotice("连接中断；已接受的任务会由主机后台继续处理。正在重新连接……", {
           lifetime: "state",
           tone: "warning",
           key: CONNECTION_NOTICE_KEY,
@@ -656,7 +649,7 @@ async function loadSessions({ append = false } = {}) {
 }
 
 async function startSession() {
-  if (!state.projectId || (state.running && !state.backgroundWorkers)) return;
+  if (!state.projectId) return;
   if (state.sessionView !== "active") setSessionView("active", false);
   setNavigationBusy(true);
   try {
@@ -678,21 +671,19 @@ async function startSession() {
   }
 }
 
-async function resumeSession(sessionId, options = {}) {
-  const force = options.force === true;
+async function resumeSession(sessionId) {
   const selected = findSessionSummary(sessionId);
   if (selected && !directoryAvailable(selected.projectId)) {
     showAlert("这个会话的工作目录已经不在了。", "无法打开会话");
     return;
   }
   if (selected?.projectId && selected.projectId !== state.projectId) {
-    if (!force && state.running && !state.backgroundWorkers) return;
     state.projectId = selected.projectId;
     stateSet(PROJECT_KEY, state.projectId);
     elements.projectSelect.value = state.projectId;
     await loadSessions();
   }
-  if (!state.projectId || (!force && state.running && !state.backgroundWorkers)) return;
+  if (!state.projectId) return;
   setNavigationBusy(true);
   try {
     const opened = await request("session.resume", {
@@ -866,8 +857,7 @@ function createSessionItem(session) {
   const open = document.createElement("button");
   open.className = "session-open";
   open.type = "button";
-  open.disabled = state.sessionView !== "active" ||
-    (state.running && !state.backgroundWorkers);
+  open.disabled = state.sessionView !== "active";
   appendSessionText(open, session);
   if (state.sessionView === "active") {
     open.addEventListener("click", () => {
@@ -1586,7 +1576,7 @@ async function stopTask() {
     const result = await request("task.stop");
     if (result?.requested === false) {
       state.stopping = false;
-      if (state.sessionId) await resumeSession(state.sessionId, { force: true });
+      if (state.sessionId) await resumeSession(state.sessionId);
       showNotice("任务已经结束或状态已变化", TEMPORARY_WARNING);
       return;
     }
@@ -2616,8 +2606,7 @@ function updateControls() {
   const uploading = hasUnfinishedUploads();
   const busy = state.running || state.commandBusy;
   const navigationBusy = state.navigationBusy || state.sessionLoading;
-  const navigationLocked = state.commandBusy || navigationBusy || uploading ||
-    (state.running && !state.backgroundWorkers);
+  const navigationLocked = state.commandBusy || navigationBusy || uploading;
   const projectHasActiveTask = visibleSessionSummaries().some((session) => session.state === "active");
   elements.projectSelect.disabled = !connected || navigationLocked || state.selectionMode;
   elements.newSessionButton.disabled = !connected || navigationLocked ||

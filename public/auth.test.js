@@ -31,7 +31,6 @@ function harness(fetch, search = "") {
       reconnectTimer: null,
       reconnectAllowed: true,
       authenticated: false,
-      backgroundWorkers: false,
       socket: null,
     },
     elements: {
@@ -74,17 +73,16 @@ function harness(fetch, search = "") {
   return { context, sockets, actions, clearedNotices };
 }
 
-test("cookie login opens WebSocket without an auth frame and preserves feature negotiation", async () => {
+test("cookie login opens WebSocket without an auth frame", async () => {
   const requests = [];
   const { context, sockets, actions, clearedNotices } = harness(async (url, options) => {
     requests.push({ url, options });
-    return new Response(JSON.stringify({ features: { backgroundWorkers: true } }));
+    return new Response(JSON.stringify({ authenticated: true }));
   });
   await context.connect("test-credential");
   assert.equal(requests[0].url, "/auth/login");
   assert.equal(JSON.parse(requests[0].options.body).token, "test-credential");
   assert.equal(context.elements.tokenInput.value, "");
-  assert.equal(context.state.backgroundWorkers, true);
   assert.equal(sockets.length, 1);
   await sockets[0].listeners.open();
   assert.equal(context.state.authenticated, true);

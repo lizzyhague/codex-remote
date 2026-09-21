@@ -9,6 +9,7 @@ Codex Remote 是单用户自托管的 PWA，用来在手机或电脑上控制主
 ```text
 浏览器 PWA → HTTPS 入口 → 127.0.0.1:<CODEX_REMOTE_PORT>
                               ├→ Unix socket 上的 ai-remote-upload（仅附件）
+                              ├→ 一个共享的 codex app-server --stdio：会话列表与账号额度
                               └→ 每个活动会话一个 codex app-server --stdio 子进程
 ```
 

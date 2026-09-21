@@ -20,14 +20,13 @@ test("requested true keeps the stopping state until the task completes", async (
       sessionId: "session-1",
       authenticated: true,
       connectionReady: true,
-      backgroundWorkers: false,
     },
     TEMPORARY_WARNING: { lifetime: "temporary", tone: "warning" },
     TEMPORARY_ERROR: { lifetime: "temporary", tone: "error" },
     elements: { taskButton: button },
     request: async () => ({ requested: true }),
-    resumeSession: async (sessionId, options) => {
-      resumes.push({ sessionId, options });
+    resumeSession: async (sessionId) => {
+      resumes.push({ sessionId });
     },
     showNotice: (message) => notices.push(message),
     updateControls() {
@@ -50,7 +49,7 @@ test("requested true keeps the stopping state until the task completes", async (
   assert.equal(resumes.length, 0);
 });
 
-test("requested false force-resyncs the session and does not clear running itself", async () => {
+test("requested false resyncs the session and does not clear running itself", async () => {
   const notices = [];
   const resumes = [];
   const context = vm.createContext({
@@ -61,7 +60,6 @@ test("requested false force-resyncs the session and does not clear running itsel
       sessionId: "session-1",
       authenticated: true,
       connectionReady: true,
-      backgroundWorkers: false,
     },
     TEMPORARY_WARNING: { lifetime: "temporary", tone: "warning" },
     TEMPORARY_ERROR: { lifetime: "temporary", tone: "error" },
@@ -80,7 +78,6 @@ test("requested false force-resyncs the session and does not clear running itsel
   assert.equal(context.state.running, true);
   assert.equal(resumes.length, 1);
   assert.equal(resumes[0].sessionId, "session-1");
-  assert.equal(resumes[0].options.force, true);
   assert.equal(notices[0], "任务已经结束或状态已变化");
 });
 
@@ -94,7 +91,6 @@ test("a failed stop request restores the button and keeps the task running", asy
       sessionId: "session-1",
       authenticated: true,
       connectionReady: true,
-      backgroundWorkers: false,
     },
     TEMPORARY_WARNING: { lifetime: "temporary", tone: "warning" },
     TEMPORARY_ERROR: { lifetime: "temporary", tone: "error" },

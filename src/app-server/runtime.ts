@@ -27,12 +27,8 @@ export type RestartableAppServerOptions =
   };
 
 /**
- * 在不结束 HTTP 服务的前提下管理可重建的 app-server 子进程。
- *
- * 生产入口把这一实例作为目录 App Server，不用它执行 turn 或长期恢复会话；旧连接
- * 状态机仍可在最后一个网页客户端离开时重建它，以立即释放曾加载的 rollout writer。
- * 监听器挂在这一层，因此重建后不需要重新创建 SessionService、ApprovalBroker 或
- * HTTP 服务。
+ * 目录 App Server 子进程。会话列表、恢复和账号额度走这一个共享进程；turn 属于
+ * 每个会话自己的 Worker，不在这里执行，因此它不会加载可写的 rollout。
  */
 export class RestartableAppServer {
   readonly #clientOptions: Omit<
@@ -42,14 +38,11 @@ export class RestartableAppServer {
   readonly #clientFactory: AppServerProcessFactory;
   readonly #notificationListeners = new Set<AppServerMessageListener>();
   readonly #serverRequestListeners = new Set<AppServerMessageListener>();
-  readonly #expectedExits = new WeakSet<AppServerProcess>();
   readonly #unexpectedExit: Promise<void>;
   #resolveUnexpectedExit!: () => void;
   #unexpectedExitResolved = false;
-  #initializeParams: InitializeParams | null = null;
   #ready: Promise<AppServerProcess> | null = null;
   #current: AppServerProcess | null = null;
-  #transitionTail: Promise<void> = Promise.resolve();
   #closed = false;
 
   constructor(options: RestartableAppServerOptions = {}) {
@@ -70,7 +63,6 @@ export class RestartableAppServer {
       throw new Error("codex app-server 运行时已经初始化。");
     }
 
-    this.#initializeParams = params;
     const started = this.#startClient(params);
     this.#ready = started.then(({ client }) => client);
     const { response } = await started;
@@ -81,9 +73,6 @@ export class RestartableAppServer {
     if (this.#closed) {
       throw new Error("codex app-server 运行时已经关闭。");
     }
-    // releaseWriters() 会同步排进 transitionTail；恰好重连的浏览器在这里等待新
-    // 子进程完成 initialize，而不会把请求写进正在退出的旧 stdin。
-    await this.#transitionTail;
     const client = await this.#requireReady();
     return client.request<Result>(method, params);
   }
@@ -105,19 +94,7 @@ export class RestartableAppServer {
     this.#current.respondToServerRequest(id, result);
   }
 
-  /** 旧连接路径在所有网页连接完成清理后调用，关闭旧进程并释放它的 writer。 */
-  releaseWriters(): Promise<void> {
-    if (this.#closed) {
-      return Promise.reject(new Error("codex app-server 运行时已经关闭。"));
-    }
-    const transition = this.#transitionTail.then(() => this.#restart());
-    // 后续重建仍可排队；本次调用者拿到原始 promise，能够观察失败。
-    this.#transitionTail = transition.catch(() => {});
-    void transition.catch(() => this.#markUnexpectedExit());
-    return transition;
-  }
-
-  /** 只在子进程意外退出时完成；主动 releaseWriters/close 不触发。 */
+  /** 只在子进程意外退出时完成；主动 close() 不触发。 */
   whenExited(): Promise<void> {
     return this.#unexpectedExit;
   }
@@ -125,38 +102,13 @@ export class RestartableAppServer {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
-    await this.#transitionTail;
 
     const ready = this.#ready;
     if (!ready) return;
     const client = await ready.catch(() => null);
     if (!client) return;
-    this.#expectedExits.add(client);
     if (this.#current === client) this.#current = null;
     await client.close();
-  }
-
-  async #restart(): Promise<void> {
-    const oldClient = await this.#requireReady();
-    this.#expectedExits.add(oldClient);
-
-    const replacement = (async () => {
-      await oldClient.close();
-      if (this.#current === oldClient) this.#current = null;
-      if (this.#closed) {
-        throw new Error("codex app-server 运行时已经关闭。");
-      }
-      const params = this.#initializeParams;
-      if (!params) {
-        throw new Error("codex app-server 运行时尚未初始化。");
-      }
-      const { client } = await this.#startClient(params);
-      return client;
-    })();
-
-    // 在等待旧进程退出前先发布 replacement promise，让并发请求不会再拿到旧进程。
-    this.#ready = replacement;
-    await replacement;
   }
 
   async #startClient(
@@ -168,13 +120,9 @@ export class RestartableAppServer {
       onServerRequest: (message) => this.#emit(this.#serverRequestListeners, message),
     });
     this.#current = client;
+    // close() 先把 #closed 置位，启动失败时先把 #current 清空，两种情况都不算意外退出。
     void client.whenExited().then(() => {
-      if (
-        this.#closed || this.#expectedExits.has(client) ||
-        this.#current !== client
-      ) {
-        return;
-      }
+      if (this.#closed || this.#current !== client) return;
       this.#markUnexpectedExit();
     });
 
@@ -182,7 +130,6 @@ export class RestartableAppServer {
       const response = await client.initialize(params);
       return { client, response };
     } catch (error) {
-      this.#expectedExits.add(client);
       if (this.#current === client) this.#current = null;
       await client.close().catch(() => {});
       throw error;
