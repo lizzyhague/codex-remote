@@ -30,6 +30,7 @@ function harness() {
     URL, URLSearchParams, AbortController,
     location: { protocol: "https:", host: "example.com", search: "" },
     RECONNECT_DELAY_MS: 2500, REQUEST_TIMEOUT_MS: 15000,
+    CONNECTION_NOTICE_KEY: "connection",
     MAX_ATTACHMENT_BYTES: 25 * 1024 * 1024, MAX_MESSAGE_ATTACHMENTS: 100,
     PROJECT_KEY: "project", SESSION_KEY: "session", ATTACHMENT_DRAFTS_KEY: "drafts",
     state: {
@@ -52,7 +53,9 @@ function harness() {
     renderSessionMetrics() {}, hideThinking() {}, showThinking() {},
     renderAttachmentList() {}, refreshPickerLabels() {}, refreshSessionMetrics() {},
     upsertSession() {}, renderSessionList() {}, updateConversationTitle() {}, closeMobileSidebar() {},
-    renderHistory() {}, handleServerEvent() {}, hideNotice() {}, retryOutboxForCurrentSession() {},
+    renderHistory() {}, handleServerEvent() {}, clearNotice() {}, retryOutboxForCurrentSession() {},
+    taskNoticeKey: (kind, sessionId = "session-1") => `task-${kind}:${sessionId}`,
+    clearCurrentSessionNotice() {},
     slashCommands: { load() {}, close() {} },
     loadSessions: async () => {}, setSessionView() {}, showEmpty() {},
     resetCurrentSession() {

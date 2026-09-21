@@ -22,6 +22,8 @@ test("requested true keeps the stopping state until the task completes", async (
       connectionReady: true,
       backgroundWorkers: false,
     },
+    TEMPORARY_WARNING: { lifetime: "temporary", tone: "warning" },
+    TEMPORARY_ERROR: { lifetime: "temporary", tone: "error" },
     elements: { taskButton: button },
     request: async () => ({ requested: true }),
     resumeSession: async (sessionId, options) => {
@@ -61,6 +63,8 @@ test("requested false force-resyncs the session and does not clear running itsel
       connectionReady: true,
       backgroundWorkers: false,
     },
+    TEMPORARY_WARNING: { lifetime: "temporary", tone: "warning" },
+    TEMPORARY_ERROR: { lifetime: "temporary", tone: "error" },
     elements: { taskButton: { disabled: false, textContent: "停止", classList: { toggle() {} } } },
     request: async () => ({ requested: false }),
     resumeSession: async (sessionId, options) => {
@@ -92,6 +96,8 @@ test("a failed stop request restores the button and keeps the task running", asy
       connectionReady: true,
       backgroundWorkers: false,
     },
+    TEMPORARY_WARNING: { lifetime: "temporary", tone: "warning" },
+    TEMPORARY_ERROR: { lifetime: "temporary", tone: "error" },
     elements: { taskButton: { disabled: false, textContent: "停止", classList: { toggle() {} } } },
     request: async () => {
       throw Object.assign(new Error("停止失败"), { code: "request_failed" });

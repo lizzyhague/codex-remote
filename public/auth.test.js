@@ -12,9 +12,11 @@ const connectSource = source.slice(
 function harness(fetch, search = "") {
   const sockets = [];
   const actions = [];
+  const clearedNotices = [];
   const context = vm.createContext({
     fetch,
     RECONNECT_DELAY_MS: 1200,
+    CONNECTION_NOTICE_KEY: "connection",
     URL,
     URLSearchParams,
     location: {
@@ -55,6 +57,7 @@ function harness(fetch, search = "") {
     hideThinking() {},
     updateControls() {},
     showNotice() {},
+    clearNotice: (key) => clearedNotices.push(key),
     WebSocket: class {
       listeners = {};
       readyState = 1;
@@ -68,12 +71,12 @@ function harness(fetch, search = "") {
     },
   });
   vm.runInContext(connectSource, context);
-  return { context, sockets, actions };
+  return { context, sockets, actions, clearedNotices };
 }
 
 test("cookie login opens WebSocket without an auth frame and preserves feature negotiation", async () => {
   const requests = [];
-  const { context, sockets, actions } = harness(async (url, options) => {
+  const { context, sockets, actions, clearedNotices } = harness(async (url, options) => {
     requests.push({ url, options });
     return new Response(JSON.stringify({ features: { backgroundWorkers: true } }));
   });
@@ -86,6 +89,7 @@ test("cookie login opens WebSocket without an auth frame and preserves feature n
   await sockets[0].listeners.open();
   assert.equal(context.state.authenticated, true);
   assert.deepEqual(actions, [["app"], ["projects"]]);
+  assert.deepEqual(clearedNotices, ["connection"]);
 });
 
 test("missing cookies prompt login and do not enter a reconnect loop", async () => {

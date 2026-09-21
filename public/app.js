@@ -1,4 +1,5 @@
 import { renderMarkdown, sanitizeHref } from "./markdown.js";
+import { createNoticeController, NOTICE_DURATION_MS } from "./notice.js";
 import {
   DISPLAY_TIMEZONE_KEY,
   deviceTimeZone,
@@ -22,6 +23,10 @@ const TOOL_TITLE_LIMIT = 72;
 const COMPOSER_CONFIRM_UNLOCK_MS = 300;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const MAX_MESSAGE_ATTACHMENTS = 100;
+const TEMPORARY_INFO = Object.freeze({ lifetime: "temporary", tone: "info" });
+const TEMPORARY_WARNING = Object.freeze({ lifetime: "temporary", tone: "warning" });
+const TEMPORARY_ERROR = Object.freeze({ lifetime: "temporary", tone: "error" });
+const CONNECTION_NOTICE_KEY = "connection";
 
 const elements = {
   loginView: byId("login-view"),
@@ -79,6 +84,7 @@ const elements = {
   notice: byId("notice"),
   noticeText: byId("notice-text"),
   noticeActionButton: byId("notice-action-button"),
+  noticeCloseButton: byId("notice-close-button"),
   composer: byId("composer"),
   slashMenu: slashMenuElement(),
   messageInput: byId("message-input"),
@@ -116,7 +122,6 @@ const state = {
   developerInstructions: "",
   appSettingsBusy: false,
   mobileSidebarOpen: false,
-  noticeAction: null,
   running: false,
   stopping: false,
   commandBusy: false,
@@ -134,6 +139,13 @@ const state = {
   assistantStreams: new Map(),
   commands: new Map(),
 };
+const noticeController = createNoticeController({
+  element: elements.notice,
+  textElement: elements.noticeText,
+  actionButton: elements.noticeActionButton,
+  closeButton: elements.noticeCloseButton,
+  onActionError: (error) => showNotice(errorMessage(error), TEMPORARY_ERROR),
+});
 elements.appView.dataset.sidebarCollapsed = String(state.sidebarCollapsed);
 syncSidebarState();
 syncAppSettingsForm();
@@ -147,7 +159,7 @@ const slashCommandOptions = {
     { label: "添加附件", description: "上传图片、PDF 或文本，可一次选择多个文件。", disabled: () => state.pendingAttachments.length >= MAX_MESSAGE_ATTACHMENTS, onSelect: () => elements.attachmentInput.click() },
     { label: "重命名", description: "修改当前会话的名称。", onSelect: () => openRenameDialog() },
   ],
-  onError: (error) => showNotice(errorMessage(error)),
+  onError: (error) => showNotice(errorMessage(error), TEMPORARY_ERROR),
   onBusy: (busy) => {
     state.commandBusy = busy;
     updateControls();
@@ -250,12 +262,6 @@ elements.bulkPrimaryButton.addEventListener("click", () => {
 
 elements.bulkTrashButton.addEventListener("click", () => {
   void runBulkDangerAction();
-});
-
-elements.noticeActionButton.addEventListener("click", () => {
-  const action = state.noticeAction;
-  hideNotice();
-  if (action) void action();
 });
 
 document.addEventListener("keydown", (event) => {
@@ -420,19 +426,30 @@ async function connect(token) {
         if (generation !== state.generation || socket.readyState !== WebSocket.OPEN ||
             projectId !== state.projectId || sessionId !== state.sessionId) return;
         applyOpenedSession(opened, { preserveAttachments: true, retryOutbox: false });
-        if (opened.notice) showNotice(opened.notice);
+        if (opened.notice) showNotice(opened.notice, {
+          lifetime: "persistent",
+          tone: "warning",
+          key: "host-memory-degraded",
+        });
       }
       state.connectionReady = true;
-      setConnectionStatus("connected", "已连接");
       updateControls();
-      void flushQueuedAttachments();
-      void retryOutboxForCurrentSession();
+      await flushQueuedAttachments();
+      await retryOutboxForCurrentSession();
+      if (generation !== state.generation || socket.readyState !== WebSocket.OPEN) return;
+      setConnectionStatus("connected", "已连接");
+      clearNotice(CONNECTION_NOTICE_KEY);
+      updateControls();
     } catch (error) {
       if (generation !== state.generation) return;
       const message = errorMessage(error);
       elements.loginStatus.textContent = message;
       elements.connectButton.disabled = false;
-      showNotice(`${message}正在重新连接，当前会话和附件已保留。`);
+      showNotice(`${message}正在重新连接，当前会话和附件已保留。`, {
+        lifetime: "state",
+        tone: "warning",
+        key: CONNECTION_NOTICE_KEY,
+      });
       socket.close();
     }
   });
@@ -468,7 +485,11 @@ async function connect(token) {
       if (!elements.appView.hidden) {
         showNotice(backgroundWorkers
           ? "连接中断；已接受的任务会由主机后台继续处理。正在重新连接……"
-          : "连接中断，主机会停止正在进行的任务。正在重新连接……");
+          : "连接中断，主机会停止正在进行的任务。正在重新连接……", {
+          lifetime: "state",
+          tone: "warning",
+          key: CONNECTION_NOTICE_KEY,
+        });
       }
       scheduleReconnect();
     }
@@ -488,7 +509,7 @@ function handleSocketMessage(source) {
   try {
     message = JSON.parse(String(source));
   } catch {
-    showNotice("主机返回了一条无法识别的消息。");
+    showNotice("主机返回了一条无法识别的消息。", TEMPORARY_ERROR);
     return;
   }
 
@@ -508,7 +529,7 @@ function handleSocketMessage(source) {
   }
 
   if (message.type === "error") {
-    showNotice(message.error?.message || "连接发生错误。");
+    showNotice(message.error?.message || "连接发生错误。", TEMPORARY_ERROR);
     return;
   }
 
@@ -624,7 +645,7 @@ async function loadSessions({ append = false } = {}) {
     state.sessionCursor = typeof data?.nextCursor === "string" ? data.nextCursor : null;
     renderSessionList();
   } catch (error) {
-    showNotice(errorMessage(error));
+    showNotice(errorMessage(error), TEMPORARY_ERROR);
   } finally {
     if (generation === state.sessionLoadGeneration) {
       state.sessionLoading = false;
@@ -638,16 +659,19 @@ async function startSession() {
   if (!state.projectId || (state.running && !state.backgroundWorkers)) return;
   if (state.sessionView !== "active") setSessionView("active", false);
   setNavigationBusy(true);
-  hideNotice();
   try {
     const opened = await request("session.start", { projectId: state.projectId });
     applyOpenedSession(opened);
     upsertSession(opened.session);
     renderSessionList();
     closeMobileSidebar();
-    if (opened.notice) showNotice(opened.notice);
+    if (opened.notice) showNotice(opened.notice, {
+      lifetime: "persistent",
+      tone: "warning",
+      key: "host-memory-degraded",
+    });
   } catch (error) {
-    showNotice(errorMessage(error));
+    showNotice(errorMessage(error), TEMPORARY_ERROR);
   } finally {
     setNavigationBusy(false);
     updateControls();
@@ -670,16 +694,19 @@ async function resumeSession(sessionId, options = {}) {
   }
   if (!state.projectId || (!force && state.running && !state.backgroundWorkers)) return;
   setNavigationBusy(true);
-  hideNotice();
   try {
     const opened = await request("session.resume", {
       projectId: state.projectId,
       sessionId,
     });
     applyOpenedSession(opened);
-    if (opened.notice) showNotice(opened.notice);
+    if (opened.notice) showNotice(opened.notice, {
+      lifetime: "persistent",
+      tone: "warning",
+      key: "host-memory-degraded",
+    });
   } catch (error) {
-    showNotice(errorMessage(error));
+    showNotice(errorMessage(error), TEMPORARY_ERROR);
   } finally {
     setNavigationBusy(false);
     updateControls();
@@ -687,6 +714,9 @@ async function resumeSession(sessionId, options = {}) {
 }
 
 function applyOpenedSession(opened, { preserveAttachments = false, retryOutbox = true } = {}) {
+  if (state.sessionId && state.sessionId !== opened.session.id) {
+    clearCurrentSessionNotice(state.sessionId);
+  }
   if (!preserveAttachments) abortAttachmentUploads();
   state.metrics = null;
   state.sessionId = opened.session.id;
@@ -718,9 +748,13 @@ function applyOpenedSession(opened, { preserveAttachments = false, retryOutbox =
     hideThinking();
   }
   if (state.running && !state.controlsTask) {
-    showNotice("这个任务仍在结束过程中，当前连接暂时不能控制它。");
+    showNotice("这个任务仍在结束过程中，当前连接暂时不能控制它。", {
+      lifetime: "state",
+      tone: "warning",
+      key: taskNoticeKey("control"),
+    });
   } else {
-    hideNotice();
+    clearNotice(taskNoticeKey("control"));
   }
   updateControls();
   if (retryOutbox) void retryOutboxForCurrentSession();
@@ -814,7 +848,7 @@ function createSessionItem(session) {
     checkbox.addEventListener("change", () => {
       if (checkbox.checked && state.selectedSessions.size >= 100) {
         checkbox.checked = false;
-        showNotice("一次最多整理 100 个会话。");
+        showNotice("一次最多整理 100 个会话。", TEMPORARY_WARNING);
       } else if (checkbox.checked) {
         state.selectedSessions.add(session.id);
       } else {
@@ -946,7 +980,7 @@ async function toggleSessionMark(session) {
     if (data?.session) upsertSession(data.session);
     renderSessionList();
   } catch (error) {
-    showNotice(errorMessage(error));
+    showNotice(errorMessage(error), TEMPORARY_ERROR);
   }
 }
 
@@ -996,7 +1030,7 @@ function toggleSelectAllSessions() {
     state.selectedSessions.clear();
   } else {
     state.selectedSessions = new Set(capped);
-    if (ids.length > 100) showNotice("一次最多整理 100 个会话。");
+    if (ids.length > 100) showNotice("一次最多整理 100 个会话。", TEMPORARY_WARNING);
   }
   renderSessionList();
 }
@@ -1048,7 +1082,6 @@ async function mutateSessions(action, sessionIds) {
   if (!state.projectId || sessionIds.length === 0) return;
   const projectId = state.projectId;
   setNavigationBusy(true);
-  hideNotice();
   try {
     const result = await request("sessions.mutate", { projectId, sessionIds, action });
     const succeeded = Array.isArray(result?.succeeded) ? result.succeeded : [];
@@ -1081,16 +1114,20 @@ async function mutateSessions(action, sessionIds) {
         : "";
       if (undoAction) {
         showActionNotice(`${label}${failureNote}`, "撤销", () =>
-          mutateSessions(undoAction, succeeded));
+          mutateSessions(undoAction, succeeded), {
+          tone: failed.length > 0 ? "error" : "info",
+        });
       } else {
-        showNotice(`${label}${failureNote}`);
+        showNotice(`${label}${failureNote}`, failed.length > 0
+          ? TEMPORARY_ERROR
+          : TEMPORARY_INFO);
       }
     } else if (failed.length > 0) {
       const first = failed[0]?.message || "操作失败。";
-      showNotice(`${failed.length} 个会话未能处理：${first}`);
+      showNotice(`${failed.length} 个会话未能处理：${first}`, TEMPORARY_ERROR);
     }
   } catch (error) {
-    showNotice(errorMessage(error));
+    showNotice(errorMessage(error), TEMPORARY_ERROR);
   } finally {
     setNavigationBusy(false);
     updateControls();
@@ -1137,6 +1174,7 @@ function trashRemainingText(purgeAt) {
 }
 
 function resetCurrentSession() {
+  if (state.sessionId) clearCurrentSessionNotice(state.sessionId);
   abortAttachmentUploads();
   state.sessionId = null;
   closeComposerPicker();
@@ -1267,7 +1305,7 @@ async function loadOlderHistory() {
     elements.historyLoader.hidden = data?.hasOlder !== true;
     elements.timeline.scrollTop = oldTop + (elements.timeline.scrollHeight - oldHeight);
   } catch (error) {
-    showNotice(errorMessage(error));
+    showNotice(errorMessage(error), TEMPORARY_ERROR);
   } finally {
     elements.loadOlderButton.disabled = false;
     elements.loadOlderButton.textContent = "加载更早";
@@ -1282,7 +1320,6 @@ async function sendMessage() {
   if (attachments.length === 0 && await slashCommands.submit(text)) return;
 
   hideEmpty();
-  hideNotice();
   const displayText = displayTextWithAttachments(text, attachments);
   const optimistic = addMessage("user", displayText, `local-${Date.now()}`, false);
   state.pendingUserMessages.push({ text: displayText, element: optimistic });
@@ -1311,10 +1348,15 @@ async function sendMessage() {
       attachmentIds: attachments.map((attachment) => attachment.id),
     });
     clearOutbox(clientMessageId);
+    clearNotice(deliveryNoticeKey(clientMessageId));
   } catch (error) {
     const uncertainDelivery = error?.code === "request_timeout" || !state.authenticated;
     if (uncertainDelivery) {
-      showNotice("连接在确认消息前中断。消息 ID 已保留；重新打开这个会话后会安全重试。");
+      showNotice("连接在确认消息前中断。消息 ID 已保留；重新打开这个会话后会安全重试。", {
+        lifetime: "state",
+        tone: "warning",
+        key: deliveryNoticeKey(clientMessageId),
+      });
       return;
     }
     clearOutbox(clientMessageId);
@@ -1334,7 +1376,7 @@ async function sendMessage() {
     const restorable = !draft.trim();
     showNotice(restorable
       ? `${errorMessage(error)}消息已经放回输入框。`
-      : `${errorMessage(error)}未发送的消息和当前草稿都已保留在输入框。`);
+      : `${errorMessage(error)}未发送的消息和当前草稿都已保留在输入框。`, TEMPORARY_ERROR);
     updateControls();
     setPendingAttachments(mergeAttachments(attachments, state.pendingAttachments));
     restoreComposerText(restorable ? text : `${text}\n\n${draft}`);
@@ -1346,11 +1388,11 @@ async function uploadFiles(files) {
   if (!state.sessionId || !state.projectId || files.length === 0) return;
   const available = MAX_MESSAGE_ATTACHMENTS - state.pendingAttachments.length;
   if (available <= 0) {
-    showNotice(`一条消息最多附加 ${MAX_MESSAGE_ATTACHMENTS} 个文件。`);
+    showNotice(`一条消息最多附加 ${MAX_MESSAGE_ATTACHMENTS} 个文件。`, TEMPORARY_WARNING);
     return;
   }
   if (files.length > available) {
-    showNotice(`一条消息最多附加 ${MAX_MESSAGE_ATTACHMENTS} 个文件，只处理了前 ${available} 个。`);
+    showNotice(`一条消息最多附加 ${MAX_MESSAGE_ATTACHMENTS} 个文件，只处理了前 ${available} 个。`, TEMPORARY_WARNING);
   }
   await Promise.all(files.slice(0, available).map((file) => uploadFile(file)));
 }
@@ -1545,18 +1587,21 @@ async function stopTask() {
     if (result?.requested === false) {
       state.stopping = false;
       if (state.sessionId) await resumeSession(state.sessionId, { force: true });
-      showNotice("任务已经结束或状态已变化");
+      showNotice("任务已经结束或状态已变化", TEMPORARY_WARNING);
       return;
     }
   } catch (error) {
     state.stopping = false;
-    showNotice(errorMessage(error));
+    showNotice(errorMessage(error), TEMPORARY_ERROR);
   } finally {
     updateControls();
   }
 }
 
 function handleServerEvent(event, replay = false) {
+  if (isTaskProgressEvent(event.type)) {
+    clearNotice(taskNoticeKey("retry", event.taskId || event.sessionId));
+  }
   switch (event.type) {
     case "task.queued": {
       state.running = true;
@@ -1635,18 +1680,31 @@ function handleServerEvent(event, replay = false) {
       break;
     case "task.completed":
       if (!replay) void refreshSessionMetrics();
+      clearNotice(taskNoticeKey("retry", event.taskId || event.sessionId));
+      clearNotice(taskNoticeKey("control", event.sessionId));
       state.running = false;
       state.controlsTask = false;
       state.stopping = false;
       setCurrentSessionState("idle");
       hideThinking();
-      if (event.error) showNotice(event.error);
+      if (event.error && !replay) {
+        addTaskNote(`任务失败：${event.error}`);
+        showNotice(event.error, TEMPORARY_ERROR);
+      }
       if (event.status === "interrupted") addTaskNote("任务已停止。");
       updateControls();
       break;
     case "task.error":
       if (!event.willRetry) hideThinking();
-      showNotice(event.willRetry ? `${event.message} Codex 将重试。` : event.message);
+      if (event.willRetry) {
+        showNotice(`${event.message} Codex 将重试。`, {
+          lifetime: "state",
+          tone: "warning",
+          key: taskNoticeKey("retry", event.taskId || event.sessionId),
+        });
+      } else if (!replay) {
+        showNotice(event.message, TEMPORARY_ERROR);
+      }
       break;
     case "approval.requested":
       hideThinking();
@@ -1664,6 +1722,31 @@ function handleServerEvent(event, replay = false) {
       removeInteraction(event.interactionId);
       if (state.running) showThinking();
       break;
+  }
+}
+
+function isTaskProgressEvent(type) {
+  return type === "task.queued" || type === "task.started" || type === "message.user" ||
+    type === "message.delta" || type === "message.completed" || type === "tool.started" ||
+    type === "tool.output.delta" || type === "tool.completed";
+}
+
+function taskNoticeKey(kind, contextId = state.sessionId) {
+  return `task-${kind}:${contextId || "current"}`;
+}
+
+function deliveryNoticeKey(clientMessageId) {
+  return `delivery:${clientMessageId}`;
+}
+
+function clearCurrentSessionNotice(sessionId) {
+  const key = noticeController.current?.key;
+  if (
+    key === taskNoticeKey("control", sessionId) ||
+    key?.startsWith("task-retry:") ||
+    key?.startsWith("delivery:")
+  ) {
+    clearNotice(key);
   }
 }
 
@@ -2101,7 +2184,6 @@ function addCommandResult(result) {
     state.rewindAttachments = [];
   }
   hideEmpty();
-  hideNotice();
   const article = document.createElement("article");
   article.className = "command-result";
   const title = document.createElement("strong");
@@ -2193,10 +2275,16 @@ async function retryOutboxForCurrentSession() {
         attachmentIds: outbox.attachmentIds,
       });
       clearOutbox(outbox.clientMessageId);
+      clearNotice(deliveryNoticeKey(outbox.clientMessageId));
     } catch (error) {
       if (error?.code !== "request_timeout" && state.authenticated) {
         clearOutbox(outbox.clientMessageId);
-        showNotice(`保留消息重试失败：${errorMessage(error)}`);
+        clearNotice(deliveryNoticeKey(outbox.clientMessageId));
+        showNotice(`保留消息重试失败：${errorMessage(error)}`, {
+          lifetime: "persistent",
+          tone: "error",
+          key: deliveryNoticeKey(outbox.clientMessageId),
+        });
       }
       break;
     }
@@ -2301,7 +2389,7 @@ async function answerApproval(card, approvalId, decision) {
     if (state.running) showThinking();
   } catch (error) {
     buttons.forEach((button) => { button.disabled = false; });
-    showNotice(errorMessage(error));
+    showNotice(errorMessage(error), TEMPORARY_ERROR);
   }
 }
 
@@ -2510,7 +2598,7 @@ async function answerInteraction(card, interactionId, action, answers) {
     await request("interaction.answer", { interactionId, action, answers });
   } catch (error) {
     controls.forEach((control) => { control.disabled = false; });
-    showNotice(errorMessage(error));
+    showNotice(errorMessage(error), TEMPORARY_ERROR);
   }
 }
 
@@ -2709,28 +2797,22 @@ function setConnectionStatus(status, text) {
   elements.connectionStatus.textContent = text;
 }
 
-function showNotice(text) {
-  state.noticeAction = null;
-  elements.noticeText.textContent = text;
-  elements.noticeActionButton.hidden = true;
-  elements.noticeActionButton.textContent = "";
-  elements.notice.hidden = false;
+function showNotice(text, options = TEMPORARY_WARNING) {
+  return noticeController.show(text, options);
 }
 
-function showActionNotice(text, actionLabel, action) {
-  state.noticeAction = action;
-  elements.noticeText.textContent = text;
-  elements.noticeActionButton.textContent = actionLabel;
-  elements.noticeActionButton.hidden = false;
-  elements.notice.hidden = false;
+function showActionNotice(text, actionLabel, action, options = {}) {
+  return showNotice(text, {
+    lifetime: "temporary",
+    tone: "info",
+    durationMs: NOTICE_DURATION_MS.undo,
+    ...options,
+    action: { label: actionLabel, run: action },
+  });
 }
 
-function hideNotice() {
-  state.noticeAction = null;
-  elements.notice.hidden = true;
-  elements.noticeText.textContent = "";
-  elements.noticeActionButton.hidden = true;
-  elements.noticeActionButton.textContent = "";
+function clearNotice(key) {
+  return noticeController.clear(key);
 }
 
 function commandStatus(status) {
@@ -2896,7 +2978,7 @@ function removeStored(key) {
 function unavailableSlashCommands() {
   return {
     async load() {},
-    toggleAll() { showNotice("命令菜单当前不可用，请刷新页面。"); },
+    toggleAll() { showNotice("命令菜单当前不可用，请刷新页面。", TEMPORARY_WARNING); },
     close() {
       elements.slashMenu.hidden = true;
       elements.slashMenu.replaceChildren();
@@ -2909,7 +2991,7 @@ function unavailableSlashCommands() {
       return false;
     },
     async runShortcut(name) {
-      showNotice(`快捷命令 /${name} 当前不可用。`);
+      showNotice(`快捷命令 /${name} 当前不可用。`, TEMPORARY_WARNING);
     },
   };
 }
@@ -3105,7 +3187,7 @@ async function openComposerPicker(command) {
         const result = await request("command.run", { command, option: item.id, argument });
         if (state.sessionId === sessionId) addCommandResult(result);
         await refreshPickerLabels();
-      } catch (error) { showNotice(errorMessage(error)); }
+      } catch (error) { showNotice(errorMessage(error), TEMPORARY_ERROR); }
       finally { state.commandBusy = false; updateControls(); trigger.focus(); }
     };
     const root = () => {
@@ -3121,7 +3203,7 @@ async function openComposerPicker(command) {
   } catch (error) {
     if (menu.dataset.requestId !== requestId) return;
     closeComposerPicker();
-    showNotice(errorMessage(error));
+    showNotice(errorMessage(error), TEMPORARY_ERROR);
   }
 }
 
