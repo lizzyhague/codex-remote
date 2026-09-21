@@ -78,7 +78,7 @@ export async function main(): Promise<void> {
     sessions.onChange((event) => {
       if (event.change !== "delete") return;
       for (const sessionId of event.sessionIds) {
-        void workers?.forgetSessionAttachments(sessionId);
+        void workers?.forgetSession(sessionId);
       }
     });
     await cleanExpiredTrash(sessions);

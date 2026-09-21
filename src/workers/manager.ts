@@ -222,9 +222,14 @@ export class SessionWorkerManager {
     return mappings;
   }
 
-  async forgetSessionAttachments(threadId: string): Promise<void> {
+  /** 会话被永久删除后，清掉后端为它留的附件显示索引和工作状态记录。 */
+  async forgetSession(threadId: string): Promise<void> {
     this.#clearPathRedactors(threadId);
     await this.#attachmentIndex?.remove(threadId);
+    const { keptActive } = this.#store.forgetThread(threadId);
+    if (keptActive > 0) {
+      console.error(`会话 ${threadId} 仍有 ${keptActive} 个任务在进行，工作记录没有删除。`);
+    }
   }
 
   onEvent(listener: (event: WorkerManagerEvent) => void): () => void {

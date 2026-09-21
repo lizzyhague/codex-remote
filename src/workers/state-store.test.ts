@@ -337,3 +337,53 @@ test("clears events left behind by older builds when the store reopens", async (
   context.after(() => store.close());
   assert.deepEqual(store.eventsForTask("task-1"), []);
 });
+
+test("forgets a deleted session but leaves work that is still running", async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-worker-forget-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const store = await WorkerStateStore.open(path.join(directory, "work.sqlite"));
+  context.after(() => store.close());
+
+  store.enqueue({
+    id: "task-1",
+    clientMessageId: "message-1",
+    projectId: "project-1",
+    threadId: "thread-1",
+    kind: "message",
+    payload: "删掉我",
+    permissionMode: "manual",
+    createdAtMs: 100,
+  });
+  store.markRunning("task-1", "native-turn-1", "manual", 110);
+  store.finish("task-1", "interrupted", {
+    type: "task.completed",
+    sessionId: "thread-1",
+    taskId: "task-1",
+    status: "interrupted",
+  }, 120, { interruptionReason: "user_requested" });
+  store.setSessionFullAccess("thread-1", true, 130);
+  assert.equal(store.eventsForTask("task-1").length, 1);
+
+  store.enqueue({
+    id: "task-2",
+    clientMessageId: "message-2",
+    projectId: "project-1",
+    threadId: "thread-2",
+    kind: "message",
+    payload: "别动我",
+    permissionMode: "manual",
+    createdAtMs: 200,
+  });
+
+  const forgotten = store.forgetThread("thread-1");
+  assert.deepEqual(forgotten, { deleted: 1, keptActive: 0 });
+  assert.throws(() => store.require("task-1"), /找不到/u);
+  assert.deepEqual(store.eventsForTask("task-1"), []);
+  assert.equal(store.sessionFullAccess("thread-1"), null);
+  assert.equal(store.require("task-2").payload, "别动我");
+
+  // 还在排队的任务不该被清理打断。
+  const busy = store.forgetThread("thread-2");
+  assert.deepEqual(busy, { deleted: 0, keptActive: 1 });
+  assert.equal(store.require("task-2").status, "queued");
+});

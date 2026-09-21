@@ -438,6 +438,37 @@ export class WorkerStateStore {
     `).all(taskId).map(readEventRow);
   }
 
+  /**
+   * 删掉这个会话留在库里的全部记录，供永久删除会话时调用。事件靠外键级联一起走。
+   *
+   * 仍在进行的任务不删：回收站里的会话本不该有活任务，真出现了也不该让清理去打断
+   * 它。`keptActive` 大于 0 就表示这次没有删干净。
+   */
+  forgetThread(threadId: string): { deleted: number; keptActive: number } {
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.#database.prepare(`
+        SELECT count(*) AS active FROM worker_tasks
+        WHERE thread_id = ? AND status IN ('queued', 'running', 'waiting_for_permission')
+      `).get(threadId);
+      const keptActive = Number(asRow(row).active);
+      const result = this.#database.prepare(`
+        DELETE FROM worker_tasks
+        WHERE thread_id = ? AND status IN ('completed', 'interrupted', 'failed')
+      `).run(threadId);
+      if (keptActive === 0) {
+        this.#database.prepare(
+          "DELETE FROM worker_session_settings WHERE thread_id = ?",
+        ).run(threadId);
+      }
+      this.#database.exec("COMMIT");
+      return { deleted: Number(result.changes), keptActive };
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   recoverInterrupted(nowMs: number): WorkerTask[] {
     const active = this.#database.prepare(`
       SELECT * FROM worker_tasks
