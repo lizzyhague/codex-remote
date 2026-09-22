@@ -3130,6 +3130,19 @@ async function refreshPickerLabels() {
   }));
 }
 
+/**
+ * 菜单打开时该把焦点放在哪个按钮上。
+ *
+ * 不能写成一个逗号分隔的选择器：那样拿到的是文档顺序里第一个命中任一条的
+ * 元素，而不是优先命中前一条的。打勾那项永远排在第一个可点按钮后面（有
+ * “‹ 返回”时更是排在它后面），于是焦点永远落不到打勾那项上。
+ */
+function pickerFocusTarget(menu) {
+  return menu.querySelector('button[aria-selected="true"]:not(:disabled)') ??
+    menu.querySelector("button.composer-picker-option:not(:disabled)") ??
+    menu.querySelector("button:not(:disabled)");
+}
+
 function renderComposerPicker(title, items, onSelect, onBack) {
   const menu = elements.composerPickerMenu;
   const heading = document.createElement("div");
@@ -3163,7 +3176,7 @@ function renderComposerPicker(title, items, onSelect, onBack) {
     menu.append(button);
   }
   menu.hidden = false;
-  menu.querySelector('button[aria-selected="true"]:not(:disabled), button:not(:disabled)')?.focus();
+  pickerFocusTarget(menu)?.focus();
 }
 
 async function openComposerPicker(command) {
