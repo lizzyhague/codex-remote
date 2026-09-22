@@ -653,6 +653,7 @@ async function startSession() {
   if (!state.projectId) return;
   if (state.sessionView !== "active") setSessionView("active", false);
   setNavigationBusy(true);
+  showSessionLoading();
   try {
     const opened = await request("session.start", { projectId: state.projectId });
     applyOpenedSession(opened);
@@ -666,6 +667,10 @@ async function startSession() {
     });
   } catch (error) {
     showNotice(errorMessage(error), TEMPORARY_ERROR);
+    // 旧会话已经撤下来了，没法再把它放回去；与其让输入框对着一个看不见的
+    // 会话，不如退回“还没选会话”。
+    resetCurrentSession();
+    showEmpty("选择以前的会话，或者新建一个会话。");
   } finally {
     setNavigationBusy(false);
     updateControls();
@@ -685,7 +690,11 @@ async function resumeSession(sessionId) {
     await loadSessions();
   }
   if (!state.projectId) return;
+  const switching = sessionId !== state.sessionId;
   setNavigationBusy(true);
+  // 切换期间把旧会话的内容撤下来。留着的话，停止、发送、加载更早都还点得动，
+  // 而这些请求认的是连接当前打开的会话——切换一旦先到，它们就落到新会话上了。
+  if (switching) showSessionLoading();
   try {
     const opened = await request("session.resume", {
       projectId: state.projectId,
@@ -699,6 +708,10 @@ async function resumeSession(sessionId) {
     });
   } catch (error) {
     showNotice(errorMessage(error), TEMPORARY_ERROR);
+    if (switching) {
+      resetCurrentSession();
+      showEmpty("选择以前的会话，或者新建一个会话。");
+    }
   } finally {
     setNavigationBusy(false);
     updateControls();
@@ -1265,6 +1278,9 @@ function renderTasks(tasks) {
 
 async function loadOlderHistory() {
   if (!state.sessionId || !state.authenticated || elements.loadOlderButton.disabled) return;
+  // 切换会话时这个按钮已经随时间线一起撤下去了，这里是第二道：后端翻页用的是
+  // 连接当前打开的会话，切换先到的话，被翻掉的是新会话的一页。
+  if (state.navigationBusy) return;
   const sessionId = state.sessionId;
   const oldHeight = elements.timeline.scrollHeight;
   const oldTop = elements.timeline.scrollTop;
@@ -2653,8 +2669,8 @@ function updateControls() {
     elements.taskButton.classList.toggle("primary", !state.running);
     elements.taskButton.classList.toggle("danger", state.running);
     elements.taskButton.disabled = state.running
-      ? !connected || !state.controlsTask
-      : !connected || !hasSession || state.commandBusy || uploading ||
+      ? !connected || !state.controlsTask || navigationBusy
+      : !connected || !hasSession || state.commandBusy || uploading || navigationBusy ||
         (!hasText && !hasAttachments);
   }
 }
@@ -2684,6 +2700,10 @@ function showEmpty(text) {
   clearTimeline();
   elements.emptyState.querySelector("p").textContent = text;
   elements.timeline.append(elements.emptyState);
+}
+
+function showSessionLoading() {
+  showEmpty("会话加载中……");
 }
 
 function hideEmpty() {

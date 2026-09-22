@@ -117,3 +117,34 @@ test("a failed stop request restores the button and keeps the task running", asy
   assert.equal(context.elements.taskButton.textContent, "停止");
   assert.equal(notices[0], "停止失败");
 });
+
+test("a compaction past its instruction is refused without resyncing the session", async () => {
+  const notices = [];
+  const resumes = [];
+  const context = vm.createContext({
+    state: {
+      running: true,
+      stopping: false,
+      controlsTask: true,
+      sessionId: "session-1",
+      authenticated: true,
+      connectionReady: true,
+    },
+    TEMPORARY_WARNING: { lifetime: "temporary", tone: "warning" },
+    TEMPORARY_ERROR: { lifetime: "temporary", tone: "error" },
+    elements: { taskButton: { disabled: false, textContent: "停止", classList: { toggle() {} } } },
+    request: async () => ({ requested: false, reason: "compact_started" }),
+    resumeSession: async (sessionId) => {
+      resumes.push(sessionId);
+    },
+    showNotice: (message) => notices.push(message),
+    updateControls() {},
+    errorMessage: (error) => error.message,
+  });
+  vm.runInContext(section("async function stopTask()", "function handleServerEvent("), context);
+  await context.stopTask();
+  assert.equal(context.state.stopping, false);
+  assert.equal(context.state.running, true);
+  assert.deepEqual(resumes, []);
+  assert.equal(notices[0], "压缩已经开始，不能中途停止");
+});
