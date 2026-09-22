@@ -129,6 +129,7 @@ const state = {
   sessionLoading: false,
   navigationBusy: false,
   sessionLoadGeneration: 0,
+  pickerGeneration: 0,
   sessionSearchTimer: null,
   selectionMode: false,
   selectedSessions: new Set(),
@@ -3080,9 +3081,9 @@ headerHeightObserver.observe(conversationHeader);
 
 // 两个选择入口共用菜单；数据和变更都沿用现有命令接口。
 function closeComposerPicker() {
-  const menu = elements.composerPickerMenu;
-  menu.hidden = true;
-  menu.dataset.requestId = String(Number(menu.dataset.requestId || 0) + 1);
+  elements.composerPickerMenu.hidden = true;
+  // 关一次就作废一代，正在途中的打开请求回来时按这个丢弃。
+  state.pickerGeneration += 1;
   for (const kind of ["model", "permission"]) {
     composerPickers[kind].button.setAttribute("aria-expanded", "false");
   }
@@ -3149,12 +3150,11 @@ async function openComposerPicker(command) {
   slashCommands.close();
   if (wasOpen) return;
   trigger.setAttribute("aria-expanded", "true");
-  const menu = elements.composerPickerMenu;
-  const requestId = menu.dataset.requestId;
+  const pickerGeneration = state.pickerGeneration;
   const sessionId = state.sessionId;
   try {
     const data = await request("command.options", { command });
-    if (state.sessionId !== sessionId || menu.dataset.requestId !== requestId) return;
+    if (state.sessionId !== sessionId || state.pickerGeneration !== pickerGeneration) return;
     const items = data.items || [];
     const selected = items.find(item => item.selected);
     composerPickers[kind].label.textContent = selected?.label || "默认";
@@ -3190,7 +3190,7 @@ async function openComposerPicker(command) {
     };
     root();
   } catch (error) {
-    if (menu.dataset.requestId !== requestId) return;
+    if (state.pickerGeneration !== pickerGeneration) return;
     closeComposerPicker();
     showNotice(errorMessage(error), TEMPORARY_ERROR);
   }
