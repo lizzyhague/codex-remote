@@ -925,17 +925,8 @@ function sessionMarkIcon(pinned) {
   svg.setAttribute("aria-hidden", "true");
   svg.classList.add("session-mark-icon");
   /*
-   * 图钉的形状取自 pocket-ai 里标记「已留材料」的那个 📌。画成 SVG 才能跟着
-   * currentColor 走、拿到每个项目自己的主色——emoji 那身红是系统字体给的，改不掉。
-   *
-   * 两个状态换的是两副钉身，不是把同一副转个角度：
-   *   没钉住 = 斜着、空心描边（--muted），像还捏在手里；
-   *   钉住   = 正立、钉身填实（--accent），像已经扎正扎进去了。
-   * 旋转正是上一版的毛病：转完钉头会跑到 viewBox 外面被切掉，而且每条边都变成
-   * 斜切，小尺寸下发糊。两副横平竖直的路径才锐利。
-   *
-   * viewBox 用 24：路径按 Tabler 的 24 网格画，硬换算到 16 只会得到一串读不动
-   * 的小数。渲染尺寸由 CSS 定在 17px，两者不冲突。
+   * 两副路径，不是同一副转角度：转了钉头会超出 viewBox 被切掉，斜边在小尺寸下发糊。
+   * viewBox 固定 24（路径按 24 网格画），渲染尺寸由 CSS 定在 17px。
    */
   const LOOSE = {
     body: "M15 4.5l-4 4l-4 1.5l-1.5 1.5l7 7l1.5-1.5l1.5-4l4-4",
