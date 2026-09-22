@@ -795,10 +795,6 @@ button.app-settings-button svg {
   grid-column: 1 / -1;
 }
 
-.bulk-session-actions[data-single="true"] {
-  grid-template-columns: 1fr;
-}
-
 .sidebar-open-button {
   display: none;
   width: 40px;

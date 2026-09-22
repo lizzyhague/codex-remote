@@ -13,7 +13,7 @@ test("persists accepted messages and deduplicates clientMessageId", async (conte
   const store = await WorkerStateStore.open(file);
   context.after(() => store.close());
 
-  const first = store.enqueue({
+  const first = store.admit({
     id: "task-1",
     clientMessageId: "message-1",
     projectId: "project-1",
@@ -23,7 +23,7 @@ test("persists accepted messages and deduplicates clientMessageId", async (conte
     permissionMode: "manual",
     createdAtMs: 100,
   });
-  const duplicate = store.enqueue({
+  const duplicate = store.admit({
     id: "ignored-task-id",
     clientMessageId: "message-1",
     projectId: "project-1",
@@ -34,12 +34,12 @@ test("persists accepted messages and deduplicates clientMessageId", async (conte
     createdAtMs: 200,
   });
 
-  assert.equal(first.duplicate, false);
-  assert.equal(duplicate.duplicate, true);
+  assert.equal(first.outcome, "accepted");
+  assert.equal(duplicate.outcome, "duplicate");
   assert.equal(duplicate.task.id, "task-1");
   assert.equal(store.queued().length, 1);
   assert.equal((await stat(file)).mode & 0o777, 0o600);
-  assert.throws(() => store.enqueue({
+  assert.throws(() => store.admit({
     id: "task-2",
     clientMessageId: "message-1",
     projectId: "project-1",
@@ -56,7 +56,7 @@ test("keeps ordered browser events and marks live work interrupted after restart
   context.after(() => rm(directory, { recursive: true, force: true }));
   const file = path.join(directory, "work.sqlite");
   let store = await WorkerStateStore.open(file);
-  store.enqueue({
+  store.admit({
     id: "task-1",
     clientMessageId: "message-1",
     projectId: "project-1",
@@ -66,7 +66,7 @@ test("keeps ordered browser events and marks live work interrupted after restart
     permissionMode: "manual",
     createdAtMs: 100,
   });
-  store.markRunning("task-1", "native-turn-1", "manual", 110);
+  store.tryMarkRunning("task-1", "native-turn-1", "manual", 110);
   const first = store.appendEvent("task-1", "thread-1", {
     type: "message.delta",
     delta: "一",
@@ -123,7 +123,7 @@ test("persists only public attachment metadata with an accepted message", async 
     createdAtMs: 1,
     expiresAtMs: 2,
   };
-  const stored = store.enqueue({
+  const stored = store.admit({
     id: "task-attachment",
     clientMessageId: "message-attachment",
     projectId: "project-1",
@@ -215,7 +215,7 @@ test("tryMarkRunning and tryFinish only succeed once", async (context) => {
   const store = await WorkerStateStore.open(path.join(directory, "work.sqlite"));
   context.after(() => store.close());
 
-  store.enqueue({
+  store.admit({
     id: "task-1",
     clientMessageId: "message-1",
     projectId: "project-1",
@@ -246,7 +246,7 @@ test("drops a finished task's events and keeps the ones still replayable", async
   const store = await WorkerStateStore.open(path.join(directory, "work.sqlite"));
   context.after(() => store.close());
 
-  store.enqueue({
+  store.admit({
     id: "task-1",
     clientMessageId: "message-1",
     projectId: "project-1",
@@ -256,7 +256,7 @@ test("drops a finished task's events and keeps the ones still replayable", async
     permissionMode: "manual",
     createdAtMs: 100,
   });
-  store.markRunning("task-1", "native-turn-1", "manual", 110);
+  store.tryMarkRunning("task-1", "native-turn-1", "manual", 110);
   store.appendEvent("task-1", "thread-1", { type: "message.delta", delta: "一" }, 120);
   assert.equal(store.eventsForTask("task-1").length, 1);
 
@@ -268,7 +268,7 @@ test("drops a finished task's events and keeps the ones still replayable", async
   }, 130);
   assert.deepEqual(store.eventsForTask("task-1"), []);
 
-  store.enqueue({
+  store.admit({
     id: "task-2",
     clientMessageId: "message-2",
     projectId: "project-1",
@@ -278,7 +278,7 @@ test("drops a finished task's events and keeps the ones still replayable", async
     permissionMode: "manual",
     createdAtMs: 200,
   });
-  store.markRunning("task-2", "native-turn-2", "manual", 210);
+  store.tryMarkRunning("task-2", "native-turn-2", "manual", 210);
   store.appendEvent("task-2", "thread-1", { type: "message.delta", delta: "二" }, 220);
   store.finish("task-2", "interrupted", {
     type: "task.completed",
@@ -290,7 +290,7 @@ test("drops a finished task's events and keeps the ones still replayable", async
   // 中断的最后一个任务仍要能补上中断前那一屏。
   assert.equal(store.eventsForTask("task-2").length, 2);
 
-  store.enqueue({
+  store.admit({
     id: "task-3",
     clientMessageId: "message-3",
     projectId: "project-1",
@@ -311,7 +311,7 @@ test("clears events left behind by older builds when the store reopens", async (
   const file = path.join(directory, "work.sqlite");
   let store = await WorkerStateStore.open(file);
 
-  store.enqueue({
+  store.admit({
     id: "task-1",
     clientMessageId: "message-1",
     projectId: "project-1",
@@ -321,7 +321,7 @@ test("clears events left behind by older builds when the store reopens", async (
     permissionMode: "manual",
     createdAtMs: 100,
   });
-  store.markRunning("task-1", "native-turn-1", "manual", 110);
+  store.tryMarkRunning("task-1", "native-turn-1", "manual", 110);
   store.finish("task-1", "completed", {
     type: "task.completed",
     sessionId: "thread-1",
@@ -344,7 +344,7 @@ test("forgets a deleted session but leaves work that is still running", async (c
   const store = await WorkerStateStore.open(path.join(directory, "work.sqlite"));
   context.after(() => store.close());
 
-  store.enqueue({
+  store.admit({
     id: "task-1",
     clientMessageId: "message-1",
     projectId: "project-1",
@@ -354,7 +354,7 @@ test("forgets a deleted session but leaves work that is still running", async (c
     permissionMode: "manual",
     createdAtMs: 100,
   });
-  store.markRunning("task-1", "native-turn-1", "manual", 110);
+  store.tryMarkRunning("task-1", "native-turn-1", "manual", 110);
   store.finish("task-1", "interrupted", {
     type: "task.completed",
     sessionId: "thread-1",
@@ -364,7 +364,7 @@ test("forgets a deleted session but leaves work that is still running", async (c
   store.setSessionFullAccess("thread-1", true, 130);
   assert.equal(store.eventsForTask("task-1").length, 1);
 
-  store.enqueue({
+  store.admit({
     id: "task-2",
     clientMessageId: "message-2",
     projectId: "project-1",

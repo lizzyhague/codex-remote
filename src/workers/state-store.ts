@@ -164,25 +164,11 @@ export class WorkerStateStore {
     `).run(threadId, enabled ? 1 : 0, nowMs);
   }
 
-  enqueue(task: AdmitTaskInput): {
-    task: WorkerTask;
-    duplicate: boolean;
-  } {
-    const result = this.#commitAdmit(task, false);
-    if (result.outcome === "accepted") return { task: result.task, duplicate: false };
-    if (result.outcome === "duplicate") return { task: result.task, duplicate: true };
-    throw new Error(`enqueue 不应得到 ${result.outcome}。`);
-  }
-
   /**
    * 同步原子准入：幂等检查、项目忙检查和插入在同一事务里完成。
    * 终态记录仍留在同一张表，因此不能靠永久唯一索引禁止第二轮任务。
    */
   admit(task: AdmitTaskInput): AdmitTaskResult {
-    return this.#commitAdmit(task, true);
-  }
-
-  #commitAdmit(task: AdmitTaskInput, enforceProjectIdle: boolean): AdmitTaskResult {
     this.#database.exec("BEGIN IMMEDIATE");
     try {
       const existing = this.findByClientMessageId(task.clientMessageId);
@@ -198,17 +184,15 @@ export class WorkerStateStore {
         return { outcome: "duplicate", task: existing };
       }
 
-      if (enforceProjectIdle) {
-        const pending = this.pendingForProject(task.projectId);
-        if (pending) {
-          this.#database.exec("COMMIT");
-          return {
-            outcome: pending.threadId === task.threadId
-              ? "task_already_running"
-              : "project_busy",
-            task: pending,
-          };
-        }
+      const pending = this.pendingForProject(task.projectId);
+      if (pending) {
+        this.#database.exec("COMMIT");
+        return {
+          outcome: pending.threadId === task.threadId
+            ? "task_already_running"
+            : "project_busy",
+          task: pending,
+        };
       }
 
       this.#database.prepare(`
@@ -261,15 +245,6 @@ export class WorkerStateStore {
     ).all().map(readTaskRow);
   }
 
-  activeForThread(threadId: string): WorkerTask | null {
-    const row = this.#database.prepare(`
-      SELECT * FROM worker_tasks
-      WHERE thread_id = ? AND status IN ('running', 'waiting_for_permission')
-      ORDER BY created_at_ms DESC LIMIT 1
-    `).get(threadId);
-    return row ? readTaskRow(row) : null;
-  }
-
   pendingForThread(threadId: string): WorkerTask | null {
     const row = this.#database.prepare(`
       SELECT * FROM worker_tasks
@@ -294,16 +269,6 @@ export class WorkerStateStore {
       ORDER BY created_at_ms DESC LIMIT 1
     `).get(threadId);
     return row ? readTaskRow(row) : null;
-  }
-
-  markRunning(
-    taskId: string,
-    nativeTurnId: string | null,
-    permissionMode: WorkerPermissionMode,
-    nowMs: number,
-  ): WorkerTask {
-    return this.tryMarkRunning(taskId, nativeTurnId, permissionMode, nowMs) ??
-      this.require(taskId);
   }
 
   tryMarkRunning(

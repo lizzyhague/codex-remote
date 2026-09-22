@@ -20,7 +20,6 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_COMMAND_OUTPUT = 100_000;
 const TOOL_TITLE_LIMIT = 72;
 /** 输入框失焦后稍等再点亮 rewind / full access，避免同一下既失焦又点到确认。 */
-const COMPOSER_CONFIRM_UNLOCK_MS = 300;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const MAX_MESSAGE_ATTACHMENTS = 100;
 const TEMPORARY_INFO = Object.freeze({ lifetime: "temporary", tone: "info" });
@@ -126,8 +125,6 @@ const state = {
   commandBusy: false,
   controlsTask: false,
   fullAccessEnabled: false,
-  composerLocksConfirms: false,
-  composerFocusTimer: null,
   rewindText: null,
   rewindAttachments: [],
   pendingAttachments: [],
@@ -299,20 +296,6 @@ elements.messageInput.addEventListener("input", () => {
   closeComposerPicker();
   slashCommands.handleInput();
   updateControls();
-});
-
-elements.messageInput.addEventListener("focus", () => {
-  clearTimeout(state.composerFocusTimer);
-  state.composerLocksConfirms = true;
-  updateControls();
-});
-
-elements.messageInput.addEventListener("blur", () => {
-  clearTimeout(state.composerFocusTimer);
-  state.composerFocusTimer = setTimeout(() => {
-    state.composerLocksConfirms = false;
-    updateControls();
-  }, COMPOSER_CONFIRM_UNLOCK_MS);
 });
 
 elements.messageInput.addEventListener("keydown", (event) => {
@@ -882,7 +865,7 @@ function appendSessionText(container, session) {
     meta.dataset.warning = "true";
     meta.textContent = trashRemainingText(session.purgeAt);
   } else {
-    const date = formatLastReplyDate(session.lastReplyAt);
+    const date = formatDate(session.lastReplyAt);
     meta.textContent = date ? `last reply at ${date}` : "no replies yet";
   }
   container.append(title, project, meta);
@@ -1036,7 +1019,6 @@ function updateSelectionControls() {
   elements.bulkTrashButton.disabled = count === 0 || state.sessionLoading;
   elements.bulkPrimaryButton.textContent = state.sessionView === "active" ? "归档" : "恢复";
   elements.bulkTrashButton.textContent = state.sessionView === "trash" ? "永久删除" : "删除";
-  delete elements.bulkSessionActions.dataset.single;
 }
 
 async function runBulkPrimaryAction() {
@@ -2825,10 +2807,6 @@ function formatDate(value) {
   );
 }
 
-function formatLastReplyDate(value) {
-  return formatDate(value);
-}
-
 async function openAppSettings() {
   if (state.appSettingsBusy) return;
   syncAppSettingsForm();
@@ -2978,9 +2956,6 @@ function unavailableSlashCommands() {
     },
     async submit() {
       return false;
-    },
-    async runShortcut(name) {
-      showNotice(`快捷命令 /${name} 当前不可用。`, TEMPORARY_WARNING);
     },
   };
 }

@@ -128,7 +128,6 @@ type LaunchingTask = {
   ownerId: string;
   worker: SessionWorker | null;
   cancelRequested: boolean;
-  nativeStartInvoked: boolean;
   settled: boolean;
 };
 
@@ -954,7 +953,6 @@ export class SessionWorkerManager {
         return;
       }
 
-      launching.nativeStartInvoked = true;
       const startPromise = task.kind === "message"
         ? worker.turns.startTextTurn(task.payload, attachments)
         : worker.commands.compact();
@@ -1294,7 +1292,6 @@ export class SessionWorkerManager {
       ownerId,
       worker: null,
       cancelRequested: false,
-      nativeStartInvoked: false,
       settled: false,
     };
     this.#launching.set(task.threadId, launching);
