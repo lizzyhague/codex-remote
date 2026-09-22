@@ -152,9 +152,13 @@ export class CommandRunner {
     if (!profile || !profile.allowed) {
       throw new Error("这个权限选项当前不可用。");
     }
+    const settingsRevision = this.#settingsRevision;
     await this.#updateSettings({ permissions: profile.id });
-    this.#runtime.activePermissionProfile = { id: profile.id, extends: null };
-    this.#fullAccessEnabled = isFullAccessProfile(profile.id);
+    // 通知到了就用它算出的结构化结果，只有没等到才退回认名字。
+    if (this.#settingsRevision === settingsRevision) {
+      this.#runtime.activePermissionProfile = { id: profile.id, extends: null };
+      this.#fullAccessEnabled = isFullAccessProfile(profile.id);
+    }
     return {
       kind: "message",
       title: "权限已更新",
@@ -169,24 +173,31 @@ export class CommandRunner {
 
   async toggleFullAccess(): Promise<CommandMessage> {
     if (this.#fullAccessEnabled) {
+      const profile = pickRestrictedProfile(await this.#listPermissionProfiles());
+      if (!profile) {
+        throw new Error("当前 Codex 没有提供可用的受限权限，无法关闭 Full access。");
+      }
       const settingsRevision = this.#settingsRevision;
-      await this.#updateSettings({ permissions: null });
+      await this.#updateSettings({ permissions: profile.id });
       if (this.#settingsRevision === settingsRevision) {
-        this.#runtime.activePermissionProfile = null;
-        this.#fullAccessEnabled = false;
+        this.#runtime.activePermissionProfile = { id: profile.id, extends: null };
+        this.#fullAccessEnabled = isFullAccessProfile(profile.id);
       }
       if (this.#fullAccessEnabled) {
         return {
           kind: "message",
-          title: "已恢复默认权限",
-          lines: ["权限覆盖已清除；当前部署的默认权限本身是 Full access。"],
+          title: "Full access 没有关闭",
+          lines: ["Codex 报告当前会话仍在不受沙箱限制地运行。"],
           fullAccessEnabled: true,
         };
       }
       return {
         kind: "message",
         title: "Full access 已关闭",
-        lines: ["当前会话已恢复默认权限。"],
+        lines: [
+          permissionLabel(profile.id),
+          profile.description || permissionDescription(profile.id),
+        ],
         fullAccessEnabled: false,
       };
     }
@@ -197,14 +208,17 @@ export class CommandRunner {
     if (!profile) {
       throw new Error("当前 Codex 没有提供可用的 Full access 权限。");
     }
+    const settingsRevision = this.#settingsRevision;
     await this.#updateSettings({ permissions: profile.id });
-    this.#runtime.activePermissionProfile = { id: profile.id, extends: null };
-    this.#fullAccessEnabled = true;
+    if (this.#settingsRevision === settingsRevision) {
+      this.#runtime.activePermissionProfile = { id: profile.id, extends: null };
+      this.#fullAccessEnabled = true;
+    }
     return {
       kind: "message",
       title: "Full access 已打开",
       lines: [profile.description || permissionDescription(profile.id)],
-      fullAccessEnabled: true,
+      fullAccessEnabled: this.#fullAccessEnabled,
     };
   }
 
@@ -495,9 +509,9 @@ type CollaborationModeSummary = {
 };
 
 function permissionLabel(id: string): string {
+  if (isFullAccessProfile(id)) return "完全访问";
   const normalized = id.toLowerCase();
   if (normalized.includes("read")) return "只读";
-  if (isFullAccessProfile(id)) return "完全访问";
   if (normalized.includes("workspace") || normalized.includes("auto")) {
     return "自动（可修改项目）";
   }
@@ -505,30 +519,72 @@ function permissionLabel(id: string): string {
 }
 
 function permissionDescription(id: string): string {
+  if (isFullAccessProfile(id)) return "可以不受沙箱限制地操作主机；请谨慎选择。";
   const normalized = id.toLowerCase();
   if (normalized.includes("read")) return "可以阅读和分析；修改文件或执行高权限操作前会受限。";
-  if (isFullAccessProfile(id)) return "可以不受沙箱限制地操作主机；请谨慎选择。";
   if (normalized.includes("workspace") || normalized.includes("auto")) {
     return "可在项目目录内工作，超出范围或敏感操作仍会询问。";
   }
   return "由当前 Codex 配置提供的权限方案。";
 }
 
+/**
+ * 权限方案只有 id、说明和是否可选，没有任何字段说明它意味着什么沙箱，所以挑方案
+ * 时只能认名字。判断"当前是不是完全访问"要用 {@link runtimeUsesFullAccess}，
+ * 那里有 App Server 给的结构化沙箱策略可用。
+ */
 function isFullAccessProfile(id: string): boolean {
   const normalized = id.toLowerCase();
   return normalized.includes("full") || normalized.includes("danger");
 }
 
+/** `SandboxPolicy` 的判别值。参数侧用 `danger-full-access` 这种写法，一并归一。 */
+const SANDBOX_POLICY_TYPES = new Set([
+  "dangerfullaccess",
+  "readonly",
+  "workspacewrite",
+  "externalsandbox",
+]);
+const FULL_ACCESS_SANDBOX_TYPE = "dangerfullaccess";
+
+function normalizedSandboxType(policy: unknown): string | null {
+  const raw = asObject(policy)?.type ?? policy;
+  if (typeof raw !== "string") return null;
+  const normalized = raw.toLowerCase().replace(/[^a-z]/g, "");
+  return SANDBOX_POLICY_TYPES.has(normalized) ? normalized : null;
+}
+
+/**
+ * 沙箱策略是判别联合，直接就能回答"是不是完全访问"；权限方案的 id 只是名字。
+ * 所以先认沙箱策略，认不出来才退回认名字——那说明 Codex 换了协议，值得记一条。
+ */
 function runtimeUsesFullAccess(runtime: SessionRuntime): boolean {
-  if (runtime.activePermissionProfile) {
-    return isFullAccessProfile(runtime.activePermissionProfile.id);
-  }
-  const sandbox = asObject(runtime.sandboxPolicy);
-  const type = typeof sandbox?.type === "string"
-    ? sandbox.type
-    : typeof runtime.sandboxPolicy === "string"
-    ? runtime.sandboxPolicy
-    : "";
-  return isFullAccessProfile(type);
+  const sandboxType = normalizedSandboxType(runtime.sandboxPolicy);
+  if (sandboxType) return sandboxType === FULL_ACCESS_SANDBOX_TYPE;
+
+  const profileId = runtime.activePermissionProfile?.id ?? "";
+  console.warn(
+    "codex app-server 返回了无法识别的沙箱策略，改按权限方案名称判断 Full access：" +
+      `sandboxPolicy=${JSON.stringify(runtime.sandboxPolicy)} profile=${profileId || "(无)"}`,
+  );
+  return isFullAccessProfile(profileId);
+}
+
+/**
+ * 关闭 Full access 时要落到的方案。`permissions: null` 会清成部署默认，而默认本身
+ * 可能就是完全访问，且 App Server 对它不发 `thread/settings/updated`，客户端既关不掉
+ * 也看不出来，所以改成显式切到一个受限方案。
+ */
+function pickRestrictedProfile(
+  profiles: PermissionProfileSummary[],
+): PermissionProfileSummary | null {
+  const restricted = profiles.filter(
+    (profile) => profile.allowed && !isFullAccessProfile(profile.id),
+  );
+  const preferred = restricted.find((profile) => {
+    const normalized = profile.id.toLowerCase();
+    return normalized.includes("workspace") || normalized.includes("auto");
+  });
+  return preferred ?? restricted[0] ?? null;
 }
 

@@ -11,6 +11,11 @@ class FakeTransport implements AppServerTransport {
   readonly requests: Array<{ method: string; params: unknown }> = [];
   readonly #listeners = new Set<AppServerMessageListener>();
   fullAccessAllowed = false;
+  sandboxPolicyByProfile: Record<string, JsonObject> = {
+    ":read-only": { type: "readOnly", networkAccess: false },
+    ":workspace": { type: "workspaceWrite", writableRoots: [] },
+    ":full-access": { type: "dangerFullAccess" },
+  };
   paginatedTurns = [
     completedTurn("paginated-kept"),
     completedTurn("paginated-removed"),
@@ -91,7 +96,31 @@ class FakeTransport implements AppServerTransport {
         itemsBackwardsCursor: null,
       } as Result;
     }
+    if (method === "thread/settings/update") {
+      this.#emitSettingsUpdated((params as JsonObject).permissions);
+      return {} as Result;
+    }
     return {} as Result;
+  }
+
+  /**
+   * 照 codex-cli 0.153.4 实测的行为：切到某个权限方案会回 `thread/settings/updated`
+   * 并带上生效的沙箱策略；`permissions: null` 一条通知都不发，哪怕生效的沙箱真的变了。
+   */
+  #emitSettingsUpdated(permissions: unknown): void {
+    if (typeof permissions !== "string") return;
+    const sandboxPolicy = this.sandboxPolicyByProfile[permissions];
+    if (!sandboxPolicy) return;
+    this.notify({
+      method: "thread/settings/updated",
+      params: {
+        threadId: "thread-1",
+        threadSettings: {
+          sandboxPolicy,
+          activePermissionProfile: { id: permissions, extends: null },
+        },
+      },
+    });
   }
 
   onNotification(listener: AppServerMessageListener): () => void {
@@ -107,6 +136,10 @@ class FakeTransport implements AppServerTransport {
 function createRunner(
   transport: FakeTransport,
   historyMode: ThreadHistoryMode = "legacy",
+  runtime: Partial<{
+    sandboxPolicy: unknown;
+    activePermissionProfile: { id: string; extends: string | null } | null;
+  }> = {},
 ): CommandRunner {
   return new CommandRunner(transport, "thread-1", {
     cwd: "/projects/demo",
@@ -116,6 +149,7 @@ function createRunner(
     approvalPolicy: "on-request",
     sandboxPolicy: { type: "workspaceWrite" },
     activePermissionProfile: { id: ":workspace", extends: null },
+    ...runtime,
   });
 }
 
@@ -236,6 +270,8 @@ test("toggles Full access for only the current thread and restores defaults", as
   const updates = transport.requests.filter((request) =>
     request.method === "thread/settings/update"
   );
+  // 关闭动作必须落到一个具体的受限方案。`permissions: null` 只是清回部署默认，
+  // 而默认本身可能就是 Full access，App Server 对它又不发通知，等于关不掉也看不出来。
   assert.deepEqual(updates, [
     {
       method: "thread/settings/update",
@@ -243,9 +279,44 @@ test("toggles Full access for only the current thread and restores defaults", as
     },
     {
       method: "thread/settings/update",
-      params: { threadId: "thread-1", permissions: null },
+      params: { threadId: "thread-1", permissions: ":workspace" },
     },
   ]);
+  runner.dispose();
+});
+
+test("reads Full access from the sandbox policy, not the profile name", async () => {
+  // 主机默认权限就是 Full access 时的样子：方案名什么都不带，沙箱策略说了算。
+  const enabled = createRunner(new FakeTransport(), "legacy", {
+    sandboxPolicy: { type: "dangerFullAccess" },
+    activePermissionProfile: null,
+  });
+  assert.equal(enabled.fullAccessEnabled(), true);
+  enabled.dispose();
+
+  // 反过来，名字里带 full 但沙箱是只读，就不能当成 Full access。
+  const disabled = createRunner(new FakeTransport(), "legacy", {
+    sandboxPolicy: { type: "readOnly", networkAccess: false },
+    activePermissionProfile: { id: ":full-access", extends: null },
+  });
+  assert.equal(disabled.fullAccessEnabled(), false);
+  disabled.dispose();
+});
+
+test("does not claim Full access is off when the sandbox says otherwise", async () => {
+  const transport = new FakeTransport();
+  transport.fullAccessAllowed = true;
+  // 切到受限方案，Codex 却报告沙箱仍是完全访问。
+  transport.sandboxPolicyByProfile[":workspace"] = { type: "dangerFullAccess" };
+  const runner = createRunner(transport, "legacy", {
+    sandboxPolicy: { type: "dangerFullAccess" },
+    activePermissionProfile: null,
+  });
+
+  const result = await runner.toggleFullAccess();
+  assert.equal(result.title, "Full access 没有关闭");
+  assert.equal(result.fullAccessEnabled, true);
+  assert.equal(runner.fullAccessEnabled(), true);
   runner.dispose();
 });
 

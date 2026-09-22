@@ -125,8 +125,12 @@ Linux / macOS 常驻运行、更新和日志见 [运维说明](docs/operations.m
 ## 权限默认值
 
 Codex Remote 不覆盖 Codex 的默认权限配置。新建或恢复会话时，权限由部署主机上的
-Codex 配置决定；登录后可以通过 `/permissions` 查看和切换 App Server 返回的可用
+Codex 配置决定；登录后可以通过输入框旁的权限下拉，查看和切换 App Server 返回的可用
 权限 profile。
+
+当前会话是不是 full access，以 App Server 返回的沙箱策略为准，不按权限 profile 的
+名字推断。关闭 full access 会切到一个可用的受限 profile；如果主机上一个受限 profile
+都没有，Remote 会直接报错，而不是谎称已经关闭。
 
 选择 full access 会扩大令牌泄露后的影响范围。公网部署尤其应保留受限权限，并让
 Codex 运行在权限边界明确的非 root Unix 用户下。
