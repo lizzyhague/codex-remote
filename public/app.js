@@ -1807,13 +1807,25 @@ function receiveUserMessage(event) {
   }
 }
 
+/**
+ * 取这条助手正文的输出流；没有就新建一个气泡。
+ *
+ * 历史消息是直接渲染好贴上去的，不进流表。被中断那一轮重开时会连同事件一起
+ * 重放，同一条正文于是来第二遍——不先看一眼页面就会画成两份。用户气泡一直有
+ * 这道检查，这里补上；返回 null 表示页面上已经有了，这一份直接丢掉。
+ */
+function assistantStreamFor(itemId) {
+  const stream = state.assistantStreams.get(itemId);
+  if (stream) return stream;
+  if (elements.timeline.querySelector(`[data-item-id="${CSS.escape(itemId)}"]`)) return null;
+  addMessage("assistant", "", itemId, true);
+  return state.assistantStreams.get(itemId);
+}
+
 function appendAssistantDelta(itemId, delta) {
   if (!itemId || !delta) return;
-  let stream = state.assistantStreams.get(itemId);
-  if (!stream) {
-    addMessage("assistant", "", itemId, true);
-    stream = state.assistantStreams.get(itemId);
-  }
+  const stream = assistantStreamFor(itemId);
+  if (!stream) return;
   stream.target += delta;
   stream.element.classList.add("pending");
   scheduleAssistantFrame(stream);
@@ -1826,11 +1838,8 @@ function sealAssistantStreams() {
 }
 
 function completeAssistant(itemId, text) {
-  let stream = state.assistantStreams.get(itemId);
-  if (!stream) {
-    addMessage("assistant", "", itemId, true);
-    stream = state.assistantStreams.get(itemId);
-  }
+  const stream = assistantStreamFor(itemId);
+  if (!stream) return;
   if (!text.startsWith(stream.shown)) {
     stream.shown = "";
     stream.textElement.textContent = "";
