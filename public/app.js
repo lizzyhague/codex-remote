@@ -2072,8 +2072,8 @@ function appendResourceBlock(command, label, emptyText) {
     for (const resource of command.resources) {
       const item = document.createElement("li");
       const text = resource.label ? `${resource.label} — ${resource.address}` : resource.address;
-      const href = sanitizeHref(resource.address);
-      if (href && /^https?:\/\//i.test(href)) {
+      const href = externalLinkHref(resource.address);
+      if (href) {
         const link = document.createElement("a");
         link.href = href;
         link.target = "_blank";
@@ -2462,13 +2462,21 @@ function addInteraction(interaction, sessionId = null) {
     const message = document.createElement("small");
     message.textContent = `${interaction.serverName || "MCP"}：${interaction.message || "需要确认"}`;
     card.append(message);
-    if (typeof interaction.url === "string" && interaction.url) {
+    const loginHref = externalLinkHref(interaction.url);
+    if (loginHref) {
       const link = document.createElement("a");
-      link.href = interaction.url;
+      link.href = loginHref;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.textContent = "打开登录或授权页面";
       card.append(link);
+    } else if (typeof interaction.url === "string" && interaction.url) {
+      // 地址在，但不是普通网页链接。原样显示让人自己判断，不给它可点的通道，
+      // 也不允许确认——没打开过的授权不该回报成已完成。
+      const rejected = document.createElement("small");
+      rejected.textContent = `这个地址不是网页链接，没有作为链接呈现：${interaction.url}`;
+      card.append(rejected);
+      canSubmit = false;
     } else {
       const count = addMcpFormFields(card, fields, interaction.schema);
       if (count === 0) {
@@ -2509,6 +2517,17 @@ function addInteraction(interaction, sessionId = null) {
   card.append(cancel);
   if (canSubmit) card.append(submit);
   elements.approvalList.append(card);
+}
+
+/**
+ * 外部来源的地址能不能作为可点链接呈现。
+ *
+ * sanitizeHref 已经挡掉 javascript: 之类的协议，这里再要求必须是 http(s)：
+ * 这些地址来自 MCP 服务器或工具输出，不是本页自己拼出来的。
+ */
+function externalLinkHref(value) {
+  const href = typeof value === "string" ? sanitizeHref(value) : null;
+  return href && /^https?:\/\//i.test(href) ? href : null;
 }
 
 function addMcpFormFields(card, fields, schema) {
