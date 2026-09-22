@@ -91,6 +91,23 @@ const elements = {
   attachmentList: byId("attachment-list"),
   commandMenuButton: byId("command-menu-button"),
   taskButton: byId("task-button"),
+  composerPickerMenu: byId("composer-picker-menu"),
+  modelPickerButton: byId("model-picker-button"),
+  modelPickerLabel: byId("model-picker-label"),
+  permissionPickerButton: byId("permission-picker-button"),
+  permissionPickerLabel: byId("permission-picker-label"),
+  renameDialog: byId("rename-dialog"),
+  renameForm: byId("rename-form"),
+  renameInput: byId("rename-input"),
+  renameStatus: byId("rename-status"),
+  renameCancelButton: byId("rename-cancel"),
+  renameSaveButton: byId("rename-save"),
+};
+
+// 两个选择入口共用一套结构；注册表保持扁平，按 kind 取元素走这里。
+const composerPickers = {
+  model: { button: elements.modelPickerButton, label: elements.modelPickerLabel },
+  permission: { button: elements.permissionPickerButton, label: elements.permissionPickerLabel },
 };
 
 const state = {
@@ -1150,8 +1167,8 @@ function resetCurrentSession() {
   abortAttachmentUploads();
   state.sessionId = null;
   closeComposerPicker();
-  document.getElementById("model-picker-label").textContent = "默认";
-  document.getElementById("permission-picker-label").textContent = "默认";
+  elements.modelPickerLabel.textContent = "默认";
+  elements.permissionPickerLabel.textContent = "默认";
   state.metrics = null;
   renderSessionMetrics();
   state.sessionTitle = "";
@@ -2626,8 +2643,8 @@ function updateControls() {
     : "在浏览器里写好，再发送给 Codex";
   const controlsDisabled = !connected || !hasSession || busy || navigationBusy || state.selectionMode;
   elements.commandMenuButton.disabled = controlsDisabled;
-  document.getElementById("model-picker-button").disabled = controlsDisabled;
-  document.getElementById("permission-picker-button").disabled = controlsDisabled;
+  elements.modelPickerButton.disabled = controlsDisabled;
+  elements.permissionPickerButton.disabled = controlsDisabled;
   if (controlsDisabled) { closeComposerPicker(); slashCommands.close(); }
   if (state.stopping) {
     elements.taskButton.textContent = "停止中";
@@ -3022,11 +3039,11 @@ function renderSessionMetrics() {
     ? `上下文约 ${metrics.context.percentage.toFixed(1)}%`
     : "上下文等待更新"];
   if (metrics?.windows?.length) {
-    for (const window of metrics.windows) {
-      const left = typeof window.remainingPercent === "number"
-        ? `${window.remainingPercent.toFixed(1)}%` : "未知";
-      const reset = formatDate(window.resetsAt);
-      const label = window.label.replace(/^codex（(.+)）$/i, "$1");
+    for (const quota of metrics.windows) {
+      const left = typeof quota.remainingPercent === "number"
+        ? `${quota.remainingPercent.toFixed(1)}%` : "未知";
+      const reset = formatDate(quota.resetsAt);
+      const label = quota.label.replace(/^codex（(.+)）$/i, "$1");
       parts.push(`${label}剩余 ${left}${reset ? `，${reset} 重置` : ""}`);
     }
   } else parts.push("套餐额度不可用");
@@ -3063,11 +3080,11 @@ headerHeightObserver.observe(conversationHeader);
 
 // 两个选择入口共用菜单；数据和变更都沿用现有命令接口。
 function closeComposerPicker() {
-  const menu = document.getElementById("composer-picker-menu");
+  const menu = elements.composerPickerMenu;
   menu.hidden = true;
   menu.dataset.requestId = String(Number(menu.dataset.requestId || 0) + 1);
   for (const kind of ["model", "permission"]) {
-    document.getElementById(`${kind}-picker-button`).setAttribute("aria-expanded", "false");
+    composerPickers[kind].button.setAttribute("aria-expanded", "false");
   }
 }
 
@@ -3081,14 +3098,14 @@ async function refreshPickerLabels() {
       const selected = data.items?.find(item => item.selected);
       const label = selected?.label || "默认";
       const kind = command === "model" ? "model" : "permission";
-      document.getElementById(`${kind}-picker-label`).textContent = label;
-      document.getElementById(`${kind}-picker-button`).title = label;
+      composerPickers[kind].label.textContent = label;
+      composerPickers[kind].button.title = label;
     } catch { /* 会话忙碌时后端可能拒绝查询，下次打开时重新读取。 */ }
   }));
 }
 
 function renderComposerPicker(title, items, onSelect, onBack) {
-  const menu = document.getElementById("composer-picker-menu");
+  const menu = elements.composerPickerMenu;
   const heading = document.createElement("div");
   heading.className = "composer-picker-heading";
   if (onBack) {
@@ -3125,14 +3142,14 @@ function renderComposerPicker(title, items, onSelect, onBack) {
 
 async function openComposerPicker(command) {
   const kind = command === "model" ? "model" : "permission";
-  const trigger = document.getElementById(`${kind}-picker-button`);
+  const trigger = composerPickers[kind].button;
   if (trigger.disabled) return;
   const wasOpen = trigger.getAttribute("aria-expanded") === "true";
   closeComposerPicker();
   slashCommands.close();
   if (wasOpen) return;
   trigger.setAttribute("aria-expanded", "true");
-  const menu = document.getElementById("composer-picker-menu");
+  const menu = elements.composerPickerMenu;
   const requestId = menu.dataset.requestId;
   const sessionId = state.sessionId;
   try {
@@ -3140,7 +3157,7 @@ async function openComposerPicker(command) {
     if (state.sessionId !== sessionId || menu.dataset.requestId !== requestId) return;
     const items = data.items || [];
     const selected = items.find(item => item.selected);
-    document.getElementById(`${kind}-picker-label`).textContent = selected?.label || "默认";
+    composerPickers[kind].label.textContent = selected?.label || "默认";
     const choose = async (item, argument = null) => {
       if (state.sessionId !== sessionId || trigger.disabled) return;
       if (item.danger && !window.confirm("完全访问会让 Codex 不受项目沙箱限制地操作主机。确定只为当前会话选择吗？")) return;
@@ -3180,7 +3197,7 @@ async function openComposerPicker(command) {
 }
 
 for (const [kind, command] of [["model", "model"], ["permission", "permissions"]]) {
-  document.getElementById(`${kind}-picker-button`).addEventListener("click", () => void openComposerPicker(command));
+  composerPickers[kind].button.addEventListener("click", () => void openComposerPicker(command));
 }
 
 document.addEventListener("click", event => {
@@ -3190,7 +3207,7 @@ document.addEventListener("click", event => {
   if (!inside("#slash-menu, #command-menu-button, #message-input")) slashCommands.close();
 });
 document.addEventListener("keydown", event => {
-  const menu = document.getElementById("composer-picker-menu");
+  const menu = elements.composerPickerMenu;
   if (menu.hidden) return;
   if (event.key === "Escape") {
     event.preventDefault();
@@ -3201,7 +3218,12 @@ document.addEventListener("keydown", event => {
     event.preventDefault();
     const buttons = [...menu.querySelectorAll("button:not(:disabled)")];
     const index = buttons.indexOf(document.activeElement);
-    const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    const next = event.key === "Home"
+      ? 0
+      : event.key === "End"
+      ? buttons.length - 1
+      : (index + step + buttons.length) % buttons.length;
     buttons[next]?.focus();
   }
 });
@@ -3211,8 +3233,8 @@ function openRenameDialog(initialTitleOrSession) {
     ? initialTitleOrSession
     : null;
   const initialTitle = typeof initialTitleOrSession === "string" ? initialTitleOrSession : null;
-  const dialog = document.getElementById("rename-dialog");
-  const input = document.getElementById("rename-input");
+  const dialog = elements.renameDialog;
+  const input = elements.renameInput;
   if (fromSession) {
     dialog.dataset.sessionId = fromSession.id;
     dialog.dataset.projectId = fromSession.projectId || "";
@@ -3223,18 +3245,18 @@ function openRenameDialog(initialTitleOrSession) {
     dialog.dataset.projectId = state.projectId || "";
     input.value = initialTitle ?? state.sessionTitle ?? "";
   }
-  document.getElementById("rename-status").textContent = "";
+  elements.renameStatus.textContent = "";
   closeComposerPicker();
   if (!dialog.open) dialog.showModal();
   input.focus();
   input.select();
 }
-document.getElementById("rename-cancel").addEventListener("click", () => document.getElementById("rename-dialog").close());
-document.getElementById("rename-form").addEventListener("submit", async event => {
+elements.renameCancelButton.addEventListener("click", () => elements.renameDialog.close());
+elements.renameForm.addEventListener("submit", async event => {
   event.preventDefault();
-  const dialog = document.getElementById("rename-dialog");
-  const status = document.getElementById("rename-status");
-  const title = document.getElementById("rename-input").value.trim();
+  const dialog = elements.renameDialog;
+  const status = elements.renameStatus;
+  const title = elements.renameInput.value.trim();
   if (!title) { status.textContent = "会话名称不能为空。"; return; }
   const sessionId = dialog.dataset.sessionId;
   const projectId = dialog.dataset.projectId || state.projectId;
@@ -3248,7 +3270,7 @@ document.getElementById("rename-form").addEventListener("submit", async event =>
     dialog.close();
     return;
   }
-  document.getElementById("rename-save").disabled = true;
+  elements.renameSaveButton.disabled = true;
   try {
     const data = await request("session.rename", { projectId, sessionId, title });
     if (data?.session) {
@@ -3263,7 +3285,7 @@ document.getElementById("rename-form").addEventListener("submit", async event =>
   } catch (error) {
     status.textContent = errorMessage(error);
   } finally {
-    document.getElementById("rename-save").disabled = false;
+    elements.renameSaveButton.disabled = false;
     updateControls();
   }
 });
