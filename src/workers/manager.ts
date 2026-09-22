@@ -1161,8 +1161,10 @@ export class SessionWorkerManager {
   }
 
   async #handleOfflineGraceExpired(): Promise<void> {
-    if (this.#authenticatedClients.size > 0) return;
     for (const active of this.#workers.values()) {
+      // 每一路开始前都要重新确认没人在线：处理上一路时有真实的等待，客户端
+      // 可能已经重连上来了，后面这些轮次不该再按“没人接”处理。
+      if (this.#authenticatedClients.size > 0) return;
       if (active.worker.interactions.pendingForThread(active.task.threadId).length > 0) {
         await this.#interruptForOfflineInteraction(active);
         continue;

@@ -61,6 +61,43 @@ test("cancels the whole manual turn when an offline approval outlives grace", as
   assert.equal(task.interruptionReason, "no_client_for_permission");
 });
 
+test("reconnecting mid-sweep spares the turns the sweep has not reached", async (context) => {
+  let reconnected = false;
+  let fixture!: Awaited<ReturnType<typeof managerFixture>>;
+  fixture = await managerFixture(context, {
+    offlineGraceMs: 5,
+    beforeInterrupt: async () => {
+      // 第一路的中断还在路上，客户端就回来了。
+      if (reconnected) return;
+      reconnected = true;
+      fixture.manager.clientAuthenticated("phone");
+    },
+  });
+  // 两个审批要在宽限到点之前就挂着，才会走到逐路处理的那个循环。
+  fixture.manager.clientAuthenticated("phone");
+  fixture.manager.start();
+  const first = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "需要权限");
+  const second = fixture.manager.enqueueMessage("project-2", "thread-2", "message-2", "也需要权限");
+  await waitFor(() => fixture.workers.length === 2);
+  const [firstWorker, secondWorker] = fixture.workers;
+  firstWorker!.requestApproval();
+  secondWorker!.requestApproval();
+  await waitFor(() =>
+    fixture.store.require(second.taskId).status === "waiting_for_permission"
+  );
+
+  fixture.manager.clientDisconnected("phone");
+  await waitFor(() => fixture.store.require(first.taskId).status === "interrupted");
+  await delay(20);
+
+  // 第二路的审批还挂着，等着刚回来的客户端去答。
+  assert.equal(secondWorker!.interruptCount, 0);
+  assert.equal(secondWorker!.cancelledApprovals, 0);
+  assert.equal(secondWorker!.approved, 0);
+  assert.equal(fixture.store.require(second.taskId).status, "waiting_for_permission");
+  secondWorker!.complete("completed");
+});
+
 test("auto-approves an execution request for an offline Full access turn", async (context) => {
   const fixture = await managerFixture(context, {
     offlineGraceMs: 1,
@@ -774,6 +811,7 @@ async function managerFixture(
     beforeWorkerCreate?: () => Promise<void>;
     beforeStartTurn?: () => Promise<void>;
     beforeCompact?: () => Promise<void>;
+    beforeInterrupt?: () => Promise<void>;
     autoCompleteOnInterrupt?: boolean;
     uploads?: SessionWorkerManagerOptions["uploads"];
     settings?: ApplicationSettingsStore;
@@ -813,6 +851,7 @@ async function managerFixture(
         {
           ...(options.beforeStartTurn ? { beforeStartTurn: options.beforeStartTurn } : {}),
           ...(options.beforeCompact ? { beforeCompact: options.beforeCompact } : {}),
+          ...(options.beforeInterrupt ? { beforeInterrupt: options.beforeInterrupt } : {}),
           ...(options.autoCompleteOnInterrupt === undefined
             ? {}
             : { autoCompleteOnInterrupt: options.autoCompleteOnInterrupt }),
@@ -881,6 +920,7 @@ class FakeWorker {
   readonly #toggleFullAccessFails: boolean;
   readonly #beforeStartTurn?: (() => Promise<void>) | undefined;
   readonly #beforeCompact?: (() => Promise<void>) | undefined;
+  readonly #beforeInterrupt?: (() => Promise<void>) | undefined;
 
   constructor(
     options: SessionWorkerOptions,
@@ -889,6 +929,7 @@ class FakeWorker {
     extras: {
       beforeStartTurn?: (() => Promise<void>) | undefined;
       beforeCompact?: (() => Promise<void>) | undefined;
+      beforeInterrupt?: (() => Promise<void>) | undefined;
       autoCompleteOnInterrupt?: boolean | undefined;
     } = {},
   ) {
@@ -898,6 +939,7 @@ class FakeWorker {
     this.#toggleFullAccessFails = toggleFullAccessFails;
     this.#beforeStartTurn = extras.beforeStartTurn;
     this.#beforeCompact = extras.beforeCompact;
+    this.#beforeInterrupt = extras.beforeInterrupt;
     this.autoCompleteOnInterrupt = extras.autoCompleteOnInterrupt !== false;
     this.opened = {
       session: {
@@ -981,6 +1023,7 @@ class FakeWorker {
         }
       },
       interruptActiveTurn: async () => {
+        if (thisOwner.#beforeInterrupt) await thisOwner.#beforeInterrupt();
         if (thisOwner.#interruptPromise) return thisOwner.#interruptPromise;
         if (thisOwner.#activeTurnId) {
           if (thisOwner.#interruptRequested) return true;
