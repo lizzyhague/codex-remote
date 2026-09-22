@@ -5,6 +5,7 @@ import {
   writeJsonAtomically,
 } from "../workers/atomic-json.ts";
 import { resolveTrashStatePath } from "../sessions/trash-store.ts";
+import { isObject } from "../shared/json.ts";
 
 export const MAX_DEVELOPER_INSTRUCTIONS_LENGTH = 131_072;
 
@@ -127,6 +128,3 @@ function parseSettings(raw: unknown, filePath: string): ApplicationSettings {
   };
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}

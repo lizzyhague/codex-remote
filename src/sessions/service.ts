@@ -28,6 +28,7 @@ import {
 } from "./trash-store.ts";
 import { MarkStore } from "./mark-store.ts";
 import type { ApplicationSettingsStore } from "../settings/store.ts";
+import { isObject } from "../shared/json.ts";
 
 const PAGE_SIZE = 50;
 const REPLY_LOOKUP_PAGE_SIZE = 20;
@@ -460,7 +461,7 @@ export class CodexSessionService {
         } catch (error) {
           result.failed.push({
             sessionId: entry.threadId,
-            message: errorMessage(error),
+            message: describeFailure(error),
           });
         }
       }
@@ -708,7 +709,7 @@ export class CodexSessionService {
           await operation(project.path, threadId);
           result.succeeded.push(threadId);
         } catch (error) {
-          result.failed.push({ sessionId: threadId, message: errorMessage(error) });
+          result.failed.push({ sessionId: threadId, message: describeFailure(error) });
         }
       }
       if (result.succeeded.length > 0) {
@@ -825,7 +826,11 @@ function parseTrashCursor(cursor: string | null): number {
   return offset;
 }
 
-function errorMessage(error: unknown): string {
+/**
+ * 会话操作失败时给用户看的一句话。非 Error 一律换成固定文案，不把内部值透给界面；
+ * 要保留原值看日志的是 `manager.ts` 里的 `errorMessage`。
+ */
+function describeFailure(error: unknown): string {
   return error instanceof Error ? error.message : "操作失败。";
 }
 
@@ -894,6 +899,3 @@ function isThread(value: unknown): value is Thread {
     (status === "notLoaded" || status === "idle" || status === "active" || status === "systemError");
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}

@@ -1,3 +1,4 @@
+import { isObject } from "../shared/json.ts";
 import { readJsonIfPresent, writeJsonAtomically } from "../workers/atomic-json.ts";
 
 /** 回收站登记和钉住名单都是按 thread 记的小名单。 */
@@ -103,8 +104,4 @@ export abstract class ThreadEntryStore<Entry extends ThreadScopedEntry> {
     this.#writeQueue = operation.catch(() => {});
     return operation;
   }
-}
-
-export function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

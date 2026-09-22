@@ -5,6 +5,7 @@ import path from "node:path";
 import { deflateSync } from "node:zlib";
 
 import WebSocket from "ws";
+import { asObject } from "../shared/json.ts";
 
 const baseUrl = process.env.CODEX_REMOTE_SMOKE_URL ?? "http://127.0.0.1:18787";
 const token = process.env.CODEX_REMOTE_SMOKE_TOKEN ??
@@ -383,10 +384,5 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function asObject(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
 
 await main();

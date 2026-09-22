@@ -6,6 +6,7 @@ import {
   readJsonIfPresent,
   writeJsonAtomically,
 } from "./atomic-json.ts";
+import { isObject } from "../shared/json.ts";
 
 export type IndexedAttachment = {
   id: string;
@@ -159,6 +160,3 @@ function sameRecords(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}

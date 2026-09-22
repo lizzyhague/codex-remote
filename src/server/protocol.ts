@@ -1,5 +1,6 @@
 import { isCommandName, type CommandName } from "../commands/catalog.ts";
 import { MAX_DEVELOPER_INSTRUCTIONS_LENGTH } from "../settings/store.ts";
+import { isObject } from "../shared/json.ts";
 
 export type BrowserSessionView = "active" | "archived" | "trash";
 export type BrowserSessionMutationAction =
@@ -467,6 +468,3 @@ function readBoundedString(value: unknown, maxLength: number): string | null {
     : null;
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}

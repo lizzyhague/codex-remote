@@ -1,5 +1,6 @@
 import type { AttachmentDisplayMapping } from "../attachments/path-redaction.ts";
 import { redactKnownAttachmentPaths } from "../attachments/path-redaction.ts";
+import { isObject } from "../shared/json.ts";
 
 export type PublicToolKind =
   | "read"
@@ -77,7 +78,7 @@ export function publicToolView(
   fallbackStatus: "inProgress" | "completed" = "inProgress",
   mappings: readonly AttachmentDisplayMapping[] = [],
 ): PublicToolView | null {
-  const value = asObject(item);
+  const value = objectFields(item);
   const type = stringField(value.type);
   if (!type) return null;
   const status = stringField(value.status) ?? fallbackStatus;
@@ -115,7 +116,7 @@ export function publicToolView(
   }
 
   if (type === "webSearch") {
-    const action = asObject(value.action);
+    const action = objectFields(value.action);
     const actionType = stringField(action.type);
     const query = webSearchQuery(value, action, actionType);
     const resources: PublicToolResource[] = [];
@@ -161,7 +162,7 @@ export function publicToolView(
   }
 
   if (type === "mcpToolCall") {
-    const context = asObject(value.appContext);
+    const context = objectFields(value.appContext);
     const server = stringField(value.server);
     const tool = stringField(value.tool);
     const appName = stringField(context.appName);
@@ -253,7 +254,7 @@ export function publicRawToolView(
   startedTool: PublicToolView | null = null,
   mappings: readonly AttachmentDisplayMapping[] = [],
 ): PublicRawToolEvent | null {
-  const value = asObject(item);
+  const value = objectFields(item);
   const type = stringField(value.type);
   const callId = stringField(value.call_id);
   if (!callId) return null;
@@ -312,9 +313,9 @@ function view(
 }
 
 function fileChangeEntry(value: unknown): PublicToolEntry[] {
-  const change = asObject(value);
+  const change = objectFields(value);
   const path = stringField(change.path) ?? "未知文件";
-  const kind = asObject(change.kind);
+  const kind = objectFields(change.kind);
   const type = stringField(kind.type);
   if (type === "delete") return [{ kind: "delete", title: path }];
   if (type === "update") {
@@ -340,7 +341,7 @@ function webSearchQuery(
 }
 
 function mcpOutput(value: Record<string, unknown>): string | null {
-  const error = asObject(value.error);
+  const error = objectFields(value.error);
   const message = stringField(error.message);
   if (message) return message;
   return stringifyToolText(value.result);
@@ -421,7 +422,7 @@ function functionCallOutputText(value: unknown): string | null {
   if (typeof value === "string") return value;
   if (!Array.isArray(value)) return null;
   const text = value.flatMap((entry) => {
-    const item = asObject(entry);
+    const item = objectFields(entry);
     return item.type === "input_text" && typeof item.text === "string"
       ? [item.text]
       : [];
@@ -462,10 +463,8 @@ function numberField(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function asObject(value: unknown): Record<string, unknown> {
+/** 读字段用：不是对象就当成没有字段，调用点因此不必每次判空。 */
+function objectFields(value: unknown): Record<string, unknown> {
   return isObject(value) ? value : {};
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}

@@ -6,6 +6,7 @@ import type { ThreadRollbackResponse } from "../generated/v2/ThreadRollbackRespo
 import type { ThreadTurnsListResponse } from "../generated/v2/ThreadTurnsListResponse.ts";
 import type { SessionRuntime } from "../sessions/service.ts";
 import type { CommandName } from "./catalog.ts";
+import { asObject } from "../shared/json.ts";
 
 export type CommandOption = {
   id: string;
@@ -530,8 +531,3 @@ function runtimeUsesFullAccess(runtime: SessionRuntime): boolean {
   return isFullAccessProfile(type);
 }
 
-function asObject(value: unknown): JsonObject | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as JsonObject
-    : null;
-}

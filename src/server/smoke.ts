@@ -14,6 +14,7 @@ import { WorkerStateStore } from "../workers/state-store.ts";
 import { RemoteWebSocketServer } from "./http-server.ts";
 import { ProjectTaskLocks } from "./project-locks.ts";
 import { buildViewableRoots, ensurePreviewRoot } from "./viewable-roots.ts";
+import { asObject, isObject } from "../shared/json.ts";
 
 const token = "codex-remote-smoke-token-not-a-secret";
 const appServer = new AppServerClient({ workingDirectory: process.cwd() });
@@ -118,10 +119,4 @@ async function sendRequest(
   return value;
 }
 
-function asObject(value: unknown): Record<string, unknown> | null {
-  return isObject(value) ? value : null;
-}
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}

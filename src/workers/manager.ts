@@ -49,6 +49,7 @@ import {
   type WorkerTask,
   type WorkerTaskKind,
 } from "./state-store.ts";
+import { asObject } from "../shared/json.ts";
 
 const DEFAULT_MAX_WORKERS = 2;
 const DEFAULT_MIN_AVAILABLE_MEMORY_BYTES = 1_073_741_824;
@@ -1662,12 +1663,8 @@ function nonnegativeInteger(value: number | undefined, fallback: number): number
   return Number.isInteger(value) && value! >= 0 ? value! : fallback;
 }
 
+/** 写日志用：非 Error 也保留原值，便于查清到底抛了什么。 */
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function asObject(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}

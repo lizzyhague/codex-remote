@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { RequestId } from "../generated/RequestId.ts";
+import { asObject } from "../shared/json.ts";
 import type { AppServerMessageListener, JsonObject } from "./client.ts";
 
 export interface ServerRequestTransport {
@@ -151,10 +152,4 @@ export abstract class ServerRequestBroker<
 
 export function readRequestId(value: unknown): RequestId | null {
   return typeof value === "string" || typeof value === "number" ? value : null;
-}
-
-export function asObject(value: unknown): JsonObject | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as JsonObject
-    : null;
 }

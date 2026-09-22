@@ -1,3 +1,6 @@
+import { isObject } from "../shared/json.ts";
+import { indexOfWholeLine } from "../shared/text.ts";
+
 export const PRIVATE_ATTACHMENT_PATHS_START = "[AI_REMOTE_PRIVATE_ATTACHMENT_PATHS_V1]";
 export const PRIVATE_ATTACHMENT_PATHS_END = "[/AI_REMOTE_PRIVATE_ATTACHMENT_PATHS_V1]";
 
@@ -83,19 +86,6 @@ function findPrivateBlock(text: string): {
   return null;
 }
 
-function indexOfWholeLine(text: string, marker: string, from: number): number {
-  let index = from;
-  while (index < text.length) {
-    const found = text.indexOf(marker, index);
-    if (found < 0) return -1;
-    const atLineStart = found === 0 || text[found - 1] === "\n";
-    const after = found + marker.length;
-    const atLineEnd = after === text.length || text[after] === "\n" || text.startsWith("\r\n", after);
-    if (atLineStart && atLineEnd) return found;
-    index = found + marker.length;
-  }
-  return -1;
-}
 
 function endOfLine(text: string, index: number): number {
   if (text.startsWith("\r\n", index)) return index + 2;
@@ -139,6 +129,3 @@ function parseRecord(value: unknown): AttachmentPathRecord[] {
   }];
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}

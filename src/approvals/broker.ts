@@ -1,6 +1,6 @@
 import type { JsonObject } from "../app-server/client.ts";
+import { asObject } from "../shared/json.ts";
 import {
-  asObject,
   type BrokerBaseResolution,
   ServerRequestBroker,
   type ServerRequestTransport,

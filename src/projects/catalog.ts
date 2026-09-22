@@ -1,5 +1,6 @@
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { isObject } from "../shared/json.ts";
 
 export type ProjectRootConfig = {
   id: string;
@@ -176,6 +177,3 @@ function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
     );
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}

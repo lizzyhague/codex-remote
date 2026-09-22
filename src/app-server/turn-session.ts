@@ -17,6 +17,8 @@ import {
   publicToolView,
   type PublicToolView,
 } from "./tool-view.ts";
+import { asObject } from "../shared/json.ts";
+import { indexOfWholeLine } from "../shared/text.ts";
 
 export interface AppServerTransport {
   request<Result = unknown>(method: string, params: unknown): Promise<Result>;
@@ -574,20 +576,6 @@ function stripLegacyPrivateAttachmentContent(text: string): string {
   return text.slice(0, start).replace(/\n+$/u, "");
 }
 
-function indexOfWholeLine(text: string, marker: string): number {
-  let index = 0;
-  while (index < text.length) {
-    const found = text.indexOf(marker, index);
-    if (found < 0) return -1;
-    const atLineStart = found === 0 || text[found - 1] === "\n";
-    const after = found + marker.length;
-    const atLineEnd = after === text.length || text[after] === "\n" ||
-      text.startsWith("\r\n", after);
-    if (atLineStart && atLineEnd) return found;
-    index = found + marker.length;
-  }
-  return -1;
-}
 
 function attachmentDisplayText(text: string, attachments: CodexTurnAttachment[]): string {
   const trimmed = text.trim();
@@ -632,11 +620,6 @@ function readDelta(params: JsonObject): {
   };
 }
 
-function asObject(value: unknown): JsonObject | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as JsonObject
-    : null;
-}
 
 function isTurnStatus(value: unknown): value is TurnStatus {
   return value === "completed" ||

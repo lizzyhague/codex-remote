@@ -1,8 +1,8 @@
 import { homedir } from "node:os";
 import path from "node:path";
 
+import { isObject } from "../shared/json.ts";
 import {
-  isObject,
   ThreadEntryStore,
   type ThreadEntryStoreShape,
 } from "./thread-entry-store.ts";
