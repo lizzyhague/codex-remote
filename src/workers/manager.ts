@@ -554,7 +554,6 @@ export class SessionWorkerManager {
         if (!option) throw new WorkerManagerError("command_option_required", "请先选择一种权限。");
         return worker.commands.setPermissions(option);
       }
-      if (command === "plan") return worker.commands.togglePlan();
       if (command === "rename") {
         if (!argument) {
           throw new WorkerManagerError(
@@ -569,15 +568,6 @@ export class SessionWorkerManager {
 
     if (typeof result.fullAccessEnabled === "boolean") {
       this.#recordFullAccess(threadId, result.fullAccessEnabled);
-    }
-    if (command === "plan" && argument) {
-      const queued = this.enqueueMessage(
-        projectId,
-        threadId,
-        `${clientMessageId}:message`,
-        argument,
-      );
-      return { ...result, taskId: queued.taskId, accepted: true, sentText: argument };
     }
     return result;
   }

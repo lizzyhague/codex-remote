@@ -66,11 +66,11 @@ Codex 自己是原生会话和完整历史的权威存储。Node 这边额外保
 ## 斜杠命令
 
 命令目录由后端下发，不写死在设备缓存里：`/compact`、`/model`、`/permissions`、
-`/plan`、`/rename`、`/rewind`。输入框下方另有 `+` 菜单和模型、权限两个下拉入口；
+`/rename`、`/rewind`。输入框下方另有 `+` 菜单和模型、权限两个下拉入口；
 `/model` 与 `/permissions` 由这两个下拉承担，不出现在斜杠菜单里。
 
-`/model`、`/permissions`、`/plan` 只改当前会话的后续设置，不写 Codex 全局配置，任务
-运行期间会被拒绝。
+`/model` 和 `/permissions` 只改当前会话的后续设置，不写 Codex 全局配置，任务运行期间
+会被拒绝。
 
 ## 安全边界
 

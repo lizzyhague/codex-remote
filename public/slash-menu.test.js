@@ -17,7 +17,6 @@ function setup() {
         { name: "rename", action: "argument" },
         { name: "compact", action: "confirm" },
         { name: "rewind", action: "confirm" },
-        { name: "plan", action: "immediate" },
         { name: "model", action: "options" },
         { name: "permissions", action: "options" },
       ] } : {};
@@ -31,7 +30,7 @@ function setup() {
 test("commands with their own control are unavailable while the rest are retained", async () => {
   const { menu, calls, errors } = setup();
   await menu.load();
-  assert.deepEqual(menu._commands.map(item => item.name), ["rename", "compact", "rewind", "plan"]);
+  assert.deepEqual(menu._commands.map(item => item.name), ["rename", "compact", "rewind"]);
   for (const command of ["model", "permissions"]) {
     assert.equal(await menu.submit(`/${command}`), true);
   }

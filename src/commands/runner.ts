@@ -39,10 +39,6 @@ export type CommandMessageLine = string | {
   after: string;
 };
 
-type RuntimeState = SessionRuntime & {
-  collaborationMode: "default" | "plan";
-};
-
 const THREAD_HISTORY_PAGE_SIZE = 100;
 
 /**
@@ -53,7 +49,7 @@ export class CommandRunner {
   readonly #transport: AppServerTransport;
   readonly #threadId: string;
   readonly #unsubscribe: () => void;
-  #runtime: RuntimeState;
+  #runtime: SessionRuntime;
   #fullAccessEnabled: boolean;
   #settingsRevision = 0;
 
@@ -64,7 +60,7 @@ export class CommandRunner {
   ) {
     this.#transport = transport;
     this.#threadId = threadId;
-    this.#runtime = { ...runtime, collaborationMode: "default" };
+    this.#runtime = { ...runtime };
     this.#fullAccessEnabled = runtimeUsesFullAccess(runtime);
     this.#unsubscribe = transport.onNotification((message) => {
       this.#handleNotification(message);
@@ -219,38 +215,6 @@ export class CommandRunner {
       title: "Full access 已打开",
       lines: [profile.description || permissionDescription(profile.id)],
       fullAccessEnabled: this.#fullAccessEnabled,
-    };
-  }
-
-  async togglePlan(): Promise<CommandMessage> {
-    const target = this.#runtime.collaborationMode === "plan" ? "default" : "plan";
-    const modes = await this.#listCollaborationModes();
-    const preset = modes.find((candidate) => candidate.mode === target);
-    if (!preset) {
-      throw new Error(`当前 Codex 没有返回${target === "plan" ? "计划" : "普通"}模式。`);
-    }
-
-    const model = preset.model || this.#runtime.model;
-    const effort = preset.reasoning_effort ?? this.#runtime.reasoningEffort;
-    await this.#updateSettings({
-      collaborationMode: {
-        mode: target,
-        settings: {
-          model,
-          reasoning_effort: effort,
-          developer_instructions: null,
-        },
-      },
-    });
-    this.#runtime.collaborationMode = target;
-    this.#runtime.model = model;
-    this.#runtime.reasoningEffort = effort;
-    return {
-      kind: "message",
-      title: target === "plan" ? "已进入计划模式" : "已回到普通模式",
-      lines: [target === "plan"
-        ? "后续消息会先讨论和制定方案。再次运行 /plan 可退出。"
-        : "后续消息恢复普通工作模式。"],
     };
   }
 
@@ -427,26 +391,6 @@ export class CommandRunner {
     });
   }
 
-  async #listCollaborationModes(): Promise<CollaborationModeSummary[]> {
-    const response = asObject(
-      await this.#transport.request("collaborationMode/list", {}),
-    );
-    if (!response || !Array.isArray(response.data)) {
-      throw new Error("Codex 返回了无法识别的工作模式列表。");
-    }
-    return response.data.flatMap((value) => {
-      const mode = asObject(value);
-      if (!mode || (mode.mode !== "plan" && mode.mode !== "default")) return [];
-      return [{
-        mode: mode.mode,
-        model: typeof mode.model === "string" ? mode.model : null,
-        reasoning_effort: typeof mode.reasoning_effort === "string"
-          ? mode.reasoning_effort
-          : null,
-      }];
-    });
-  }
-
   async #updateSettings(settings: JsonObject): Promise<void> {
     await this.#transport.request("thread/settings/update", {
       threadId: this.#threadId,
@@ -476,10 +420,6 @@ export class CommandRunner {
       ? { id: profile.id, extends: typeof profile.extends === "string" ? profile.extends : null }
       : null;
     this.#fullAccessEnabled = runtimeUsesFullAccess(this.#runtime);
-    const collaboration = asObject(settings.collaborationMode);
-    if (collaboration?.mode === "plan" || collaboration?.mode === "default") {
-      this.#runtime.collaborationMode = collaboration.mode;
-    }
   }
 }
 
@@ -500,12 +440,6 @@ type PermissionProfileSummary = {
   id: string;
   description: string;
   allowed: boolean;
-};
-
-type CollaborationModeSummary = {
-  mode: "default" | "plan";
-  model: string | null;
-  reasoning_effort: string | null;
 };
 
 function permissionLabel(id: string): string {

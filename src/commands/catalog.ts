@@ -2,7 +2,6 @@ export const COMMAND_NAMES = [
   "compact",
   "model",
   "permissions",
-  "plan",
   "rename",
   "rewind",
 ] as const;
@@ -13,7 +12,7 @@ export type CommandDescriptor = {
   name: CommandName;
   title: string;
   description: string;
-  action: "confirm" | "options" | "immediate" | "argument";
+  action: "confirm" | "options" | "argument";
   confirmation?: string;
 };
 
@@ -36,12 +35,6 @@ export const COMMAND_CATALOG: readonly CommandDescriptor[] = [
     title: "调整权限",
     description: "选择当前会话允许 Codex 做什么。",
     action: "options",
-  },
-  {
-    name: "plan",
-    title: "计划模式",
-    description: "进入或退出计划模式；后面也可以直接跟问题。",
-    action: "immediate",
   },
   {
     name: "rename",

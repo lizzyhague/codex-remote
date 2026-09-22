@@ -54,14 +54,6 @@ class FakeTransport implements AppServerTransport {
         nextCursor: null,
       } as Result;
     }
-    if (method === "collaborationMode/list") {
-      return {
-        data: [
-          { name: "Default", mode: "default", model: null, reasoning_effort: null },
-          { name: "Plan", mode: "plan", model: "gpt-test", reasoning_effort: "high" },
-        ],
-      } as Result;
-    }
     if (method === "thread/rollback") {
       return {
         thread: {
@@ -166,13 +158,12 @@ function completedTurn(id: string) {
   };
 }
 
-test("publishes the seven commands in alphabetical order", () => {
+test("publishes the five commands in alphabetical order", () => {
   const names = COMMAND_CATALOG.map((command) => command.name);
   assert.deepEqual(names, [
     "compact",
     "model",
     "permissions",
-    "plan",
     "rename",
     "rewind",
   ]);
@@ -198,7 +189,7 @@ test("builds dynamic model and permission menus", async () => {
   runner.dispose();
 });
 
-test("runs all six commands through app-server methods", async () => {
+test("runs all five commands through app-server methods", async () => {
   const transport = new FakeTransport();
   const runner = createRunner(transport);
 
@@ -208,7 +199,6 @@ test("runs all six commands through app-server methods", async () => {
   const permissionsResult = await runner.setPermissions(":read-only");
   assert.equal(permissionsResult.title, "权限已更新");
   assert.equal(permissionsResult.fullAccessEnabled, false);
-  assert.equal((await runner.togglePlan()).title, "已进入计划模式");
   assert.equal((await runner.rename("测试会话")).sessionName, "测试会话");
 
   assert.equal(await runner.compact(), null);
