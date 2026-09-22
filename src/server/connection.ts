@@ -104,6 +104,8 @@ export class BrowserConnection {
   #projectId: string | null = null;
   #sessionId: string | null = null;
   #olderTurns: Turn[] = [];
+  /** 打开会话期间扣住的事件；响应发出之后再按正常规则转发。 */
+  #deferredEvents: WorkerManagerEvent[] | null = null;
 
   constructor(
     id: string,
@@ -180,6 +182,8 @@ export class BrowserConnection {
         ? error.code
         : "request_failed";
       this.#sendFailure(request.requestId, code, publicErrorMessage(error));
+    } finally {
+      this.#flushDeferredEvents();
     }
   }
 
@@ -363,6 +367,10 @@ export class BrowserConnection {
   }
 
   async #openSession(projectId: string, managed: ManagedSessionOpen): Promise<unknown> {
+    // 这一句之后新会话的事件就会往这条连接上发，而“会话已打开”的响应还要等
+    // 下面那次附件同步才发得出去。页面此时还不知道自己被切过去了，收到的增量
+    // 无处安放，随后又会被首屏渲染清掉。扣住它们，等响应发完再补。
+    this.#deferredEvents = [];
     this.#detachSession();
     this.#projectId = projectId;
     this.#sessionId = managed.opened.session.id;
@@ -487,11 +495,27 @@ export class BrowserConnection {
 
   #handleWorkerEvent(stored: WorkerManagerEvent): void {
     if (!this.#authenticated) return;
+    if (this.#deferredEvents) {
+      this.#deferredEvents.push(stored);
+      return;
+    }
+    this.#forwardWorkerEvent(stored);
+  }
+
+  #forwardWorkerEvent(stored: WorkerManagerEvent): void {
     if (stored.audience === "session" && stored.threadId !== this.#sessionId) return;
     this.#send({
       type: "event",
       event: { ...stored.event, sequence: stored.sequence },
     });
+  }
+
+  /** 扣住期间攒下的事件按原顺序补发；此时会话编号已经是新的了。 */
+  #flushDeferredEvents(): void {
+    const deferred = this.#deferredEvents;
+    if (!deferred) return;
+    this.#deferredEvents = null;
+    for (const stored of deferred) this.#forwardWorkerEvent(stored);
   }
 
   async #handleDisconnect(): Promise<void> {

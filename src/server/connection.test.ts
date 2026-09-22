@@ -151,6 +151,14 @@ class FakeWorkers {
     return [];
   }
 
+  /** 打开会话时那次真实等待；测试用它把事件卡进窗口里。 */
+  beforeAttachmentSync: (() => Promise<void>) | null = null;
+
+  async syncAttachmentMappings(): Promise<[]> {
+    if (this.beforeAttachmentSync) await this.beforeAttachmentSync();
+    return [];
+  }
+
   async commandOptions(projectId: string, sessionId: string, command: string) {
     this.#record("commandOptions", projectId, sessionId, command);
     return { title: "选择", items: [] };
@@ -403,6 +411,42 @@ for (const snapshotReuse of [false, true]) {
     },
   );
 }
+
+test("holds events raised while opening until the page has been told about the session", async (context) => {
+  const { workers, services } = setup();
+  const socket = new FakeSocket();
+  const connection = new BrowserConnection("phone", socket, services);
+  context.after(() => connection.disconnect());
+
+  await openSession(connection, "session-1");
+  workers.beforeAttachmentSync = async () => {
+    // 连接已经指向 session-2，但“会话已打开”的响应还没发出去。这两条事件
+    // 今天会先于响应到达页面，随后被首屏渲染清掉。
+    workers.emit(
+      { type: "message.delta", sessionId: "session-2", delta: "半" },
+      "session",
+      "session-2",
+    );
+    workers.emit(
+      { type: "message.delta", sessionId: "session-1", delta: "旧" },
+      "session",
+      "session-1",
+    );
+  };
+  await openSession(connection, "session-2");
+
+  const opened = socket.messages.findIndex((message) =>
+    message.type === "response" && message.requestId === "open-session-2"
+  );
+  const delta = socket.messages.findIndex((message) =>
+    message.type === "event" && (message.event as JsonObject).delta === "半"
+  );
+  assert.ok(opened >= 0, "缺少打开会话的响应");
+  assert.ok(delta > opened, "新会话的增量必须排在响应之后");
+
+  // 补发时按当前会话重新过滤：刚切走的那个会话不该再画到页面上。
+  assert.deepEqual(socket.events("message.delta").map((event) => event.delta), ["半"]);
+});
 
 test("forwards worker events for the open session and hides other sessions", async (context) => {
   const { workers, services } = setup();
