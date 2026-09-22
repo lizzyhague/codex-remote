@@ -509,6 +509,13 @@ export class RemoteWebSocketServer {
     }, this.#heartbeatIntervalMs);
     heartbeatTimer.unref();
 
+    // ws 收到超过 maxPayload 的帧或非法 UTF-8 文本时，会在这个 WebSocket 上
+    // emit error；没有监听的话 EventEmitter 会把它抛成未捕获异常，带走整个后端
+    // 进程。协议错误的关闭帧由 ws 自己发，这里只记录。
+    webSocket.on("error", (error: Error) => {
+      console.warn(`浏览器连接出错：${error.message}`);
+    });
+
     webSocket.on("message", (data, isBinary) => {
       if (isBinary) {
         webSocket.close(1003, "Text messages only");

@@ -15,6 +15,7 @@ import type { RequestId } from "../generated/RequestId.ts";
 import type { OpenedSession, SessionPage } from "../sessions/service.ts";
 import type { BrowserConnectionServices } from "./connection.ts";
 import { RemoteWebSocketServer } from "./http-server.ts";
+import { MAX_BROWSER_MESSAGE_BYTES } from "./protocol.ts";
 import { ProjectTaskLocks } from "./project-locks.ts";
 import type { SessionWorkerManager } from "../workers/manager.ts";
 
@@ -473,6 +474,43 @@ test("only accepts WebSocket upgrades from its own page", async () => {
     const headless = new WebSocket(url, { headers: { cookie } });
     await withTimeout(once(headless, "open"), "打开无 Origin 的 WebSocket");
     headless.close();
+  } finally {
+    await withTimeout(server.close(), "关闭服务器");
+  }
+});
+
+test("survives an oversized frame instead of taking the process down", async () => {
+  const transport = new EmptyTransport();
+  const server = new RemoteWebSocketServer({
+    token: "test-secret",
+    services: emptyServices(transport),
+  });
+  const address = await server.listen(0);
+  const url = `ws://${address.host}:${address.port}/ws`;
+  const cookie = await loginCookie(address);
+
+  try {
+    // 超过 maxPayload 的帧会让 ws 在服务端的 WebSocket 上 emit error。没有监听
+    // 时那是一个未捕获异常，会带走整个后端；这里要求它只关掉这一条连接。
+    const oversized = new WebSocket(url, { headers: { cookie } });
+    oversized.on("error", () => {});
+    await withTimeout(once(oversized, "open"), "打开将要超限的 WebSocket");
+    const closed = once(oversized, "close");
+    oversized.send("x".repeat(MAX_BROWSER_MESSAGE_BYTES + 1));
+    const [code] = await withTimeout(closed, "等待超限连接被关闭");
+    assert.equal(code, 1009);
+
+    // 服务还在：另一条连接照常应答。
+    const survivor = new WebSocket(url, { headers: { cookie } });
+    await withTimeout(once(survivor, "open"), "打开超限之后的 WebSocket");
+    const answered = once(survivor, "message");
+    survivor.send(JSON.stringify({ type: "projects.list", requestId: "after-1" }));
+    const message = await withTimeout(answered, "等待超限之后的项目列表");
+    const projects = JSON.parse(String(message[0])) as {
+      data: { projects: unknown[] };
+    };
+    assert.equal(projects.data.projects.length, 1);
+    survivor.close();
   } finally {
     await withTimeout(server.close(), "关闭服务器");
   }
