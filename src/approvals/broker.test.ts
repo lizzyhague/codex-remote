@@ -133,19 +133,20 @@ test("declines a file change without exposing a path or diff", () => {
   ]);
 });
 
-test("cancels pending approvals for a disconnected turn", () => {
+test("cancels pending approvals for a disconnected thread", () => {
   const transport = new FakeTransport();
   const broker = new ApprovalBroker(transport);
   transport.request(commandRequest(1, "turn-1"));
   transport.request(fileRequest(2, "turn-1"));
   transport.request(commandRequest(3, "turn-2"));
 
-  assert.equal(broker.cancelTurn("thread-1", "turn-1"), 2);
+  assert.equal(broker.cancelThread("thread-1"), 3);
   assert.deepEqual(transport.responses, [
     { id: 1, result: { decision: "cancel" } },
     { id: 2, result: { decision: "cancel" } },
+    { id: 3, result: { decision: "cancel" } },
   ]);
-  assert.equal(broker.cancelThread("thread-1"), 1);
+  assert.equal(broker.cancelThread("thread-1"), 0);
 });
 
 test("grants only the permission profile requested for this turn", () => {

@@ -1,7 +1,10 @@
-import { randomUUID } from "node:crypto";
-
-import type { RequestId } from "../generated/RequestId.ts";
-import type { AppServerMessageListener, JsonObject } from "../app-server/client.ts";
+import type { JsonObject } from "../app-server/client.ts";
+import {
+  asObject,
+  type BrokerBaseResolution,
+  ServerRequestBroker,
+  type ServerRequestTransport,
+} from "../app-server/server-request-broker.ts";
 
 export type WorkerInteractionQuestion = {
   id: string;
@@ -32,43 +35,16 @@ export type WorkerInteractionEvent =
   | { type: "interaction_requested"; interaction: WorkerInteractionRequest }
   | { type: "interaction_resolved"; interactionId: string; resolution: "submitted" | "cancelled" | "cleared" };
 
-type PendingInteraction = {
-  requestId: RequestId;
-  interaction: WorkerInteractionRequest;
-};
-
-export interface InteractionTransport {
-  onServerRequest(listener: AppServerMessageListener): () => void;
-  onNotification(listener: AppServerMessageListener): () => void;
-  respondToServerRequest(id: RequestId, result: unknown): void;
-}
+export type InteractionTransport = ServerRequestTransport;
 
 /** 必须由用户回答的选择题、表单和登录授权；Full access 不会自动处理。 */
-export class InteractionBroker {
-  readonly #transport: InteractionTransport;
-  readonly #pending = new Map<string, PendingInteraction>();
-  readonly #idByRequestId = new Map<RequestId, string>();
-  readonly #listeners = new Set<(event: WorkerInteractionEvent) => void>();
-  readonly #unsubscribeRequests: () => void;
-  readonly #unsubscribeNotifications: () => void;
-
+export class InteractionBroker extends ServerRequestBroker<
+  WorkerInteractionRequest,
+  WorkerInteractionEvent,
+  "submitted"
+> {
   constructor(transport: InteractionTransport) {
-    this.#transport = transport;
-    this.#unsubscribeRequests = transport.onServerRequest((message) =>
-      this.#handleRequest(message));
-    this.#unsubscribeNotifications = transport.onNotification((message) =>
-      this.#handleNotification(message));
-  }
-
-  onEvent(listener: (event: WorkerInteractionEvent) => void): () => void {
-    this.#listeners.add(listener);
-    return () => this.#listeners.delete(listener);
-  }
-
-  pendingForThread(threadId: string): WorkerInteractionRequest[] {
-    return [...this.#pending.values()]
-      .map((entry) => entry.interaction)
-      .filter((interaction) => interaction.threadId === threadId);
+    super(transport);
   }
 
   answer(
@@ -76,74 +52,48 @@ export class InteractionBroker {
     action: "submit" | "cancel",
     answers: Record<string, string[]>,
   ): boolean {
-    const pending = this.#pending.get(interactionId);
-    if (!pending) return false;
-    const response = action === "cancel"
-      ? cancelResponse(pending.interaction)
-      : submitResponse(pending.interaction, answers);
-    this.#transport.respondToServerRequest(pending.requestId, response);
-    this.#remove(interactionId, action === "cancel" ? "cancelled" : "submitted");
-    return true;
+    return this.respond(
+      interactionId,
+      (interaction) =>
+        action === "cancel"
+          ? this.cancelResponse(interaction)
+          : submitResponse(interaction, answers),
+      action === "cancel" ? "cancelled" : "submitted",
+    );
   }
 
   cancelThread(threadId: string): number {
-    const matches = [...this.#pending.entries()].filter(([, pending]) =>
-      pending.interaction.threadId === threadId);
-    for (const [interactionId, pending] of matches) {
-      this.#transport.respondToServerRequest(
-        pending.requestId,
-        cancelResponse(pending.interaction),
-      );
-      this.#remove(interactionId, "cancelled");
-    }
-    return matches.length;
+    return this.cancelWhere((interaction) => interaction.threadId === threadId);
   }
 
-  dispose(): void {
-    this.#unsubscribeRequests();
-    this.#unsubscribeNotifications();
-    this.#listeners.clear();
-  }
-
-  #handleRequest(message: JsonObject): void {
-    const requestId = readRequestId(message.id);
-    const params = asObject(message.params);
-    if (requestId === null || !params || this.#idByRequestId.has(requestId)) return;
-    const interaction = message.method === "item/tool/requestUserInput"
+  protected override parse(
+    method: string,
+    params: JsonObject,
+  ): Omit<WorkerInteractionRequest, "id"> | null {
+    return method === "item/tool/requestUserInput"
       ? readUserInput(params)
-      : message.method === "mcpServer/elicitation/request"
+      : method === "mcpServer/elicitation/request"
       ? readMcpElicitation(params)
       : null;
-    if (!interaction) return;
-    const id = randomUUID();
-    const browserInteraction = { ...interaction, id } as WorkerInteractionRequest;
-    this.#pending.set(id, { requestId, interaction: browserInteraction });
-    this.#idByRequestId.set(requestId, id);
-    this.#emit({ type: "interaction_requested", interaction: browserInteraction });
   }
 
-  #handleNotification(message: JsonObject): void {
-    if (message.method !== "serverRequest/resolved") return;
-    const params = asObject(message.params);
-    const requestId = readRequestId(params?.requestId);
-    if (requestId === null) return;
-    const id = this.#idByRequestId.get(requestId);
-    if (id) this.#remove(id, "cleared");
+  protected override cancelResponse(interaction: WorkerInteractionRequest): JsonObject {
+    return interaction.kind === "user_input"
+      ? { answers: {} }
+      : { action: "cancel", content: null, _meta: null };
   }
 
-  #remove(
+  protected override requestedEvent(
+    interaction: WorkerInteractionRequest,
+  ): WorkerInteractionEvent {
+    return { type: "interaction_requested", interaction };
+  }
+
+  protected override resolvedEvent(
     interactionId: string,
-    resolution: Extract<WorkerInteractionEvent, { type: "interaction_resolved" }>["resolution"],
-  ): void {
-    const pending = this.#pending.get(interactionId);
-    if (!pending) return;
-    this.#pending.delete(interactionId);
-    this.#idByRequestId.delete(pending.requestId);
-    this.#emit({ type: "interaction_resolved", interactionId, resolution });
-  }
-
-  #emit(event: WorkerInteractionEvent): void {
-    for (const listener of this.#listeners) listener(event);
+    resolution: "submitted" | BrokerBaseResolution,
+  ): WorkerInteractionEvent {
+    return { type: "interaction_resolved", interactionId, resolution };
   }
 }
 
@@ -230,22 +180,6 @@ function submitResponse(
     content: mcpFormContent(interaction.schema, answers),
     _meta: null,
   };
-}
-
-function cancelResponse(interaction: WorkerInteractionRequest): JsonObject {
-  return interaction.kind === "user_input"
-    ? { answers: {} }
-    : { action: "cancel", content: null, _meta: null };
-}
-
-function readRequestId(value: unknown): RequestId | null {
-  return typeof value === "string" || typeof value === "number" ? value : null;
-}
-
-function asObject(value: unknown): JsonObject | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as JsonObject
-    : null;
 }
 
 function mcpFormContent(
