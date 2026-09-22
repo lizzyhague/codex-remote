@@ -1567,6 +1567,11 @@ async function stopTask() {
     const result = await request("task.stop");
     if (result?.requested === false) {
       state.stopping = false;
+      // 压缩指令已经发给模型，后端不会去打断它；时间线没有变化，不必重新载入。
+      if (result.reason === "compact_started") {
+        showNotice("压缩已经开始，不能中途停止", TEMPORARY_WARNING);
+        return;
+      }
       if (state.sessionId) await resumeSession(state.sessionId);
       showNotice("任务已经结束或状态已变化", TEMPORARY_WARNING);
       return;

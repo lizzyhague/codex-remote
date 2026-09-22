@@ -643,6 +643,40 @@ test("stopping compact before native start does not compact", async (context) =>
   assert.equal(fixture.workers.reduce((sum, worker) => sum + worker.compactCalls, 0), 0);
 });
 
+test("stopping compact after the instruction is sent refuses instead of interrupting", async (context) => {
+  let releaseCompact!: () => void;
+  let reportCompactStarted!: () => void;
+  const compactStarted = new Promise<void>((resolve) => {
+    reportCompactStarted = resolve;
+  });
+  const compactGate = new Promise<void>((resolve) => {
+    releaseCompact = resolve;
+  });
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    beforeCompact: async () => {
+      reportCompactStarted();
+      await compactGate;
+    },
+  });
+  context.after(() => releaseCompact());
+  fixture.manager.start();
+  fixture.manager.enqueueCommandTask("project-1", "thread-1", "compact-1", "compact");
+  await compactStarted;
+
+  // 指令已经发给 Codex：不去打断，如实回绝。放掉闸门要先于断言，
+  // 否则断言失败会把压缩卡在半路，拖垮收尾。
+  const stopped = await fixture.manager.stopTask("thread-1");
+  releaseCompact();
+  await waitFor(() => fixture.workers.some((worker) => worker.turns.activeTurnId !== null));
+
+  assert.deepEqual(stopped, { requested: false, reason: "compact_started" });
+  const worker = fixture.workers.at(-1)!;
+  assert.equal(worker.compactCalls, 1);
+  assert.equal(worker.interruptCount, 0);
+  assert.equal(worker.closeCount, 0);
+});
+
 test("busy attachment messages release the lease and leave no mapping", async (context) => {
   let released = 0;
   const uploads: NonNullable<SessionWorkerManagerOptions["uploads"]> = {

@@ -121,6 +121,8 @@ type ActiveWorker = {
   cleaned: boolean;
   interruptionReason: string | null;
   startTimer: NodeJS.Timeout | null;
+  /** 压缩指令已经发给 Codex；从这一刻起这个任务不再接受停止。 */
+  compactIssued: boolean;
 };
 
 type LaunchingTask = {
@@ -434,7 +436,11 @@ export class SessionWorkerManager {
     return this.#enqueue(projectId, threadId, clientMessageId, kind, "");
   }
 
-  async stopTask(threadId: string): Promise<{ requested: boolean }> {
+  async stopTask(threadId: string): Promise<{ requested: boolean; reason?: string }> {
+    if (this.#workers.get(threadId)?.compactIssued) {
+      return { requested: false, reason: "compact_started" };
+    }
+
     const launching = this.#launching.get(threadId);
     if (launching) {
       launching.cancelRequested = true;
@@ -928,6 +934,7 @@ export class SessionWorkerManager {
         cleaned: false,
         interruptionReason: launching.cancelRequested ? "user_requested" : null,
         startTimer: null,
+        compactIssued: false,
       };
       this.#workers.set(task.threadId, active);
       this.#applyAttachmentMappings(task.threadId, this.peekAttachmentMappings(task.threadId));
@@ -943,10 +950,17 @@ export class SessionWorkerManager {
         return;
       }
 
-      const startPromise = task.kind === "message"
-        ? worker.turns.startTextTurn(task.payload, attachments)
-        : worker.commands.compact();
-      if (launching.cancelRequested) {
+      let startPromise: Promise<string | null>;
+      if (task.kind === "message") {
+        startPromise = worker.turns.startTextTurn(task.payload, attachments);
+      } else {
+        // 打断一轮压缩会给会话上下文留下什么，Codex 没有给出保证，所以指令一旦
+        // 发出就不再停。标记必须在请求之前落下，中间不能有 await，否则会出现
+        // “指令已发但仍被当成可取消”的缝。
+        active.compactIssued = true;
+        startPromise = worker.commands.compact();
+      }
+      if (task.kind === "message" && launching.cancelRequested) {
         active.interruptionReason = "user_requested";
         active.worker.approvals.cancelThread(task.threadId);
         active.worker.interactions.cancelThread(task.threadId);
