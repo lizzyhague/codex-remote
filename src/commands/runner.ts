@@ -12,6 +12,8 @@ export type CommandOption = {
   id: string;
   label: string;
   description: string;
+  /** 当前生效的那一项；前端据此高亮，不靠标签文字判断。 */
+  selected?: boolean;
   disabled?: boolean;
   danger?: boolean;
   items?: CommandOption[];
@@ -80,17 +82,15 @@ export class CommandRunner {
         title: "选择模型",
         items: models.map((model) => ({
           id: model.id,
-          label: `${model.id === this.#runtime.model ? "✓ " : ""}${model.displayName}`,
+          label: model.displayName,
+          selected: model.id === this.#runtime.model,
           description: model.description ||
             `默认思考强度：${model.defaultReasoningEffort || "自动"}`,
           items: model.supportedReasoningEfforts.map((effort) => ({
             id: effort.reasoningEffort,
-            label: `${
-              model.id === this.#runtime.model &&
-                effort.reasoningEffort === this.#runtime.reasoningEffort
-                ? "✓ "
-                : ""
-            }${effort.reasoningEffort}`,
+            label: effort.reasoningEffort,
+            selected: model.id === this.#runtime.model &&
+              effort.reasoningEffort === this.#runtime.reasoningEffort,
             description: [
               effort.description,
               effort.reasoningEffort === model.defaultReasoningEffort ? "模型默认" : "",
@@ -106,7 +106,8 @@ export class CommandRunner {
         title: "选择权限",
         items: profiles.map((profile) => ({
           id: profile.id,
-          label: `${profile.id === this.#runtime.activePermissionProfile?.id ? "✓ " : ""}${permissionLabel(profile.id)}`,
+          label: permissionLabel(profile.id),
+          selected: profile.id === this.#runtime.activePermissionProfile?.id,
           description: profile.description || permissionDescription(profile.id),
           disabled: !profile.allowed,
           danger: isFullAccessProfile(profile.id),

@@ -3103,8 +3103,8 @@ async function refreshPickerLabels() {
     try {
       const data = await request("command.options", { command });
       if (state.sessionId !== sessionId) return;
-      const selected = data.items?.find(item => item.label?.startsWith("✓"));
-      const label = selected?.label.replace(/^✓\s*/, "") || "默认";
+      const selected = data.items?.find(item => item.selected);
+      const label = selected?.label || "默认";
       const kind = command === "model" ? "model" : "permission";
       document.getElementById(`${kind}-picker-label`).textContent = label;
       document.getElementById(`${kind}-picker-button`).title = label;
@@ -3133,7 +3133,7 @@ function renderComposerPicker(title, items, onSelect, onBack) {
     button.type = "button";
     button.className = "composer-picker-option";
     button.setAttribute("role", "option");
-    button.setAttribute("aria-selected", String(item.label?.startsWith("✓") === true));
+    button.setAttribute("aria-selected", String(item.selected === true));
     button.disabled = item.disabled === true;
     const name = document.createElement("strong");
     name.textContent = item.label || item.id;
@@ -3164,8 +3164,8 @@ async function openComposerPicker(command) {
     const data = await request("command.options", { command });
     if (state.sessionId !== sessionId || menu.dataset.requestId !== requestId) return;
     const items = data.items || [];
-    const selected = items.find(item => item.label?.startsWith("✓"));
-    document.getElementById(`${kind}-picker-label`).textContent = selected?.label.replace(/^✓\s*/, "") || "默认";
+    const selected = items.find(item => item.selected);
+    document.getElementById(`${kind}-picker-label`).textContent = selected?.label || "默认";
     const choose = async (item, argument = null) => {
       if (state.sessionId !== sessionId || trigger.disabled) return;
       if (item.danger && !window.confirm("完全访问会让 Codex 不受项目沙箱限制地操作主机。确定只为当前会话选择吗？")) return;
@@ -3181,7 +3181,15 @@ async function openComposerPicker(command) {
     };
     const root = () => {
       const rows = [...items];
-      if (command === "model") rows.push({ id: "__effort", label: "Effort ›", description: selected?.items?.find(item => item.label?.startsWith("✓"))?.label.replace(/^✓\s*/, "") || "选择当前模型的思考强度", disabled: !selected?.items?.length });
+      if (command === "model") {
+        rows.push({
+          id: "__effort",
+          label: "Effort ›",
+          description: selected?.items?.find(item => item.selected)?.label ||
+            "选择当前模型的思考强度",
+          disabled: !selected?.items?.length,
+        });
+      }
       renderComposerPicker(command === "model" ? "选择模型" : "权限模式", rows, item => {
         if (item.id === "__effort") {
           renderComposerPicker("Effort", selected.items, effort => void choose(selected, effort.id), root);

@@ -157,7 +157,9 @@ test("builds dynamic model and permission menus", async () => {
   );
   assert.match(models.items[0]?.items?.[1]?.description ?? "", /模型默认/);
   const permissions = await runner.options("permissions");
-  assert.equal(permissions.items[1]?.label.startsWith("✓ "), true);
+  assert.equal(permissions.items[1]?.selected, true);
+  assert.equal(permissions.items[1]?.label.includes("✓"), false);
+  assert.equal(permissions.items[0]?.selected, false);
   assert.equal(permissions.items[2]?.disabled, true);
   runner.dispose();
 });

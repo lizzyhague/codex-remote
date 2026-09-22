@@ -1902,6 +1902,11 @@ button:focus-visible {
   background: #26352f;
 }
 
+/* 选中标记由 aria-selected 画出来，不再由后端拼进标签文字。 */
+.composer-picker-option[aria-selected="true"] strong::before {
+  content: "✓ ";
+}
+
 .composer-action-scroll { flex: 1 1 auto; overflow-x: auto; scrollbar-width: none; }
 .command-menu-button { width: 2rem; height: 2rem; padding: 0; font-size: 1.2rem; }
 #rename-dialog { width: min(440px, calc(100vw - 2rem)); padding: 1.25rem; color: #eceef2; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; }
