@@ -79,6 +79,8 @@ class FakeWorkers {
   readonly runningSessions = new Set<string>();
   readonly busyProjects = new Set<string>();
   commandResult: Record<string, unknown> = { kind: "message", title: "完成", lines: [] };
+  /** 恢复会话前的等待；测试用它模拟断线时仍未返回的后台请求。 */
+  beforeResume: (() => Promise<void>) | null = null;
   #sequence = 0;
   #nextSession = 1;
 
@@ -132,6 +134,7 @@ class FakeWorkers {
 
   async resumeSession(projectId: string, sessionId: string): Promise<ManagedSessionOpen> {
     this.#record("resumeSession", projectId, sessionId);
+    if (this.beforeResume) await this.beforeResume();
     return this.opens.get(sessionId) ?? this.#open(sessionId);
   }
 
@@ -732,6 +735,37 @@ test("disconnecting releases the session and stops delivering events", async () 
   const before = socket.messages.length;
   workers.emit({ type: "message.delta", sessionId: "session-1", delta: "迟到" }, "session", "session-1");
   assert.equal(socket.messages.length, before, "断开之后不能再往这个连接写东西");
+});
+
+test("disconnecting does not wait for an in-flight request or let it reattach later", async () => {
+  const { workers, services } = setup();
+  let reportResumeStarted!: () => void;
+  let releaseResume!: () => void;
+  const resumeStarted = new Promise<void>((resolve) => {
+    reportResumeStarted = resolve;
+  });
+  const resumeGate = new Promise<void>((resolve) => {
+    releaseResume = resolve;
+  });
+  workers.beforeResume = async () => {
+    reportResumeStarted();
+    await resumeGate;
+  };
+
+  const connection = new BrowserConnection("phone", new FakeSocket(), services);
+  connection.receiveText(request("session.resume", "resume-slow", {
+    projectId: "projects/demo",
+    sessionId: "session-slow",
+  }));
+  await resumeStarted;
+
+  await connection.disconnect();
+  assert.equal(workers.authenticatedClients.has("phone"), false);
+  assert.equal(workers.attached.has("phone"), false);
+
+  releaseResume();
+  await connection.whenIdle();
+  assert.equal(workers.attached.has("phone"), false, "迟到的恢复结果不能挂回死连接");
 });
 
 test("reads and updates backend settings and notifies other browsers", async (context) => {

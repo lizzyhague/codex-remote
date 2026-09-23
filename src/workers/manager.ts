@@ -378,6 +378,9 @@ export class SessionWorkerManager {
       this.#workerReservations -= 1;
     }
     this.#provisionalWorkers.set(worker.threadId, { worker, closeTimer: null });
+    // Worker 创建完成到浏览器 attach 之间也可能断线。先按无人持有处理；
+    // 正常的 attach 会在同一轮微任务中取消这个计时器。
+    this.#armProvisionalClose(worker.threadId);
     const fullAccessEnabled = this.#recordFullAccess(worker.threadId, worker.fullAccessEnabled);
     return {
       loadState: "ready",
@@ -619,6 +622,8 @@ export class SessionWorkerManager {
 
   attachSession(clientId: string, threadId: string): void {
     this.detachSession(clientId);
+    // WebSocket 断开时在线登记会立即删除；较晚完成的请求不能重新占住会话。
+    if (!this.#authenticatedClients.has(clientId)) return;
     this.#clientSessions.set(clientId, threadId);
     const provisional = this.#provisionalWorkers.get(threadId);
     if (provisional?.closeTimer) clearTimeout(provisional.closeTimer);
@@ -629,6 +634,10 @@ export class SessionWorkerManager {
     const threadId = this.#clientSessions.get(clientId);
     if (!threadId) return;
     this.#clientSessions.delete(clientId);
+    this.#armProvisionalClose(threadId);
+  }
+
+  #armProvisionalClose(threadId: string): void {
     const provisional = this.#provisionalWorkers.get(threadId);
     if (!provisional || this.#sessionAttached(threadId) || provisional.closeTimer) return;
     provisional.closeTimer = setTimeout(() => {

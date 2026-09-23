@@ -153,6 +153,7 @@ export class BrowserConnection {
       return this.#disconnectPromise;
     }
     this.#disconnected = true;
+    this.#authenticated = false;
     this.#disconnectPromise = this.#handleDisconnect();
     return this.#disconnectPromise;
   }
@@ -372,6 +373,9 @@ export class BrowserConnection {
     managed: ManagedSessionOpen,
     acceptLoadingStates = true,
   ): Promise<unknown> {
+    // Worker 的启动或恢复可能比 WebSocket 活得更久。断线后这个结果已经没有
+    // 接收者，不能再让完成得较晚的请求把死连接挂回会话。
+    if (this.#disconnected) return managed;
     if (managed.loadState !== "ready") {
       if (!acceptLoadingStates) {
         throw new WorkerManagerError(
@@ -542,7 +546,8 @@ export class BrowserConnection {
     this.#unsubscribeSessionChanges();
     this.#unsubscribeWorkerEvents();
     this.#unsubscribeSettings();
-    await this.#queue;
+    // 在线状态属于 WebSocket 生命周期，不能被某个没有返回的业务请求扣住。
+    // 已经收到的请求仍可在队列里完成，但 #openSession 不会让它重新挂载。
     this.#services.workers.clientDisconnected(this.#id);
     this.#detachSession();
   }

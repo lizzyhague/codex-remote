@@ -244,6 +244,7 @@ test("passes application settings into session workers without mutating an activ
 
 test("keeps a brand-new empty thread only while a browser is attached", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 5 });
+  fixture.manager.clientAuthenticated("phone");
   fixture.manager.start();
   const opened = await fixture.manager.startSession("project-1");
   const worker = fixture.workers[0]!;
@@ -251,6 +252,30 @@ test("keeps a brand-new empty thread only while a browser is attached", async (c
   await delay(10);
   assert.equal(worker.closeCount, 0);
   fixture.manager.detachSession("phone");
+  await waitFor(() => worker.closeCount === 1);
+  assert.equal(worker.started, false);
+});
+
+test("closes a brand-new empty thread when its caller never attaches", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 5 });
+  fixture.manager.start();
+  await fixture.manager.startSession("project-1");
+  const worker = fixture.workers[0]!;
+
+  await waitFor(() => worker.closeCount === 1);
+  assert.equal(worker.started, false);
+});
+
+test("a disconnected client cannot attach to a session", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 5 });
+  fixture.manager.clientAuthenticated("phone");
+  fixture.manager.start();
+  const opened = await fixture.manager.startSession("project-1");
+  const worker = fixture.workers[0]!;
+
+  fixture.manager.clientDisconnected("phone");
+  fixture.manager.attachSession("phone", opened.opened.session.id);
+
   await waitFor(() => worker.closeCount === 1);
   assert.equal(worker.started, false);
 });
