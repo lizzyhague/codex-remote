@@ -222,6 +222,7 @@ export class BrowserConnection {
         return await this.#openSession(
           request.projectId,
           await this.#services.workers.resumeSession(request.projectId, request.sessionId),
+          request.acceptLoadingStates === true,
         );
       case "settings.get":
         return this.#requireSettings().get();
@@ -366,7 +367,26 @@ export class BrowserConnection {
     return toBrowserSessionPage(page);
   }
 
-  async #openSession(projectId: string, managed: ManagedSessionOpen): Promise<unknown> {
+  async #openSession(
+    projectId: string,
+    managed: ManagedSessionOpen,
+    acceptLoadingStates = true,
+  ): Promise<unknown> {
+    if (managed.loadState !== "ready") {
+      if (!acceptLoadingStates) {
+        throw new WorkerManagerError(
+          "worker_starting",
+          "这个会话的后台 Worker 正在启动，请稍后重新打开。",
+        );
+      }
+      this.#deferredEvents = [];
+      this.#detachSession();
+      this.#projectId = projectId;
+      this.#sessionId = managed.sessionId;
+      this.#services.workers.attachSession(this.#id, managed.sessionId);
+      this.#olderTurns = [];
+      return managed;
+    }
     // 这一句之后新会话的事件就会往这条连接上发，而“会话已打开”的响应还要等
     // 下面那次附件同步才发得出去。页面此时还不知道自己被切过去了，收到的增量
     // 无处安放，随后又会被首屏渲染清掉。扣住它们，等响应发完再补。

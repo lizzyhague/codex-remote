@@ -235,6 +235,8 @@ test("passes application settings into session workers without mutating an activ
   assert.equal(fixture.createdOptions[0]?.settings, settings);
   const firstWorker = fixture.workers[0];
   const resumed = await fixture.manager.resumeSession("project-1", opened.opened.session.id);
+  assert.equal(resumed.loadState, "ready");
+  if (resumed.loadState !== "ready") throw new Error("会话没有恢复完成");
   assert.equal(resumed.opened.session.id, opened.opened.session.id);
   assert.equal(fixture.workers.length, 1);
   assert.equal(fixture.workers[0], firstWorker);
@@ -559,6 +561,58 @@ test("different projects stay independent and capacity still queues", async (con
   assert.equal(fixture.store.require(second.taskId).status, "queued");
   fixture.workers[0]!.complete("completed");
   await waitFor(() => fixture.store.require(second.taskId).status === "running");
+});
+
+test("reports queued and starting without returning stale session history", async (context) => {
+  let createCalls = 0;
+  let reportSecondCreate!: () => void;
+  let releaseSecondCreate!: () => void;
+  const secondCreateStarted = new Promise<void>((resolve) => {
+    reportSecondCreate = resolve;
+  });
+  const secondCreateGate = new Promise<void>((resolve) => {
+    releaseSecondCreate = resolve;
+  });
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    maxWorkers: 1,
+    beforeWorkerCreate: async () => {
+      createCalls += 1;
+      if (createCalls === 2) {
+        reportSecondCreate();
+        await secondCreateGate;
+      }
+    },
+  });
+  context.after(() => releaseSecondCreate());
+  fixture.manager.start();
+
+  const first = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "先占住");
+  const firstWorker = await fixture.waitForWorker("thread-1");
+  const second = fixture.manager.enqueueMessage("project-2", "thread-2", "message-2", "等待中");
+  const queued = await fixture.manager.resumeSession("project-2", "thread-2");
+  assert.deepEqual(queued, {
+    loadState: "queued",
+    sessionId: "thread-2",
+    activeTaskId: second.taskId,
+    controlsActiveTask: true,
+    fullAccessEnabled: false,
+  });
+
+  firstWorker.complete("completed");
+  await waitFor(() => fixture.store.require(first.taskId).status === "completed");
+  await secondCreateStarted;
+  const starting = await fixture.manager.resumeSession("project-2", "thread-2");
+  assert.equal(starting.loadState, "starting");
+  assert.equal("opened" in starting, false);
+  assert.equal(fixture.store.eventsForTask(second.taskId).some((stored) =>
+    stored.event.type === "task.starting"
+  ), true);
+
+  releaseSecondCreate();
+  await waitFor(() => fixture.store.require(second.taskId).status === "running");
+  const ready = await fixture.manager.resumeSession("project-2", "thread-2");
+  assert.equal(ready.loadState, "ready");
 });
 
 test("stopping a queued task never starts a Worker", async (context) => {

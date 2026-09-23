@@ -145,6 +145,19 @@ test("parses the small stable browser protocol", () => {
     sessionId: "session-1",
   });
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
+    type: "session.resume",
+    requestId: "r2",
+    projectId: "projects/demo",
+    sessionId: "session-1",
+    acceptLoadingStates: true,
+  })), {
+    type: "session.resume",
+    requestId: "r2",
+    projectId: "projects/demo",
+    sessionId: "session-1",
+    acceptLoadingStates: true,
+  });
+  assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "command.run",
     requestId: "command-1",
     command: "model",

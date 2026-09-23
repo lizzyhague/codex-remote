@@ -69,7 +69,8 @@ export class WorkerManagerError extends Error {
   }
 }
 
-export type ManagedSessionOpen = {
+export type ManagedSessionReady = {
+  loadState: "ready";
   opened: OpenedSession;
   /** 会话已经打开，但有需要转给浏览器的说明（目前只有内存读数降级）。 */
   notice?: string;
@@ -78,6 +79,16 @@ export type ManagedSessionOpen = {
   fullAccessEnabled: boolean;
   replayEvents: StoredWorkerEvent[];
 };
+
+export type ManagedSessionLoading = {
+  loadState: "queued" | "starting";
+  sessionId: string;
+  activeTaskId: string;
+  controlsActiveTask: true;
+  fullAccessEnabled: boolean;
+};
+
+export type ManagedSessionOpen = ManagedSessionReady | ManagedSessionLoading;
 
 export type WorkerManagerEvent = StoredWorkerEvent & {
   /** 审批发给所有已认证客户端；其他事件只发给正在查看该会话的客户端。 */
@@ -168,7 +179,6 @@ export class SessionWorkerManager {
   readonly #authenticatedClients = new Set<string>();
   readonly #clientSessions = new Map<string, string>();
   readonly #sessionFullAccess = new Map<string, boolean>();
-  readonly #sessionSnapshots = new Map<string, OpenedSession>();
   readonly #threadOperationTails = new Map<string, Promise<void>>();
   readonly #attachmentLeases = new Map<string, AttachmentLease>();
   #transientWorkers = 0;
@@ -347,7 +357,7 @@ export class SessionWorkerManager {
     this.#armOfflineGrace();
   }
 
-  async startSession(projectId: string): Promise<ManagedSessionOpen> {
+  async startSession(projectId: string): Promise<ManagedSessionReady> {
     if (this.#workerCount() >= this.#maxWorkers) {
       throw new WorkerManagerError("worker_capacity", "活动 Worker 已达到上限，请稍后再试。");
     }
@@ -368,9 +378,9 @@ export class SessionWorkerManager {
       this.#workerReservations -= 1;
     }
     this.#provisionalWorkers.set(worker.threadId, { worker, closeTimer: null });
-    this.#sessionSnapshots.set(worker.threadId, worker.opened);
     const fullAccessEnabled = this.#recordFullAccess(worker.threadId, worker.fullAccessEnabled);
     return {
+      loadState: "ready",
       opened: worker.opened,
       activeTaskId: null,
       controlsActiveTask: false,
@@ -390,19 +400,17 @@ export class SessionWorkerManager {
       return this.#managedOpen(provisional.worker.opened, provisional.worker.fullAccessEnabled);
     }
     const pending = this.#store.pendingForThread(threadId);
-    const snapshot = this.#sessionSnapshots.get(threadId);
-    if (pending && snapshot) {
-      return this.#managedOpen(snapshot, this.#sessionFullAccess.get(threadId) === true);
-    }
     if (pending) {
-      throw new WorkerManagerError(
-        "worker_starting",
-        "这个会话的后台 Worker 正在启动，请稍后重新打开。",
-      );
+      return {
+        loadState: this.#launching.has(threadId) ? "starting" : "queued",
+        sessionId: threadId,
+        activeTaskId: pending.id,
+        controlsActiveTask: true,
+        fullAccessEnabled: this.#knownFullAccess(threadId) === true,
+      };
     }
     return this.#withTransientWorker(projectId, threadId, async (worker, notice) => {
       this.metrics.seed(threadId, worker.opened.turns);
-      this.#sessionSnapshots.set(threadId, worker.opened);
       return {
         ...this.#managedOpen(worker.opened, worker.fullAccessEnabled),
         ...(notice ? { notice } : {}),
@@ -739,11 +747,12 @@ export class SessionWorkerManager {
     };
   }
 
-  #managedOpen(opened: OpenedSession, fullAccessEnabled: boolean): ManagedSessionOpen {
+  #managedOpen(opened: OpenedSession, fullAccessEnabled: boolean): ManagedSessionReady {
     fullAccessEnabled = this.#recordFullAccess(opened.session.id, fullAccessEnabled);
     const pending = this.#store.pendingForThread(opened.session.id);
     const replayTask = pending ?? terminalReplayTask(this.#store.latestForThread(opened.session.id));
     return {
+      loadState: "ready",
       opened,
       activeTaskId: pending?.id ?? null,
       controlsActiveTask: pending !== null,
@@ -867,6 +876,13 @@ export class SessionWorkerManager {
           await this.#abandonLaunch(launching);
           continue;
         }
+        const starting = this.#store.appendEvent(task.id, task.threadId, {
+          type: "task.starting",
+          sessionId: task.threadId,
+          taskId: task.id,
+          status: "queued",
+        }, this.#now());
+        this.#emit(starting, "session");
         await this.#startQueuedTask(launching);
       } finally {
         this.#endLaunch(launching);
@@ -914,7 +930,6 @@ export class SessionWorkerManager {
         await this.#abandonLaunch(launching);
         return;
       }
-      this.#sessionSnapshots.set(task.threadId, worker.opened);
       const permissionMode = task.permissionMode;
       await this.#reconcileFullAccess(worker, permissionMode === "full_access");
       if (launching.cancelRequested) {
@@ -1501,7 +1516,6 @@ export class SessionWorkerManager {
     await provisional.worker.close().catch((error: unknown) => {
       console.error(`关闭空会话 Worker 失败：${errorMessage(error)}`);
     });
-    this.#sessionSnapshots.delete(threadId);
     this.#sessionFullAccess.delete(threadId);
     this.#schedule();
   }
@@ -1670,4 +1684,3 @@ function nonnegativeInteger(value: number | undefined, fallback: number): number
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
-

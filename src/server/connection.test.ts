@@ -321,11 +321,22 @@ function openedSession(id: string): OpenedSession {
 
 function managedOpen(opened: OpenedSession): ManagedSessionOpen {
   return {
+    loadState: "ready",
     opened,
     activeTaskId: null,
     controlsActiveTask: false,
     fullAccessEnabled: false,
     replayEvents: [],
+  };
+}
+
+function managedLoading(sessionId: string, loadState: "queued" | "starting"): ManagedSessionOpen {
+  return {
+    loadState,
+    sessionId,
+    activeTaskId: "task-loading",
+    controlsActiveTask: true,
+    fullAccessEnabled: false,
   };
 }
 
@@ -411,6 +422,45 @@ for (const snapshotReuse of [false, true]) {
     },
   );
 }
+
+test("opens a loading session only for browsers that understand loading states", async (context) => {
+  const { workers, services } = setup();
+  workers.opens.set("session-loading", managedLoading("session-loading", "queued"));
+  const socket = new FakeSocket();
+  const connection = new BrowserConnection("phone", socket, services);
+  context.after(() => connection.disconnect());
+
+  connection.receiveText(request("session.resume", "old-browser", {
+    projectId: "projects/demo",
+    sessionId: "session-loading",
+  }));
+  await connection.whenIdle();
+  const oldResponse = socket.last("response")!;
+  assert.equal(oldResponse.ok, false);
+  assert.equal((oldResponse.error as JsonObject).code, "worker_starting");
+  assert.equal(workers.attached.has("phone"), false);
+
+  connection.receiveText(request("session.resume", "new-browser", {
+    projectId: "projects/demo",
+    sessionId: "session-loading",
+    acceptLoadingStates: true,
+  }));
+  await connection.whenIdle();
+  assert.deepEqual(data(socket.last("response")), {
+    loadState: "queued",
+    sessionId: "session-loading",
+    activeTaskId: "task-loading",
+    controlsActiveTask: true,
+    fullAccessEnabled: false,
+  });
+  assert.equal(workers.attached.get("phone"), "session-loading");
+
+  connection.receiveText(request("task.stop", "stop-loading"));
+  await connection.whenIdle();
+  assert.equal(workers.calls.some((call) =>
+    call.method === "stopTask" && call.args[0] === "session-loading"
+  ), true);
+});
 
 test("holds events raised while opening until the page has been told about the session", async (context) => {
   const { workers, services } = setup();

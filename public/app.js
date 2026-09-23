@@ -17,6 +17,7 @@ const ATTACHMENT_DRAFTS_KEY = "codex-remote.attachment-drafts-v1";
 const SIDEBAR_COLLAPSED_KEY = "codex-remote.sidebar-collapsed";
 const RECONNECT_DELAY_MS = 2_500;
 const REQUEST_TIMEOUT_MS = 15_000;
+const SESSION_LOADING_RETRY_MS = 1_000;
 const MAX_COMMAND_OUTPUT = 100_000;
 const TOOL_TITLE_LIMIT = 72;
 /** 输入框失焦后稍等再点亮 rewind / full access，避免同一下既失焦又点到确认。 */
@@ -122,6 +123,9 @@ const state = {
   sessionId: null,
   sessionTitle: "",
   metrics: null,
+  sessionOpenState: null,
+  sessionResumeTimer: null,
+  sessionResumeInFlight: false,
   sessionView: "active",
   sessions: [],
   markedSessions: [],
@@ -420,10 +424,17 @@ async function connect(token) {
       if (state.sessionId) {
         const projectId = state.projectId;
         const sessionId = state.sessionId;
-        const opened = await request("session.resume", { projectId, sessionId });
+        const opened = await request("session.resume", {
+          projectId,
+          sessionId,
+          acceptLoadingStates: true,
+        });
         if (generation !== state.generation || socket.readyState !== WebSocket.OPEN ||
             projectId !== state.projectId || sessionId !== state.sessionId) return;
-        applyOpenedSession(opened, { preserveAttachments: true, retryOutbox: false });
+        applySessionResumeResult(opened, sessionId, {
+          preserveAttachments: true,
+          retryOutbox: false,
+        });
         if (opened.notice) showNotice(opened.notice, {
           lifetime: "persistent",
           tone: "warning",
@@ -470,6 +481,7 @@ async function connect(token) {
     state.stopping = false;
     state.commandBusy = false;
     state.controlsTask = false;
+    clearSessionResumeTimer();
     hideThinking();
     slashCommands.close();
     rejectPending(new Error("连接已断开。"));
@@ -653,6 +665,8 @@ async function startSession() {
   if (!state.projectId) return;
   if (state.sessionView !== "active") setSessionView("active", false);
   setNavigationBusy(true);
+  clearSessionResumeTimer();
+  state.sessionOpenState = null;
   showSessionLoading();
   try {
     const opened = await request("session.start", { projectId: state.projectId });
@@ -692,6 +706,8 @@ async function resumeSession(sessionId) {
   if (!state.projectId) return;
   const switching = sessionId !== state.sessionId;
   setNavigationBusy(true);
+  clearSessionResumeTimer();
+  state.sessionOpenState = null;
   // 切换期间把旧会话的内容撤下来。留着的话，停止、发送、加载更早都还点得动，
   // 而这些请求认的是连接当前打开的会话——切换一旦先到，它们就落到新会话上了。
   if (switching) showSessionLoading();
@@ -699,8 +715,9 @@ async function resumeSession(sessionId) {
     const opened = await request("session.resume", {
       projectId: state.projectId,
       sessionId,
+      acceptLoadingStates: true,
     });
-    applyOpenedSession(opened);
+    applySessionResumeResult(opened, sessionId);
     if (opened.notice) showNotice(opened.notice, {
       lifetime: "persistent",
       tone: "warning",
@@ -718,12 +735,101 @@ async function resumeSession(sessionId) {
   }
 }
 
+function applySessionResumeResult(opened, sessionId, options = {}) {
+  if (opened?.loadState === "queued" || opened?.loadState === "starting") {
+    applyLoadingSession(opened, sessionId, options);
+    return false;
+  }
+  applyOpenedSession(opened, options);
+  return true;
+}
+
+function applyLoadingSession(
+  loading,
+  sessionId,
+  { preserveAttachments = false } = {},
+) {
+  const previousSessionId = state.sessionId;
+  if (state.sessionId && state.sessionId !== sessionId) {
+    clearCurrentSessionNotice(state.sessionId);
+  }
+  if (!preserveAttachments) abortAttachmentUploads();
+  clearSessionResumeTimer();
+  state.metrics = null;
+  state.sessionId = sessionId;
+  state.sessionOpenState = loading.loadState;
+  state.sessionTitle = findSessionSummary(sessionId)?.title ||
+    (previousSessionId === sessionId ? state.sessionTitle : "") || "会话";
+  state.running = true;
+  state.stopping = false;
+  state.controlsTask = loading.controlsActiveTask === true;
+  state.fullAccessEnabled = loading.fullAccessEnabled === true;
+  if (!preserveAttachments) loadAttachmentDraftForCurrentSession();
+  stateSet(SESSION_KEY, sessionId);
+  renderSessionMetrics();
+  setCurrentSessionState("active");
+  updateConversationTitle();
+  closeMobileSidebar();
+  showSessionLoading(loading.loadState);
+  scheduleLoadingSessionResume();
+  updateControls();
+}
+
+function clearSessionResumeTimer() {
+  if (state.sessionResumeTimer !== null) clearTimeout(state.sessionResumeTimer);
+  state.sessionResumeTimer = null;
+}
+
+function scheduleLoadingSessionResume(delay = SESSION_LOADING_RETRY_MS) {
+  clearSessionResumeTimer();
+  if (!state.sessionOpenState || !state.sessionId || !state.projectId || !state.authenticated) return;
+  state.sessionResumeTimer = setTimeout(() => {
+    state.sessionResumeTimer = null;
+    void refreshLoadingSession();
+  }, delay);
+}
+
+async function refreshLoadingSession() {
+  if (
+    state.sessionResumeInFlight || !state.sessionOpenState || !state.sessionId ||
+    !state.projectId || !state.authenticated
+  ) return;
+  const projectId = state.projectId;
+  const sessionId = state.sessionId;
+  state.sessionResumeInFlight = true;
+  try {
+    const opened = await request("session.resume", {
+      projectId,
+      sessionId,
+      acceptLoadingStates: true,
+    });
+    if (projectId !== state.projectId || sessionId !== state.sessionId || !state.sessionOpenState) {
+      return;
+    }
+    applySessionResumeResult(opened, sessionId, {
+      preserveAttachments: true,
+      retryOutbox: false,
+    });
+  } catch (error) {
+    if (state.authenticated && projectId === state.projectId && sessionId === state.sessionId) {
+      showNotice(errorMessage(error), TEMPORARY_ERROR);
+    }
+  } finally {
+    state.sessionResumeInFlight = false;
+    if (projectId === state.projectId && sessionId === state.sessionId && state.sessionOpenState) {
+      scheduleLoadingSessionResume();
+    }
+  }
+}
+
 function applyOpenedSession(opened, { preserveAttachments = false, retryOutbox = true } = {}) {
   if (state.sessionId && state.sessionId !== opened.session.id) {
     clearCurrentSessionNotice(state.sessionId);
   }
   if (!preserveAttachments) abortAttachmentUploads();
+  clearSessionResumeTimer();
   state.metrics = null;
+  state.sessionOpenState = null;
   state.sessionId = opened.session.id;
   void refreshPickerLabels();
   renderSessionMetrics();
@@ -1170,7 +1276,9 @@ function trashRemainingText(purgeAt) {
 function resetCurrentSession() {
   if (state.sessionId) clearCurrentSessionNotice(state.sessionId);
   abortAttachmentUploads();
+  clearSessionResumeTimer();
   state.sessionId = null;
+  state.sessionOpenState = null;
   closeComposerPicker();
   elements.modelPickerLabel.textContent = "默认";
   elements.permissionPickerLabel.textContent = "默认";
@@ -1601,6 +1709,7 @@ async function stopTask() {
 }
 
 function handleServerEvent(event, replay = false) {
+  if (handleLoadingSessionEvent(event, replay)) return;
   if (isTaskProgressEvent(event.type)) {
     clearNotice(taskNoticeKey("retry", event.taskId || event.sessionId));
   }
@@ -1624,6 +1733,13 @@ function handleServerEvent(event, replay = false) {
       updateControls();
       break;
     }
+    case "task.starting":
+      state.running = true;
+      state.controlsTask = true;
+      setCurrentSessionState("active");
+      showThinking("正在启动 Codex");
+      updateControls();
+      break;
     case "settings.updated":
       applySettingsUpdated(event);
       break;
@@ -1727,8 +1843,48 @@ function handleServerEvent(event, replay = false) {
   }
 }
 
+function handleLoadingSessionEvent(event, replay) {
+  if (!state.sessionOpenState || event.sessionId !== state.sessionId) return false;
+  if (event.type === "task.queued") {
+    state.sessionOpenState = "queued";
+    state.running = true;
+    state.controlsTask = true;
+  } else if (event.type === "task.starting") {
+    state.sessionOpenState = "starting";
+    state.running = true;
+    state.controlsTask = true;
+  } else if (
+    event.type === "task.started" || event.type === "message.user" ||
+    event.type === "message.delta" || event.type === "message.completed" ||
+    event.type === "tool.started" || event.type === "tool.output.delta" ||
+    event.type === "tool.completed" || event.type === "approval.requested" ||
+    event.type === "interaction.requested"
+  ) {
+    const alreadyRestoring = state.sessionOpenState === "restoring";
+    state.sessionOpenState = "restoring";
+    state.running = true;
+    if (!alreadyRestoring) scheduleLoadingSessionResume(0);
+  } else if (event.type === "task.completed") {
+    state.sessionOpenState = "loading";
+    state.running = false;
+    state.controlsTask = false;
+    state.stopping = false;
+    if (event.error && !replay) showNotice(event.error, TEMPORARY_ERROR);
+    scheduleLoadingSessionResume(0);
+  } else if (event.type === "task.error") {
+    state.sessionOpenState = "restoring";
+    scheduleLoadingSessionResume(0);
+  } else {
+    return false;
+  }
+  showSessionLoading(state.sessionOpenState);
+  updateControls();
+  return true;
+}
+
 function isTaskProgressEvent(type) {
-  return type === "task.queued" || type === "task.started" || type === "message.user" ||
+  return type === "task.queued" || type === "task.starting" || type === "task.started" ||
+    type === "message.user" ||
     type === "message.delta" || type === "message.completed" || type === "tool.started" ||
     type === "tool.output.delta" || type === "tool.completed";
 }
@@ -2730,8 +2886,15 @@ function showEmpty(text) {
   elements.timeline.append(elements.emptyState);
 }
 
-function showSessionLoading() {
-  showEmpty("会话加载中……");
+function showSessionLoading(loadState = "loading") {
+  const message = loadState === "queued"
+    ? "任务正在排队，等待可用 Worker……"
+    : loadState === "starting"
+    ? "正在启动 Codex 并恢复会话……"
+    : loadState === "restoring"
+    ? "正在恢复运行中的任务……"
+    : "正在载入会话……";
+  showEmpty(message);
 }
 
 function hideEmpty() {

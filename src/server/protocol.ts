@@ -46,6 +46,7 @@ export type BrowserRequest =
     requestId: string;
     projectId: string;
     sessionId: string;
+    acceptLoadingStates?: true;
   }
   | {
     type: "session.mark";
@@ -213,6 +214,7 @@ export function parseBrowserRequest(source: string): BrowserRequest {
         requestId,
         projectId: requireString(value.projectId, "项目 ID", requestId, 1_024),
         sessionId: requireString(value.sessionId, "会话 ID", requestId, 1_024),
+        ...(value.acceptLoadingStates === true ? { acceptLoadingStates: true as const } : {}),
       };
     case "session.mark":
       return {
@@ -467,4 +469,3 @@ function readBoundedString(value: unknown, maxLength: number): string | null {
     ? value
     : null;
 }
-

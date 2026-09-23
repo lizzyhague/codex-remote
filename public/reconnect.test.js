@@ -29,13 +29,14 @@ function harness() {
   const context = vm.createContext({
     URL, URLSearchParams, AbortController,
     location: { protocol: "https:", host: "example.com", search: "" },
-    RECONNECT_DELAY_MS: 2500, REQUEST_TIMEOUT_MS: 15000,
+    RECONNECT_DELAY_MS: 2500, REQUEST_TIMEOUT_MS: 15000, SESSION_LOADING_RETRY_MS: 1000,
     CONNECTION_NOTICE_KEY: "connection",
     MAX_ATTACHMENT_BYTES: 25 * 1024 * 1024, MAX_MESSAGE_ATTACHMENTS: 100,
     PROJECT_KEY: "project", SESSION_KEY: "session", ATTACHMENT_DRAFTS_KEY: "drafts",
     state: {
       generation: 0, socket: null, reconnectAllowed: true, reconnectTimer: null,
       authenticated: false, connectionReady: false, projectId: "project-1", sessionId: "session-1",
+      sessionOpenState: null, sessionResumeTimer: null, sessionResumeInFlight: false,
       pendingRequests: new Map(), requestNumber: 0, pendingAttachments: [], attachmentUploads: new Map(),
     },
     elements: {
@@ -101,6 +102,7 @@ function harness() {
   });
   vm.runInContext([
     section("async function connect(", "async function loadSessions("),
+    section("function applySessionResumeResult(", "function applyOpenedSession("),
     section("function applyOpenedSession(", "function setSessionView("),
     section("async function uploadFiles(", "function renderAttachmentList("),
     section("function removeAttachment(", "function displayTextWithAttachments("),
