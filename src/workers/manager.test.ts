@@ -346,6 +346,50 @@ test("counts a Worker that is still starting against the capacity limit", async 
   await first;
 });
 
+test("times out a Worker startup and frees the project without user action", async (context) => {
+  let createCalls = 0;
+  let aborts = 0;
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    workerStartTimeoutMs: 5,
+    beforeWorkerCreate: async (signal) => {
+      createCalls += 1;
+      if (createCalls > 1) return;
+      await new Promise<void>((_resolve, reject) => {
+        const abort = () => {
+          aborts += 1;
+          reject(new Error("测试 Worker 启动被后端终止"));
+        };
+        if (signal.aborted) abort();
+        else signal.addEventListener("abort", abort, { once: true });
+      });
+    },
+  });
+  fixture.manager.start();
+  const first = fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "这次启动会卡住",
+  );
+
+  await waitFor(() => fixture.store.require(first.taskId).status === "failed");
+  assert.equal(aborts, 1);
+  assert.equal(
+    fixture.store.require(first.taskId).error,
+    "Codex Worker 启动超时，任务没有开始。请重试。",
+  );
+
+  const second = fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-2",
+    "message-2",
+    "下一次仍然能启动",
+  );
+  await fixture.waitForWorker("thread-2");
+  assert.equal(fixture.store.require(second.taskId).status, "running");
+});
+
 test("serializes short-lived Workers for the same historical thread", async (context) => {
   let releaseFirst!: () => void;
   let reportFirstStarted!: () => void;
@@ -886,8 +930,9 @@ async function managerFixture(
     toggleFullAccessFails?: boolean;
     maxWorkers?: number;
     minAvailableMemoryBytes?: number;
+    workerStartTimeoutMs?: number;
     availableMemory?: SessionWorkerManagerOptions["availableMemory"];
-    beforeWorkerCreate?: () => Promise<void>;
+    beforeWorkerCreate?: (signal: AbortSignal) => Promise<void>;
     beforeStartTurn?: () => Promise<void>;
     beforeCompact?: () => Promise<void>;
     beforeInterrupt?: () => Promise<void>;
@@ -914,6 +959,9 @@ async function managerFixture(
     ...(options.maxWorkers ? { maxWorkers: options.maxWorkers } : {}),
     offlineGraceMs: options.offlineGraceMs,
     queueRetryMs: 5,
+    ...(options.workerStartTimeoutMs
+      ? { workerStartTimeoutMs: options.workerStartTimeoutMs }
+      : {}),
     minAvailableMemoryBytes: options.minAvailableMemoryBytes ?? 0,
     availableMemory: options.availableMemory ?? (async () => ({
       availableBytes: Number.MAX_SAFE_INTEGER,
@@ -922,7 +970,10 @@ async function managerFixture(
     })),
     workerFactory: async (workerOptions) => {
       createdOptions.push(workerOptions);
-      await options.beforeWorkerCreate?.();
+      if (options.beforeWorkerCreate) {
+        assert.ok(workerOptions.startupSignal);
+        await options.beforeWorkerCreate(workerOptions.startupSignal);
+      }
       const worker = new FakeWorker(
         workerOptions,
         options.fullAccess === true,

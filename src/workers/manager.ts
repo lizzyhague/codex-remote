@@ -55,6 +55,7 @@ const DEFAULT_MAX_WORKERS = 2;
 const DEFAULT_MIN_AVAILABLE_MEMORY_BYTES = 1_073_741_824;
 const DEFAULT_OFFLINE_GRACE_MS = 10_000;
 const DEFAULT_QUEUE_RETRY_MS = 5_000;
+const DEFAULT_WORKER_START_TIMEOUT_MS = 120_000;
 const TASK_START_TIMEOUT_MS = 10_000;
 const ATTACHMENT_LEASE_RENEW_INTERVAL_MS = 5 * 60 * 1_000;
 const ATTACHMENT_LEASE_RENEW_MARGIN_MS = 60_000;
@@ -108,6 +109,8 @@ export type SessionWorkerManagerOptions = {
   minAvailableMemoryBytes?: number;
   offlineGraceMs?: number;
   queueRetryMs?: number;
+  /** Worker 初始化和会话恢复的等待上限；默认两分钟。 */
+  workerStartTimeoutMs?: number;
   now?: () => number;
   workerFactory?: WorkerFactory;
   availableMemory?: () => Promise<MemoryReading>;
@@ -165,6 +168,7 @@ export class SessionWorkerManager {
   readonly #minAvailableMemoryBytes: number;
   readonly #offlineGraceMs: number;
   readonly #queueRetryMs: number;
+  readonly #workerStartTimeoutMs: number;
   readonly #now: () => number;
   readonly #workerFactory: WorkerFactory;
   readonly #availableMemory: () => Promise<MemoryReading>;
@@ -181,6 +185,7 @@ export class SessionWorkerManager {
   readonly #sessionFullAccess = new Map<string, boolean>();
   readonly #threadOperationTails = new Map<string, Promise<void>>();
   readonly #attachmentLeases = new Map<string, AttachmentLease>();
+  readonly #workerStartControllers = new Set<AbortController>();
   #transientWorkers = 0;
   #workerReservations = 0;
   #offlineSinceMs: number | null = null;
@@ -207,6 +212,10 @@ export class SessionWorkerManager {
       DEFAULT_OFFLINE_GRACE_MS,
     );
     this.#queueRetryMs = positiveInteger(options.queueRetryMs, DEFAULT_QUEUE_RETRY_MS);
+    this.#workerStartTimeoutMs = positiveInteger(
+      options.workerStartTimeoutMs,
+      DEFAULT_WORKER_START_TIMEOUT_MS,
+    );
     this.#now = options.now ?? Date.now;
     this.#workerFactory = options.workerFactory ?? SessionWorker.create;
     this.#availableMemory = options.availableMemory ?? readAvailableMemory;
@@ -657,6 +666,7 @@ export class SessionWorkerManager {
     if (this.#offlineTimer) clearTimeout(this.#offlineTimer);
     if (this.#queueRetryTimer) clearTimeout(this.#queueRetryTimer);
     if (this.#attachmentLeaseTimer) clearInterval(this.#attachmentLeaseTimer);
+    for (const controller of this.#workerStartControllers) controller.abort();
     for (const launching of this.#launching.values()) {
       launching.cancelRequested = true;
     }
@@ -1017,7 +1027,9 @@ export class SessionWorkerManager {
           sessionId: task.threadId,
           taskId: task.id,
           status: "failed",
-          error: (error instanceof WorkerManagerError && error.code === "permission_restore_failed") ||
+          error: (error instanceof WorkerManagerError && (
+            error.code === "permission_restore_failed" || error.code === "worker_start_timeout"
+          )) ||
               error instanceof CodexAttachmentError
             ? error.message
             : "Worker 无法启动，请查看服务日志。",
@@ -1031,23 +1043,45 @@ export class SessionWorkerManager {
   }
 
   async #createWorker(projectId: string, threadId?: string): Promise<SessionWorker> {
-    return this.#workerFactory({
-      projectId,
-      projects: this.#projects,
-      trash: this.#trash,
-      ...(threadId ? { threadId } : {}),
-      ...(this.#codexBinary ? { codexBinary: this.#codexBinary } : {}),
-      ...(this.#workingDirectory ? { workingDirectory: this.#workingDirectory } : {}),
-      ...(this.#settings ? { settings: this.#settings } : {}),
-      onMetricsNotification: (message) => this.metrics.observe(message),
-      onStreamEvent: (event) => this.#handleStreamEvent(event),
-      onApprovalEvent: (event) => this.#handleApprovalEvent(event),
-      onInteractionEvent: (event) => this.#handleInteractionEvent(event),
-      onUnexpectedExit: (exitedThreadId, error) => {
-        const active = this.#workers.get(exitedThreadId);
-        if (active) void this.#failActive(active, error);
-      },
-    });
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.#workerStartTimeoutMs);
+    timer.unref();
+    this.#workerStartControllers.add(controller);
+    try {
+      return await this.#workerFactory({
+        projectId,
+        projects: this.#projects,
+        trash: this.#trash,
+        startupSignal: controller.signal,
+        ...(threadId ? { threadId } : {}),
+        ...(this.#codexBinary ? { codexBinary: this.#codexBinary } : {}),
+        ...(this.#workingDirectory ? { workingDirectory: this.#workingDirectory } : {}),
+        ...(this.#settings ? { settings: this.#settings } : {}),
+        onMetricsNotification: (message) => this.metrics.observe(message),
+        onStreamEvent: (event) => this.#handleStreamEvent(event),
+        onApprovalEvent: (event) => this.#handleApprovalEvent(event),
+        onInteractionEvent: (event) => this.#handleInteractionEvent(event),
+        onUnexpectedExit: (exitedThreadId, error) => {
+          const active = this.#workers.get(exitedThreadId);
+          if (active) void this.#failActive(active, error);
+        },
+      });
+    } catch (error) {
+      if (timedOut) {
+        throw new WorkerManagerError(
+          "worker_start_timeout",
+          "Codex Worker 启动超时，任务没有开始。请重试。",
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      this.#workerStartControllers.delete(controller);
+    }
   }
 
   #handleStreamEvent(event: CodexStreamEvent): void {

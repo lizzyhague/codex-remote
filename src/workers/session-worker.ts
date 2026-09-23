@@ -24,6 +24,8 @@ import type { ApplicationSettingsStore } from "../settings/store.ts";
 export type SessionWorkerOptions = {
   projectId: string;
   threadId?: string;
+  /** 只覆盖 Worker 创建、初始化和会话恢复；创建完成后不再监听。 */
+  startupSignal?: AbortSignal;
   projects: ProjectCatalog;
   trash: TrashStore;
   codexBinary?: string;
@@ -35,6 +37,13 @@ export type SessionWorkerOptions = {
   onUnexpectedExit?: (threadId: string, error: Error) => void;
   settings?: ApplicationSettingsStore;
 };
+
+export class SessionWorkerStartCancelledError extends Error {
+  constructor() {
+    super("会话 Worker 启动已取消。");
+    this.name = "SessionWorkerStartCancelledError";
+  }
+}
 
 /**
  * 一个会话对应的独立 codex app-server 进程。
@@ -75,6 +84,9 @@ export class SessionWorker {
   }
 
   static async create(options: SessionWorkerOptions): Promise<SessionWorker> {
+    if (options.startupSignal?.aborted) {
+      throw new SessionWorkerStartCancelledError();
+    }
     let worker: SessionWorker | null = null;
     const client = new AppServerClient({
       ...(options.codexBinary ? { codexBinary: options.codexBinary } : {}),
@@ -82,14 +94,20 @@ export class SessionWorker {
       processGroup: true,
       onNotification: options.onMetricsNotification ?? (() => {}),
     });
+    const cancelStartup = () => {
+      void client.close().catch(() => {});
+    };
+    options.startupSignal?.addEventListener("abort", cancelStartup, { once: true });
     try {
       await client.initialize(codexRemoteInitializeParams());
+      throwIfStartupCancelled(options.startupSignal);
       const sessions = new CodexSessionService(client, options.projects, options.trash, {
         ...(options.settings ? { settings: options.settings } : {}),
       });
       const opened = options.threadId
         ? await sessions.resume(options.projectId, options.threadId)
         : await sessions.start(options.projectId);
+      throwIfStartupCancelled(options.startupSignal);
       const approvals = new ApprovalBroker(client);
       const interactions = new InteractionBroker(client);
       worker = new SessionWorker(
@@ -112,7 +130,12 @@ export class SessionWorker {
       return worker;
     } catch (error) {
       await client.close().catch(() => {});
+      if (options.startupSignal?.aborted) {
+        throw new SessionWorkerStartCancelledError();
+      }
       throw error;
+    } finally {
+      options.startupSignal?.removeEventListener("abort", cancelStartup);
     }
   }
 
@@ -141,4 +164,8 @@ export class SessionWorker {
       await this.client.close();
     }
   }
+}
+
+function throwIfStartupCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new SessionWorkerStartCancelledError();
 }
