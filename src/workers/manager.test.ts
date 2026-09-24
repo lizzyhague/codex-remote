@@ -974,6 +974,51 @@ test("repeated stop on a running task interrupts once", async (context) => {
   );
 });
 
+test("permanent deletion clears worker state and the attachment display index", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 10 });
+  fixture.store.setSessionFullAccess("thread-1", true, 100);
+  await fixture.attachmentIndex.register("thread-1", "message-1", [{
+    id: "attachment-1",
+    originalName: "report.txt",
+    path: "/private/uploads/attachment-1",
+  }]);
+
+  await fixture.manager.forgetSession("thread-1");
+
+  assert.equal(fixture.store.sessionFullAccess("thread-1"), null);
+  assert.deepEqual(await fixture.attachmentIndex.mappingsFor("thread-1"), []);
+});
+
+test("permanent deletion fails without changing artifacts while a task is active", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 10 });
+  fixture.store.admit({
+    id: "task-active",
+    clientMessageId: "message-active",
+    projectId: "project-1",
+    threadId: "thread-1",
+    kind: "message",
+    payload: "still running",
+    permissionMode: "manual",
+    createdAtMs: 100,
+  });
+  fixture.store.setSessionFullAccess("thread-1", true, 100);
+  const attachment = {
+    id: "attachment-1",
+    originalName: "report.txt",
+    path: "/private/uploads/attachment-1",
+  };
+  await fixture.attachmentIndex.register("thread-1", "message-1", [attachment]);
+
+  await assert.rejects(
+    fixture.manager.forgetSession("thread-1"),
+    /仍有 1 个任务在进行/u,
+  );
+
+  assert.equal(fixture.store.require("task-active").status, "queued");
+  assert.equal(fixture.store.sessionFullAccess("thread-1"), true);
+  assert.deepEqual(await fixture.attachmentIndex.mappingsFor("thread-1"), [attachment]);
+});
+
 async function managerFixture(
   context: test.TestContext,
   options: {

@@ -5,6 +5,7 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 
 import { ProjectCatalog } from "../projects/catalog.ts";
+import { AppServerRpcError } from "../app-server/client.ts";
 import {
   CODEX_REMOTE_DEVELOPER_INSTRUCTIONS,
   CodexSessionService,
@@ -31,7 +32,9 @@ class FakeTransport implements AppServerRequester {
     if (this.results.length === 0) {
       throw new Error("测试没有准备响应。");
     }
-    return this.results.shift() as Result;
+    const result = this.results.shift();
+    if (result instanceof Error) throw result;
+    return result as Result;
   }
 }
 
@@ -341,22 +344,34 @@ test("moves an active session to trash and restores it to the active list", asyn
 });
 
 test("permanently deletes selected trash sessions immediately", async (context) => {
-  const { catalog, trash } = await createFixture(context);
+  const { catalog, trash, marks } = await createFixture(context);
   await trash.put({
     threadId: "thread-old",
     projectId: "workspace/alpha",
     deletedAt: 1_000,
     origin: "active",
+    state: "trashed",
   });
+  await marks.put({ threadId: "thread-old", projectId: "workspace/alpha" });
   const transport = new FakeTransport();
   transport.results.push({});
-  const service = new CodexSessionService(transport, catalog, trash);
+  const forgotten: string[] = [];
+  const service = new CodexSessionService(transport, catalog, trash, {
+    marks,
+    deletedSessionArtifacts: {
+      async forgetSession(threadId) {
+        forgotten.push(threadId);
+      },
+    },
+  });
 
   assert.deepEqual(await service.deleteTrash("workspace/alpha", ["thread-old"]), {
     succeeded: ["thread-old"],
     failed: [],
   });
   assert.equal(trash.has("thread-old"), false);
+  assert.equal(marks.has("thread-old"), false);
+  assert.deepEqual(forgotten, ["thread-old"]);
   assert.deepEqual(transport.requests, [{
     method: "thread/delete",
     params: { threadId: "thread-old" },
@@ -380,6 +395,7 @@ test("permanently deletes trash entries after thirty days", async (context) => {
     projectId: "workspace/alpha",
     deletedAt: 100,
     origin: "archived",
+    state: "trashed",
   });
   const transport = new FakeTransport();
   transport.results.push({});
@@ -393,6 +409,65 @@ test("permanently deletes trash entries after thirty days", async (context) => {
     method: "thread/delete",
     params: { threadId: "thread-expired" },
   }]);
+});
+
+test("startup cleanup resumes a recent deletion left in progress", async (context) => {
+  const { catalog, trash, marks } = await createFixture(context);
+  await trash.put({
+    threadId: "thread-pending",
+    projectId: "workspace/alpha",
+    deletedAt: 1_000,
+    origin: "active",
+    state: "deleting",
+  });
+  await marks.put({ threadId: "thread-pending", projectId: "workspace/alpha" });
+  const transport = new FakeTransport();
+  transport.results.push(new AppServerRpcError({
+    code: -32600,
+    message: "no rollout found for thread id thread-pending",
+  }));
+  const forgotten: string[] = [];
+  const service = new CodexSessionService(transport, catalog, trash, {
+    now: () => 1_001,
+    marks,
+    deletedSessionArtifacts: {
+      async forgetSession(threadId) {
+        forgotten.push(threadId);
+      },
+    },
+  });
+
+  assert.deepEqual(await service.purgeExpired(), { deleted: 1, failed: [] });
+  assert.deepEqual(forgotten, ["thread-pending"]);
+  assert.equal(trash.has("thread-pending"), false);
+  assert.equal(marks.has("thread-pending"), false);
+});
+
+test("a pending permanent deletion cannot reappear in trash or be restored", async (context) => {
+  const { catalog, trash } = await createFixture(context);
+  await trash.put({
+    threadId: "thread-pending",
+    projectId: "workspace/alpha",
+    deletedAt: 1_000,
+    origin: "active",
+    state: "deleting",
+  });
+  const transport = new FakeTransport();
+  const service = new CodexSessionService(transport, catalog, trash);
+
+  assert.deepEqual(await service.list("workspace/alpha", { view: "trash" }), {
+    sessions: [],
+    marked: [],
+    nextCursor: null,
+  });
+  assert.deepEqual(await service.restoreTrash("workspace/alpha", ["thread-pending"]), {
+    succeeded: [],
+    failed: [{
+      sessionId: "thread-pending",
+      message: "这个会话正在永久删除，不能恢复。",
+    }],
+  });
+  assert.deepEqual(transport.requests, []);
 });
 
 test("does not archive a session while its task is active", async (context) => {

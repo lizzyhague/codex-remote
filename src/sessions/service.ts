@@ -5,8 +5,6 @@ import type { Turn } from "../generated/v2/Turn.ts";
 import type { ThreadHistoryMode } from "../generated/v2/ThreadHistoryMode.ts";
 import type { ThreadArchiveParams } from "../generated/v2/ThreadArchiveParams.ts";
 import type { ThreadArchiveResponse } from "../generated/v2/ThreadArchiveResponse.ts";
-import type { ThreadDeleteParams } from "../generated/v2/ThreadDeleteParams.ts";
-import type { ThreadDeleteResponse } from "../generated/v2/ThreadDeleteResponse.ts";
 import type { ThreadListParams } from "../generated/v2/ThreadListParams.ts";
 import type { ThreadListResponse } from "../generated/v2/ThreadListResponse.ts";
 import type { ThreadReadParams } from "../generated/v2/ThreadReadParams.ts";
@@ -27,6 +25,10 @@ import {
   type TrashOrigin,
 } from "./trash-store.ts";
 import { MarkStore } from "./mark-store.ts";
+import {
+  type DeletedSessionArtifacts,
+  SessionDeletionCoordinator,
+} from "./deletion-coordinator.ts";
 import type { ApplicationSettingsStore } from "../settings/store.ts";
 import { isObject } from "../shared/json.ts";
 
@@ -135,6 +137,7 @@ export class CodexSessionService {
   readonly #trash: TrashStore;
   readonly #marks: MarkStore | null;
   readonly #settings: ApplicationSettingsStore | null;
+  readonly #deletions: SessionDeletionCoordinator;
   readonly #now: () => number;
   readonly #changeListeners = new Set<(event: SessionChangeEvent) => void>();
   readonly #replyLookups = new Map<
@@ -151,6 +154,7 @@ export class CodexSessionService {
       now?: () => number;
       marks?: MarkStore;
       settings?: ApplicationSettingsStore;
+      deletedSessionArtifacts?: DeletedSessionArtifacts;
     } = {},
   ) {
     this.#transport = transport;
@@ -158,6 +162,12 @@ export class CodexSessionService {
     this.#trash = trash;
     this.#marks = options.marks ?? null;
     this.#settings = options.settings ?? null;
+    this.#deletions = new SessionDeletionCoordinator(transport, trash, {
+      ...(options.marks ? { marks: options.marks } : {}),
+      ...(options.deletedSessionArtifacts
+        ? { artifacts: options.deletedSessionArtifacts }
+        : {}),
+    });
     this.#now = options.now ?? (() => Math.floor(Date.now() / 1_000));
   }
 
@@ -391,6 +401,7 @@ export class CodexSessionService {
           projectId,
           deletedAt: this.#now(),
           origin,
+          state: "trashed",
         });
       } catch (error) {
         if (archivedHere) {
@@ -408,6 +419,9 @@ export class CodexSessionService {
       const entry = this.#trash.get(threadId);
       if (!entry || entry.projectId !== projectId) {
         throw new Error("这个会话不在当前项目的回收站中。");
+      }
+      if (entry.state === "deleting") {
+        throw new Error("这个会话正在永久删除，不能恢复。");
       }
       const thread = await this.#readOwnedThread(projectPath, threadId);
       assertThreadCanBeManaged(thread);
@@ -436,22 +450,20 @@ export class CodexSessionService {
       if (!entry || entry.projectId !== projectId) {
         throw new Error("只能永久删除回收站里的会话。");
       }
-      const params: ThreadDeleteParams = { threadId };
-      await this.#transport.request<ThreadDeleteResponse>("thread/delete", params);
-      await this.#trash.remove(threadId);
+      await this.#deletions.delete(entry);
     });
   }
 
   purgeExpired(): Promise<TrashCleanupResult> {
     return this.#serializeMutation(async () => {
       const threshold = this.#now() - TRASH_RETENTION_SECONDS;
-      const expired = this.#trash.list().filter((entry) => entry.deletedAt <= threshold);
+      const expired = this.#trash.list().filter((entry) =>
+        entry.state === "deleting" || entry.deletedAt <= threshold
+      );
       const result: TrashCleanupResult = { deleted: 0, failed: [] };
       for (const entry of expired) {
         try {
-          const params: ThreadDeleteParams = { threadId: entry.threadId };
-          await this.#transport.request<ThreadDeleteResponse>("thread/delete", params);
-          await this.#trash.remove(entry.threadId);
+          await this.#deletions.delete(entry);
           result.deleted += 1;
           this.#emitChange({
             projectId: entry.projectId,
@@ -478,6 +490,7 @@ export class CodexSessionService {
     const offset = parseTrashCursor(cursor);
     const query = searchTerm.toLocaleLowerCase();
     const entries = this.#trash.list(projectId)
+      .filter((entry) => entry.state === "trashed")
       .sort((left, right) => right.deletedAt - left.deletedAt);
     const sessions: SessionSummary[] = [];
     let index = offset;
@@ -898,4 +911,3 @@ function isThread(value: unknown): value is Thread {
     Array.isArray(value.turns) &&
     (status === "notLoaded" || status === "idle" || status === "active" || status === "systemError");
 }
-

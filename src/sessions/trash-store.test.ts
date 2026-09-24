@@ -22,6 +22,7 @@ function entry(threadId = "thread-1"): TrashEntry {
     projectId: "projects/demo",
     deletedAt: 100,
     origin: "active",
+    state: "trashed",
   };
 }
 
@@ -49,6 +50,23 @@ test("rejects malformed state instead of silently discarding it", async (context
     () => TrashStore.open(filePath),
     /格式不正确/u,
   );
+});
+
+test("loads legacy entries without a deletion state as ordinary trash", async (context) => {
+  const filePath = await fixture(context);
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, JSON.stringify({
+    version: 1,
+    entries: [{
+      threadId: "thread-legacy",
+      projectId: "projects/demo",
+      deletedAt: 100,
+      origin: "active",
+    }],
+  }));
+
+  const store = await TrashStore.open(filePath);
+  assert.equal(store.get("thread-legacy")?.state, "trashed");
 });
 
 test("uses an explicit state file before the platform state directory", () => {

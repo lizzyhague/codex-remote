@@ -432,6 +432,23 @@ test("forgets a deleted session but leaves work that is still running", async (c
   assert.equal(store.eventsForTask("task-1").length, 1);
 
   store.admit({
+    id: "task-3",
+    clientMessageId: "message-3",
+    projectId: "project-1",
+    threadId: "thread-2",
+    kind: "message",
+    payload: "已经结束但同会话仍有任务",
+    permissionMode: "manual",
+    createdAtMs: 190,
+  });
+  store.tryMarkRunning("task-3", "native-turn-3", "manual", 191);
+  store.finish("task-3", "completed", {
+    type: "task.completed",
+    sessionId: "thread-2",
+    taskId: "task-3",
+    status: "completed",
+  }, 192);
+  store.admit({
     id: "task-2",
     clientMessageId: "message-2",
     projectId: "project-1",
@@ -453,4 +470,5 @@ test("forgets a deleted session but leaves work that is still running", async (c
   const busy = store.forgetThread("thread-2");
   assert.deepEqual(busy, { deleted: 0, keptActive: 1 });
   assert.equal(store.require("task-2").status, "queued");
+  assert.equal(store.require("task-3").status, "completed");
 });

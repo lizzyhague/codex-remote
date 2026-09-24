@@ -419,15 +419,17 @@ export class WorkerStateStore {
         WHERE thread_id = ? AND status IN ('queued', 'running', 'waiting_for_permission')
       `).get(threadId);
       const keptActive = Number(asRow(row).active);
+      if (keptActive > 0) {
+        this.#database.exec("COMMIT");
+        return { deleted: 0, keptActive };
+      }
       const result = this.#database.prepare(`
         DELETE FROM worker_tasks
         WHERE thread_id = ? AND status IN ('completed', 'interrupted', 'failed')
       `).run(threadId);
-      if (keptActive === 0) {
-        this.#database.prepare(
-          "DELETE FROM worker_session_settings WHERE thread_id = ?",
-        ).run(threadId);
-      }
+      this.#database.prepare(
+        "DELETE FROM worker_session_settings WHERE thread_id = ?",
+      ).run(threadId);
       this.#database.exec("COMMIT");
       return { deleted: Number(result.changes), keptActive };
     } catch (error) {

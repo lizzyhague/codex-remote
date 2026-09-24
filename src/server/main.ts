@@ -50,7 +50,6 @@ export async function main(): Promise<void> {
 
   try {
     await appServer.initialize(codexRemoteInitializeParams());
-    const sessions = new CodexSessionService(appServer, projects, trash, { marks, settings });
     const locks = new ProjectTaskLocks();
     workers = new SessionWorkerManager({
       store: workerState,
@@ -75,11 +74,10 @@ export async function main(): Promise<void> {
         readNonnegativeInteger(process.env.CODEX_REMOTE_OFFLINE_GRACE_MS),
       ),
     });
-    sessions.onChange((event) => {
-      if (event.change !== "delete") return;
-      for (const sessionId of event.sessionIds) {
-        void workers?.forgetSession(sessionId);
-      }
+    const sessions = new CodexSessionService(appServer, projects, trash, {
+      marks,
+      settings,
+      deletedSessionArtifacts: workers,
     });
     await cleanExpiredTrash(sessions);
     cleanupTimer = setInterval(() => {
