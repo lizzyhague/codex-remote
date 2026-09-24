@@ -1427,7 +1427,7 @@ async function sendMessage() {
   hideEmpty();
   const displayText = displayTextWithAttachments(text, attachments);
   const optimistic = addMessage("user", displayText, `local-${Date.now()}`, false);
-  state.pendingUserMessages.push({ text: displayText, element: optimistic });
+  state.pendingUserMessages.push({ text: displayText, element: optimistic, taskId: null });
   elements.messageInput.value = "";
   setPendingAttachments(state.pendingAttachments.filter((attachment) => attachment.status !== "ready"));
   resizeComposer();
@@ -1725,9 +1725,10 @@ function handleServerEvent(event, replay = false) {
           candidate.text === displayText);
         if (!pending) {
           const element = addMessage("user", displayText, `queued-${event.taskId}`, false);
-          pending = { text: displayText, element };
+          pending = { text: displayText, element, taskId: event.taskId };
           state.pendingUserMessages.push(pending);
         }
+        pending.taskId = event.taskId;
       }
       showThinking("正在排队");
       updateControls();
@@ -1800,14 +1801,20 @@ function handleServerEvent(event, replay = false) {
       if (!replay) void refreshSessionMetrics();
       clearNotice(taskNoticeKey("retry", event.taskId || event.sessionId));
       clearNotice(taskNoticeKey("control", event.sessionId));
+      {
+        const pendingIndex = state.pendingUserMessages.findIndex((pending) =>
+          pending.taskId === event.taskId
+        );
+        if (pendingIndex >= 0) state.pendingUserMessages.splice(pendingIndex, 1);
+      }
       state.running = false;
       state.controlsTask = false;
       state.stopping = false;
       setCurrentSessionState("idle");
       hideThinking();
-      if (event.error && !replay) {
+      if (event.error) {
         addTaskNote(`任务失败：${event.error}`);
-        showNotice(event.error, TEMPORARY_ERROR);
+        if (!replay) showNotice(event.error, TEMPORARY_ERROR);
       }
       if (event.status === "interrupted") addTaskNote("任务已停止。");
       updateControls();
@@ -1952,7 +1959,7 @@ function receiveUserMessage(event) {
   if (existing) return;
 
   const pendingIndex = state.pendingUserMessages.findIndex((pending) =>
-    pending.text === event.text
+    (event.taskId && pending.taskId === event.taskId) || pending.text === event.text
   );
   if (pendingIndex >= 0) {
     const [pending] = state.pendingUserMessages.splice(pendingIndex, 1);

@@ -364,9 +364,11 @@ export class WorkerStateStore {
         taskId,
       );
       const stored = this.appendEvent(taskId, current.threadId, event, nowMs);
+      const needsTerminalReplay = status === "interrupted" ||
+        (status === "failed" && current.nativeTurnId === null);
       this.#pruneThreadEvents(
         current.threadId,
-        status === "interrupted" ? taskId : null,
+        needsTerminalReplay ? taskId : null,
       );
       this.#database.exec("COMMIT");
       return stored;
@@ -379,9 +381,9 @@ export class WorkerStateStore {
   /**
    * 删掉这个会话里已经不会再被回放的事件。
    *
-   * 事件日志只服务两种回放：任务仍在进行时重连看进度，以及最后一个任务停在中断
-   * 状态时补上中断前那一屏。对话历史本身由 Codex 自己的会话文件提供，不读这里。
-   * 因此终态任务的事件没有下一个读取方，留着只会让库无限增长。
+   * 事件日志只服务三种回放：任务仍在进行时重连看进度、最后一个任务停在中断状态时
+   * 补上中断前那一屏，以及任务在 Codex 建立 native turn 前失败时补回未进入历史的消息。
+   * 其他对话历史由 Codex 自己的会话文件提供，不读这里；保留更多终态只会让库无限增长。
    * `keepTaskId` 是当前仍需回放的那个任务；传 null 表示这个会话一条都不必留。
    */
   #pruneThreadEvents(threadId: string, keepTaskId: string | null): void {
@@ -462,8 +464,8 @@ export class WorkerStateStore {
 }
 
 /**
- * 启动时清掉存量里已经不会再被回放的事件：只有仍在进行的任务，以及停在中断状态的
- * 会话最后一个任务，才需要留着。返回删掉的行数。
+ * 启动时清掉存量里已经不会再被回放的事件：只有仍在进行的任务，以及会话最后一个
+ * 可回放终态（中断，或没有 native turn 的失败）需要留着。返回删掉的行数。
  */
 function pruneObsoleteEvents(database: DatabaseSync): number {
   const result = database.prepare(`
@@ -472,11 +474,14 @@ function pruneObsoleteEvents(database: DatabaseSync): number {
       SELECT task.id FROM worker_tasks task
       WHERE task.status IN ('completed', 'interrupted', 'failed')
         AND NOT (
-          task.status = 'interrupted'
-          AND task.id = (
+          task.id = (
             SELECT latest.id FROM worker_tasks latest
             WHERE latest.thread_id = task.thread_id
             ORDER BY latest.created_at_ms DESC LIMIT 1
+          )
+          AND (
+            task.status = 'interrupted'
+            OR (task.status = 'failed' AND task.native_turn_id IS NULL)
           )
         )
     )

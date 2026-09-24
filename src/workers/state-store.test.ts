@@ -305,6 +305,73 @@ test("drops a finished task's events and keeps the ones still replayable", async
   assert.deepEqual(store.eventsForTask("task-2"), []);
 });
 
+test("keeps the latest pre-turn failure until a newer task is accepted", async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-worker-failure-replay-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "work.sqlite");
+  let store = await WorkerStateStore.open(file);
+
+  store.admit({
+    id: "task-1",
+    clientMessageId: "message-1",
+    projectId: "project-1",
+    threadId: "thread-1",
+    kind: "message",
+    payload: "这次没有启动成功",
+    permissionMode: "manual",
+    createdAtMs: 100,
+  });
+  store.appendEvent("task-1", "thread-1", {
+    type: "task.queued",
+    sessionId: "thread-1",
+    taskId: "task-1",
+    status: "queued",
+    text: "这次没有启动成功",
+  }, 110);
+  store.finish("task-1", "failed", {
+    type: "task.completed",
+    sessionId: "thread-1",
+    taskId: "task-1",
+    status: "failed",
+    error: "Worker 启动失败。",
+  }, 120, { error: "Worker 启动失败。" });
+  assert.deepEqual(
+    store.eventsForTask("task-1").map(({ event }) => event.type),
+    ["task.queued", "task.completed"],
+  );
+
+  store.close();
+  store = await WorkerStateStore.open(file);
+  context.after(() => store.close());
+  assert.deepEqual(
+    store.eventsForTask("task-1").map(({ event }) => event.type),
+    ["task.queued", "task.completed"],
+  );
+
+  store.admit({
+    id: "task-2",
+    clientMessageId: "message-2",
+    projectId: "project-1",
+    threadId: "thread-1",
+    kind: "message",
+    payload: "重新试一次",
+    permissionMode: "manual",
+    createdAtMs: 200,
+  });
+  assert.deepEqual(store.eventsForTask("task-1"), []);
+
+  store.tryMarkRunning("task-2", "native-turn-2", "manual", 210);
+  store.appendEvent("task-2", "thread-1", { type: "message.delta", delta: "开始过" }, 220);
+  store.finish("task-2", "failed", {
+    type: "task.completed",
+    sessionId: "thread-1",
+    taskId: "task-2",
+    status: "failed",
+    error: "回答过程中失败。",
+  }, 230, { error: "回答过程中失败。" });
+  assert.deepEqual(store.eventsForTask("task-2"), []);
+});
+
 test("clears events left behind by older builds when the store reopens", async (context) => {
   const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-worker-backlog-"));
   context.after(() => rm(directory, { recursive: true, force: true }));

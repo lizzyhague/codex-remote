@@ -380,6 +380,19 @@ test("times out a Worker startup and frees the project without user action", asy
     "Codex Worker 启动超时，任务没有开始。请重试。",
   );
 
+  const reopened = await fixture.manager.resumeSession("project-1", "thread-1");
+  assert.equal(reopened.loadState, "ready");
+  if (reopened.loadState === "ready") {
+    assert.deepEqual(
+      reopened.replayEvents.map(({ event }) => event.type),
+      ["task.queued", "task.starting", "task.completed"],
+    );
+    assert.equal(
+      reopened.replayEvents.at(-1)?.event.error,
+      "Codex Worker 启动超时，任务没有开始。请重试。",
+    );
+  }
+
   const second = fixture.manager.enqueueMessage(
     "project-1",
     "thread-2",

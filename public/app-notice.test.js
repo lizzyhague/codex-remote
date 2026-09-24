@@ -90,8 +90,7 @@ test("a retry notice belongs to its task and clears on later progress", () => {
   assert.ok(h.cleared.includes("task-retry:task-1"));
 });
 
-test("a live final task error is retained in the timeline but replay does not duplicate it", () => {
-  const h = eventHarness();
+test("live and replayed final task errors stay in the timeline without a replay toast", () => {
   const event = {
     type: "task.completed",
     taskId: "task-1",
@@ -99,16 +98,43 @@ test("a live final task error is retained in the timeline but replay does not du
     status: "failed",
     error: "最终失败。",
   };
-  h.context.handleServerEvent(event);
-  assert.deepEqual(h.notes, ["任务失败：最终失败。"]);
-  assert.deepEqual(plain(h.shown), [{
+
+  const live = eventHarness();
+  live.context.handleServerEvent(event);
+  assert.deepEqual(live.notes, ["任务失败：最终失败。"]);
+  assert.deepEqual(plain(live.shown), [{
     text: "最终失败。",
     options: { lifetime: "temporary", tone: "error" },
   }]);
 
-  h.context.handleServerEvent(event, true);
-  assert.deepEqual(h.notes, ["任务失败：最终失败。"]);
-  assert.equal(h.shown.length, 1);
+  const replayed = eventHarness();
+  replayed.context.handleServerEvent(event, true);
+  assert.deepEqual(replayed.notes, ["任务失败：最终失败。"]);
+  assert.deepEqual(replayed.shown, []);
+});
+
+test("a replayed pre-turn failure clears its pending user-message binding", () => {
+  const h = eventHarness();
+  h.context.handleServerEvent({
+    type: "task.queued",
+    taskId: "task-1",
+    sessionId: "session-1",
+    status: "queued",
+    text: "没有启动成功的问题",
+  }, true);
+  assert.equal(h.context.state.pendingUserMessages.length, 1);
+  assert.equal(h.context.state.pendingUserMessages[0].taskId, "task-1");
+
+  h.context.handleServerEvent({
+    type: "task.completed",
+    taskId: "task-1",
+    sessionId: "session-1",
+    status: "failed",
+    error: "Worker 启动失败。",
+  }, true);
+  assert.deepEqual(h.context.state.pendingUserMessages, []);
+  assert.deepEqual(h.notes, ["任务失败：Worker 启动失败。"]);
+  assert.deepEqual(h.shown, []);
 });
 
 test("a replayed non-retry error does not recreate a temporary notice", () => {

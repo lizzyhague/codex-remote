@@ -1710,9 +1710,10 @@ function uploadManagerError(error: unknown): WorkerManagerError {
 }
 
 function terminalReplayTask(task: WorkerTask | null): WorkerTask | null {
-  return task && task.status === "interrupted" && task.interruptionReason
-    ? task
-    : null;
+  if (!task) return null;
+  if (task.status === "interrupted" && task.interruptionReason) return task;
+  if (task.status === "failed" && task.nativeTurnId === null) return task;
+  return null;
 }
 
 function positiveInteger(value: number | undefined, fallback: number): number {
