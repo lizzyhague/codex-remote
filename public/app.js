@@ -13,6 +13,7 @@ const LEGACY_TOKEN_KEY = "codex-remote.token";
 const PROJECT_KEY = "codex-remote.project";
 const SESSION_KEY = "codex-remote.session";
 const OUTBOX_KEY = "codex-remote.outbox-v2";
+const REWIND_OUTBOX_KEY = "codex-remote.rewind-outbox-v1";
 const ATTACHMENT_DRAFTS_KEY = "codex-remote.attachment-drafts-v1";
 const SIDEBAR_COLLAPSED_KEY = "codex-remote.sidebar-collapsed";
 const RECONNECT_DELAY_MS = 2_500;
@@ -147,6 +148,7 @@ const state = {
   commandBusy: false,
   controlsTask: false,
   fullAccessEnabled: false,
+  rewindTargetTurnId: null,
   rewindText: null,
   rewindAttachments: [],
   pendingAttachments: [],
@@ -170,7 +172,7 @@ syncAppSettingsForm();
 const slashCommandOptions = {
   input: elements.messageInput,
   element: elements.slashMenu,
-  request,
+  request: requestSlashCommand,
   onResult: (result) => { addCommandResult(result); void refreshPickerLabels(); },
   onRename: openRenameDialog,
   actions: [
@@ -433,7 +435,7 @@ async function connect(token) {
             projectId !== state.projectId || sessionId !== state.sessionId) return;
         applySessionResumeResult(opened, sessionId, {
           preserveAttachments: true,
-          retryOutbox: false,
+          retryDeferred: false,
         });
         if (opened.notice) showNotice(opened.notice, {
           lifetime: "persistent",
@@ -444,7 +446,7 @@ async function connect(token) {
       state.connectionReady = true;
       updateControls();
       await flushQueuedAttachments();
-      await retryOutboxForCurrentSession();
+      await retryDeferredActionsForCurrentSession();
       if (generation !== state.generation || socket.readyState !== WebSocket.OPEN) return;
       setConnectionStatus("connected", "已连接");
       clearNotice(CONNECTION_NOTICE_KEY);
@@ -808,7 +810,7 @@ async function refreshLoadingSession() {
     }
     applySessionResumeResult(opened, sessionId, {
       preserveAttachments: true,
-      retryOutbox: false,
+      retryDeferred: false,
     });
   } catch (error) {
     if (state.authenticated && projectId === state.projectId && sessionId === state.sessionId) {
@@ -822,7 +824,7 @@ async function refreshLoadingSession() {
   }
 }
 
-function applyOpenedSession(opened, { preserveAttachments = false, retryOutbox = true } = {}) {
+function applyOpenedSession(opened, { preserveAttachments = false, retryDeferred = true } = {}) {
   if (state.sessionId && state.sessionId !== opened.session.id) {
     clearCurrentSessionNotice(state.sessionId);
   }
@@ -868,7 +870,7 @@ function applyOpenedSession(opened, { preserveAttachments = false, retryOutbox =
     clearNotice(taskNoticeKey("control"));
   }
   updateControls();
-  if (retryOutbox) void retryOutboxForCurrentSession();
+  if (retryDeferred) void retryDeferredActionsForCurrentSession();
 }
 
 function setSessionView(view, load = true) {
@@ -1290,6 +1292,8 @@ function resetCurrentSession() {
   state.controlsTask = false;
   state.fullAccessEnabled = false;
   state.pendingAttachments = [];
+  state.rewindTargetTurnId = null;
+  state.rewindText = null;
   state.rewindAttachments = [];
   renderAttachmentList();
   removeStored(SESSION_KEY);
@@ -1354,6 +1358,7 @@ window.addEventListener("resize", syncSidebarState);
 function renderHistory(tasks, hasOlder) {
   clearTimeline();
   const rewind = rewindDraftFromLatestTask(tasks);
+  state.rewindTargetTurnId = rewind.targetTurnId;
   state.rewindText = rewind.text;
   state.rewindAttachments = rewind.attachments;
   elements.timeline.append(elements.historyLoader);
@@ -1757,7 +1762,11 @@ function handleServerEvent(event, replay = false) {
       }
       break;
     case "task.started":
+      state.rewindTargetTurnId = typeof event.nativeTurnId === "string"
+        ? event.nativeTurnId
+        : null;
       state.rewindText = null;
+      state.rewindAttachments = [];
       state.running = true;
       setCurrentSessionState("active");
       if (typeof event.controlsActiveTask === "boolean") {
@@ -2334,26 +2343,8 @@ function addTaskNote(text) {
 
 function addCommandResult(result) {
   if (!result || typeof result.title !== "string") return;
-  if (result.kind === "rewind") {
-    const rewindText = state.rewindText;
-    const rewindAttachments = state.rewindAttachments;
-    renderHistory(
-      Array.isArray(result.tasks) ? result.tasks : [],
-      result.hasOlder === true,
-    );
-    if (
-      (rewindText !== null || rewindAttachments.length > 0) &&
-      !elements.messageInput.value.trim() && state.pendingAttachments.length === 0
-    ) {
-      restoreComposerText(rewindText || "");
-      setPendingAttachments(rewindAttachments.map((attachment) => ({
-        ...attachment,
-        clientId: createClientMessageId(),
-        status: "ready",
-        statusText: "已从回退消息恢复",
-      })));
-    }
-  } else if (result.kind === "task") {
+  if (result.kind === "task") {
+    state.rewindTargetTurnId = null;
     state.rewindText = null;
     state.rewindAttachments = [];
   }
@@ -2434,6 +2425,177 @@ function addApproval(approval, sessionId = null) {
   approve.addEventListener("click", () => void answerApproval(card, approval.id, "approve_once"));
   card.append(description, decline, approve);
   elements.approvalList.append(card);
+}
+
+async function requestSlashCommand(type, payload = {}) {
+  if (type !== "command.run" || payload.command !== "rewind") {
+    return request(type, payload);
+  }
+  const pending = pendingRewindForCurrentSession() ?? beginPendingRewind();
+  const result = await request("command.run", {
+    ...payload,
+    targetTurnId: pending.targetTurnId,
+  });
+  await applyRewindResult(result, pending);
+  // 结果已经在重新载入的时间线末尾画好，SlashCommandMenu 不必再处理一次。
+  return null;
+}
+
+function beginPendingRewind() {
+  if (!state.projectId || !state.sessionId || !state.rewindTargetTurnId) {
+    throw new Error("当前会话没有可以回退的轮次。");
+  }
+  const pending = {
+    projectId: state.projectId,
+    sessionId: state.sessionId,
+    targetTurnId: state.rewindTargetTurnId,
+    text: typeof state.rewindText === "string" ? state.rewindText : null,
+    attachments: publicAttachments(state.rewindAttachments),
+    createdAtMs: Date.now(),
+  };
+  savePendingRewind(pending);
+  return pending;
+}
+
+async function applyRewindResult(result, pending) {
+  if (
+    !result || result.kind !== "rewind" ||
+    !["reverted", "already_reverted", "stale"].includes(result.outcome) ||
+    result.targetTurnId !== pending.targetTurnId
+  ) {
+    throw new Error("主机返回了无法识别的回退结果。");
+  }
+  const opened = await request("session.resume", {
+    projectId: pending.projectId,
+    sessionId: pending.sessionId,
+    acceptLoadingStates: true,
+  });
+  if (
+    state.projectId !== pending.projectId ||
+    state.sessionId !== pending.sessionId
+  ) {
+    return;
+  }
+  const ready = applySessionResumeResult(opened, pending.sessionId, {
+    preserveAttachments: true,
+    retryDeferred: false,
+  });
+  if (!ready) {
+    throw new Error("回退已经受理，但会话历史尚未准备好；连接恢复后会继续确认。");
+  }
+  if (result.outcome !== "stale") restorePendingRewindDraft(pending);
+  clearPendingRewind(pending);
+  clearNotice(rewindNoticeKey(pending));
+  addCommandResult(result);
+  if (opened.notice) showNotice(opened.notice, {
+    lifetime: "persistent",
+    tone: "warning",
+    key: "host-memory-degraded",
+  });
+}
+
+function restorePendingRewindDraft(pending) {
+  const attachments = publicAttachments(pending.attachments);
+  if (
+    (pending.text !== null || attachments.length > 0) &&
+    !elements.messageInput.value.trim() &&
+    state.pendingAttachments.length === 0
+  ) {
+    restoreComposerText(pending.text || "");
+    setPendingAttachments(attachments.map((attachment) => ({
+      ...attachment,
+      clientId: createClientMessageId(),
+      status: "ready",
+      statusText: "已从回退消息恢复",
+    })));
+  }
+}
+
+async function retryPendingRewindForCurrentSession() {
+  if (!state.authenticated) return false;
+  const pending = pendingRewindForCurrentSession();
+  if (!pending) return true;
+  const wasBusy = state.commandBusy;
+  state.commandBusy = true;
+  updateControls();
+  try {
+    const result = await request("command.run", {
+      command: "rewind",
+      option: null,
+      argument: null,
+      targetTurnId: pending.targetTurnId,
+    });
+    await applyRewindResult(result, pending);
+    return true;
+  } catch (error) {
+    if (error?.code !== "request_timeout" && state.authenticated) {
+      showNotice(`无法确认上一次回退：${errorMessage(error)}`, {
+        lifetime: "persistent",
+        tone: "error",
+        key: rewindNoticeKey(pending),
+      });
+    }
+    return false;
+  } finally {
+    state.commandBusy = wasBusy;
+    updateControls();
+  }
+}
+
+async function retryDeferredActionsForCurrentSession() {
+  if (!await retryPendingRewindForCurrentSession()) return;
+  await retryOutboxForCurrentSession();
+}
+
+function pendingRewindForCurrentSession() {
+  return loadPendingRewinds().find((entry) =>
+    entry.projectId === state.projectId && entry.sessionId === state.sessionId
+  ) ?? null;
+}
+
+function savePendingRewind(entry) {
+  const entries = loadPendingRewinds().filter((candidate) =>
+    candidate.projectId !== entry.projectId || candidate.sessionId !== entry.sessionId
+  );
+  entries.push(entry);
+  stateSet(REWIND_OUTBOX_KEY, JSON.stringify(entries.slice(-20)));
+}
+
+function loadPendingRewinds() {
+  try {
+    const value = JSON.parse(stateGet(REWIND_OUTBOX_KEY) || "[]");
+    if (!Array.isArray(value)) return [];
+    return value.filter((entry) =>
+      entry && typeof entry === "object" &&
+      typeof entry.projectId === "string" &&
+      typeof entry.sessionId === "string" &&
+      typeof entry.targetTurnId === "string" &&
+      (entry.text === null || typeof entry.text === "string")
+    ).map((entry) => ({
+      projectId: entry.projectId,
+      sessionId: entry.sessionId,
+      targetTurnId: entry.targetTurnId,
+      text: entry.text,
+      attachments: publicAttachments(entry.attachments),
+      createdAtMs: Number.isFinite(entry.createdAtMs) ? entry.createdAtMs : 0,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function clearPendingRewind(entry) {
+  const entries = loadPendingRewinds().filter((candidate) =>
+    candidate.projectId !== entry.projectId ||
+    candidate.sessionId !== entry.sessionId ||
+    candidate.targetTurnId !== entry.targetTurnId
+  );
+  if (entries.length === 0) removeStored(REWIND_OUTBOX_KEY);
+  else stateSet(REWIND_OUTBOX_KEY, JSON.stringify(entries));
+}
+
+function rewindNoticeKey(entry) {
+  return `rewind:${entry.sessionId}:${entry.targetTurnId}`;
 }
 
 async function retryOutboxForCurrentSession() {
@@ -2878,6 +3040,7 @@ function clearTimeline() {
   state.assistantStreams.clear();
   state.commands.clear();
   state.pendingUserMessages.length = 0;
+  state.rewindTargetTurnId = null;
   state.rewindText = null;
   state.rewindAttachments = [];
   slashCommands.close();
@@ -2927,15 +3090,17 @@ function resizeComposer() {
 
 function rewindDraftFromLatestTask(tasks) {
   const latest = tasks.at(-1);
-  if (latest?.restoresInput !== true || !Array.isArray(latest.items)) {
-    return { text: null, attachments: [] };
+  const targetTurnId = typeof latest?.id === "string" ? latest.id : null;
+  if (!targetTurnId || latest?.restoresInput !== true || !Array.isArray(latest.items)) {
+    return { targetTurnId, text: null, attachments: [] };
   }
   const userMessage = latest.items.find((item) =>
     item?.type === "message" && item.role === "user"
   );
-  return typeof userMessage?.text === "string" && userMessage.text
-    ? splitAttachmentDisplayText(userMessage.text)
-    : { text: null, attachments: [] };
+  if (typeof userMessage?.text !== "string" || !userMessage.text) {
+    return { targetTurnId, text: null, attachments: [] };
+  }
+  return { targetTurnId, ...splitAttachmentDisplayText(userMessage.text) };
 }
 
 function splitAttachmentDisplayText(text, suppliedAttachments = []) {

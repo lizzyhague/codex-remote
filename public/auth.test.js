@@ -50,7 +50,7 @@ function harness(fetch, search = "") {
     slashCommands: { load: async () => {}, close() {} },
     loadProjects: async () => actions.push(["projects"]),
     flushQueuedAttachments: async () => {},
-    retryOutboxForCurrentSession: async () => {},
+    retryDeferredActionsForCurrentSession: async () => {},
     handleSocketMessage() {},
     renderSessionMetrics() {},
     hideThinking() {},

@@ -20,6 +20,10 @@ class FakeTransport implements AppServerTransport {
     completedTurn("paginated-kept"),
     completedTurn("paginated-removed"),
   ];
+  legacyTurns = [
+    completedTurn("legacy-kept"),
+    completedTurn("legacy-removed"),
+  ];
   reverted = false;
 
   async request<Result>(method: string, params: unknown): Promise<Result> {
@@ -54,29 +58,36 @@ class FakeTransport implements AppServerTransport {
         nextCursor: null,
       } as Result;
     }
-    if (method === "thread/rollback") {
+    if (method === "thread/read") {
       return {
         thread: {
           id: "thread-1",
-          turns: [{
-            id: "turn-after-rewind",
-            items: [],
-            itemsView: "full",
-            status: "completed",
-            error: null,
-            startedAt: null,
-            completedAt: null,
-            durationMs: null,
-          }],
+          turns: this.legacyTurns,
+        },
+      } as Result;
+    }
+    if (method === "thread/rollback") {
+      this.legacyTurns = this.legacyTurns.slice(0, -1);
+      return {
+        thread: {
+          id: "thread-1",
+          turns: this.legacyTurns,
         },
       } as Result;
     }
     if (method === "thread/turns/list") {
       const values = params as JsonObject;
       const turns = this.reverted ? this.paginatedTurns.slice(0, -1) : this.paginatedTurns;
+      const descending = [...turns].reverse();
+      const start = typeof values.cursor === "string" ? Number(values.cursor) : 0;
+      const limit = typeof values.limit === "number" ? values.limit : descending.length;
+      const data = descending.slice(start, start + limit);
+      const nextCursor = start + data.length < descending.length
+        ? String(start + data.length)
+        : null;
       return {
-        data: values.sortDirection === "desc" ? turns.slice(-1) : turns,
-        nextCursor: null,
+        data: values.sortDirection === "desc" ? data : turns,
+        nextCursor: values.sortDirection === "desc" ? nextCursor : null,
         backwardsCursor: null,
       } as Result;
     }
@@ -202,10 +213,7 @@ test("runs all five commands through app-server methods", async () => {
   assert.equal((await runner.rename("测试会话")).sessionName, "测试会话");
 
   assert.equal(await runner.compact(), null);
-  assert.deepEqual(
-    (await runner.rewind()).map((turn) => turn.id),
-    ["turn-after-rewind"],
-  );
+  assert.equal(await runner.rewind("legacy-removed"), "reverted");
 
   const methods = transport.requests.map((request) => request.method);
   assert.ok(methods.includes("thread/settings/update"));
@@ -226,22 +234,56 @@ test("runs all five commands through app-server methods", async () => {
   runner.dispose();
 });
 
-test("rewinds paginated history with thread/revert and reloads retained turns", async () => {
+test("rewinds only the named latest paginated turn and treats a retry as complete", async () => {
   const transport = new FakeTransport();
   const runner = createRunner(transport, "paginated");
 
-  assert.deepEqual(
-    (await runner.rewind()).map((turn) => turn.id),
-    ["paginated-kept"],
-  );
+  assert.equal(await runner.rewind("paginated-removed"), "reverted");
   assert.deepEqual(
     transport.requests.map((request) => request.method),
-    ["thread/turns/list", "thread/revert", "thread/turns/list"],
+    ["thread/turns/list", "thread/revert"],
   );
   assert.deepEqual(transport.requests[1], {
     method: "thread/revert",
     params: { threadId: "thread-1", beforeTurnId: "paginated-removed" },
   });
+  assert.equal(await runner.rewind("paginated-removed"), "already_reverted");
+  assert.equal(
+    transport.requests.filter((request) => request.method === "thread/revert").length,
+    1,
+  );
+  runner.dispose();
+});
+
+test("refuses to rewind a target that is still present but no longer latest", async () => {
+  const transport = new FakeTransport();
+  const runner = createRunner(transport);
+
+  assert.equal(await runner.rewind("legacy-kept"), "stale");
+  assert.equal(
+    transport.requests.filter((request) => request.method === "thread/rollback").length,
+    0,
+  );
+  runner.dispose();
+});
+
+test("finds a stale paginated target beyond the first history page without reverting", async () => {
+  const transport = new FakeTransport();
+  transport.paginatedTurns = Array.from(
+    { length: 102 },
+    (_, index) => completedTurn(`paginated-${index + 1}`),
+  );
+  const runner = createRunner(transport, "paginated");
+
+  assert.equal(await runner.rewind("paginated-1"), "stale");
+  assert.equal(
+    transport.requests.filter((request) => request.method === "thread/turns/list").length,
+    2,
+  );
+  assert.equal(
+    transport.requests.filter((request) => request.method === "thread/revert").length,
+    0,
+  );
   runner.dispose();
 });
 

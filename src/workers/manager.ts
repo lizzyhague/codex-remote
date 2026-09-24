@@ -543,6 +543,7 @@ export class SessionWorkerManager {
     command: CommandName,
     option: string | null,
     argument: string | null,
+    targetTurnId: string | null,
   ): Promise<Record<string, unknown>> {
     if (command === "compact") {
       const queued = this.enqueueCommandTask(
@@ -560,15 +561,36 @@ export class SessionWorkerManager {
     }
 
     if (command === "rewind") {
-      return this.#withIdleWorker(projectId, threadId, async (worker) => ({
-        kind: "rewind",
-        title: "已回退一轮",
-        lines: [
-          "最近一轮已从当前会话的对话上下文中移除。",
-          "这一轮已经造成的文件改动仍然保留。",
-        ],
-        turns: await worker.commands.rewind(),
-      }));
+      if (!targetTurnId) {
+        throw new WorkerManagerError(
+          "rewind_target_required",
+          "页面没有提供要回退的轮次，请重新载入会话后再试。",
+        );
+      }
+      return this.#withIdleWorker(projectId, threadId, async (worker) => {
+        const outcome = await worker.commands.rewind(targetTurnId);
+        if (outcome === "stale") {
+          return {
+            kind: "rewind",
+            outcome,
+            targetTurnId,
+            title: "没有执行回退",
+            lines: ["会话在确认后已经发生变化；为避免删除另一轮，后端没有修改历史。"],
+          };
+        }
+        return {
+          kind: "rewind",
+          outcome,
+          targetTurnId,
+          title: "已回退一轮",
+          lines: [
+            outcome === "already_reverted"
+              ? "目标轮次已经不在当前会话中；没有再次回退。"
+              : "指定的一轮已从当前会话的对话上下文中移除。",
+            "这一轮已经造成的文件改动仍然保留。",
+          ],
+        };
+      });
     }
 
     const result = await this.#withIdleWorker(projectId, threadId, async (worker) => {

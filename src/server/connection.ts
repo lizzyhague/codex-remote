@@ -459,24 +459,15 @@ export class BrowserConnection {
     request: Extract<BrowserRequest, { type: "command.run" }>,
   ): Promise<unknown> {
     const { projectId, sessionId } = this.#requireSession();
-    const result = await this.#services.workers.runCommand(
+    return this.#services.workers.runCommand(
       projectId,
       sessionId,
       `${this.#id}:${request.requestId}`,
       request.command,
       request.option,
       request.argument,
+      request.targetTurnId,
     );
-    if (!Array.isArray(result.turns)) return result;
-    const turns = result.turns as Turn[];
-    const visibleStart = Math.max(0, turns.length - HISTORY_PAGE_SIZE);
-    this.#olderTurns = turns.slice(0, visibleStart);
-    const { turns: _turns, ...rest } = result;
-    return {
-      ...rest,
-      tasks: toBrowserTasks(turns.slice(visibleStart), this.#historyMappings()),
-      hasOlder: this.#olderTurns.length > 0,
-    };
   }
 
   #handleSettingsChange(settings: ApplicationSettings): void {

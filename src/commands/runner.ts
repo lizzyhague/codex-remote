@@ -1,6 +1,6 @@
 import type { AppServerMessageListener, JsonObject } from "../app-server/client.ts";
 import type { AppServerTransport } from "../app-server/turn-session.ts";
-import type { Turn } from "../generated/v2/Turn.ts";
+import type { ThreadReadResponse } from "../generated/v2/ThreadReadResponse.ts";
 import type { ThreadRevertResponse } from "../generated/v2/ThreadRevertResponse.ts";
 import type { ThreadRollbackResponse } from "../generated/v2/ThreadRollbackResponse.ts";
 import type { ThreadTurnsListResponse } from "../generated/v2/ThreadTurnsListResponse.ts";
@@ -40,6 +40,7 @@ export type CommandMessageLine = string | {
 };
 
 const THREAD_HISTORY_PAGE_SIZE = 100;
+export type RewindOutcome = "reverted" | "already_reverted" | "stale";
 
 /**
  * 当前浏览器连接所打开会话的斜杠命令适配器。
@@ -243,9 +244,30 @@ export class CommandRunner {
     return null;
   }
 
-  async rewind(): Promise<Turn[]> {
+  /**
+   * 只回退浏览器确认时看到的那一轮。响应丢失后重试仍带同一个 ID：
+   * 已经消失就当作完成；仍在但不再是最后一轮则拒绝，绝不改退新的最后一轮。
+   */
+  async rewind(targetTurnId: string): Promise<RewindOutcome> {
     if (this.#runtime.historyMode === "paginated") {
-      return this.#rewindPaginated();
+      return this.#rewindPaginated(targetTurnId);
+    }
+
+    const current = asObject(await this.#transport.request<ThreadReadResponse>(
+      "thread/read",
+      { threadId: this.#threadId, includeTurns: true },
+    ));
+    const currentThread = asObject(current?.thread);
+    if (
+      !currentThread ||
+      currentThread.id !== this.#threadId ||
+      !Array.isArray(currentThread.turns)
+    ) {
+      throw new Error("Codex 返回了无法识别的会话历史。");
+    }
+    const currentTurnIds = turnIds(currentThread.turns);
+    if (currentTurnIds.at(-1) !== targetTurnId) {
+      return currentTurnIds.includes(targetTurnId) ? "stale" : "already_reverted";
     }
 
     const response = asObject(await this.#transport.request<ThreadRollbackResponse>(
@@ -263,43 +285,13 @@ export class CommandRunner {
     ) {
       throw new Error("Codex 返回了无法识别的回退结果。");
     }
-    return thread.turns as Turn[];
+    return "reverted";
   }
 
-  async #rewindPaginated(): Promise<Turn[]> {
-    const latest = asObject(await this.#transport.request<ThreadTurnsListResponse>(
-      "thread/turns/list",
-      {
-        threadId: this.#threadId,
-        limit: 1,
-        sortDirection: "desc",
-        itemsView: "summary",
-      },
-    ));
-    if (!latest || !Array.isArray(latest.data)) {
-      throw new Error("Codex 返回了无法识别的分页历史。");
-    }
-    const latestTurn = asObject(latest.data[0]);
-    if (!latestTurn || typeof latestTurn.id !== "string") {
-      throw new Error("当前会话没有可以回退的轮次。");
-    }
-
-    const reverted = asObject(await this.#transport.request<ThreadRevertResponse>(
-      "thread/revert",
-      { threadId: this.#threadId, beforeTurnId: latestTurn.id },
-    ));
-    const thread = asObject(reverted?.thread);
-    if (!thread || thread.id !== this.#threadId) {
-      throw new Error("Codex 返回了无法识别的回退结果。");
-    }
-
-    return this.#readPaginatedTurns();
-  }
-
-  async #readPaginatedTurns(): Promise<Turn[]> {
-    const turns: Turn[] = [];
-    const seenCursors = new Set<string>();
+  async #rewindPaginated(targetTurnId: string): Promise<RewindOutcome> {
     let cursor: string | null = null;
+    const seenCursors = new Set<string>();
+    let firstPage = true;
 
     while (true) {
       const page = asObject(await this.#transport.request<ThreadTurnsListResponse>(
@@ -308,7 +300,7 @@ export class CommandRunner {
           threadId: this.#threadId,
           cursor,
           limit: THREAD_HISTORY_PAGE_SIZE,
-          sortDirection: "asc",
+          sortDirection: "desc",
           itemsView: "summary",
         },
       ));
@@ -319,14 +311,28 @@ export class CommandRunner {
       ) {
         throw new Error("Codex 返回了无法识别的分页历史。");
       }
-      turns.push(...page.data as Turn[]);
-      if (page.nextCursor === null) return turns;
+      const ids = turnIds(page.data);
+      if (firstPage && ids[0] === targetTurnId) break;
+      if (ids.includes(targetTurnId)) return "stale";
+      if (page.nextCursor === null) return "already_reverted";
       if (seenCursors.has(page.nextCursor)) {
         throw new Error("Codex 返回了重复的分页标记。");
       }
       seenCursors.add(page.nextCursor);
       cursor = page.nextCursor;
+      firstPage = false;
     }
+
+    const reverted = asObject(await this.#transport.request<ThreadRevertResponse>(
+      "thread/revert",
+      { threadId: this.#threadId, beforeTurnId: targetTurnId },
+    ));
+    const thread = asObject(reverted?.thread);
+    if (!thread || thread.id !== this.#threadId) {
+      throw new Error("Codex 返回了无法识别的回退结果。");
+    }
+
+    return "reverted";
   }
 
   async #listModels(): Promise<ModelSummary[]> {
@@ -442,6 +448,13 @@ type PermissionProfileSummary = {
   allowed: boolean;
 };
 
+function turnIds(turns: unknown[]): string[] {
+  return turns.flatMap((turn) => {
+    const id = asObject(turn)?.id;
+    return typeof id === "string" ? [id] : [];
+  });
+}
+
 function permissionLabel(id: string): string {
   if (isFullAccessProfile(id)) return "完全访问";
   const normalized = id.toLowerCase();
@@ -521,4 +534,3 @@ function pickRestrictedProfile(
   });
   return preferred ?? restricted[0] ?? null;
 }
-

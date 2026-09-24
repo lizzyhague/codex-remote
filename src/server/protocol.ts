@@ -82,6 +82,7 @@ export type BrowserRequest =
     command: CommandName;
     option: string | null;
     argument: string | null;
+    targetTurnId: string | null;
   }
   | { type: "permissions.full-access.toggle"; requestId: string }
   | {
@@ -249,6 +250,7 @@ export function parseBrowserRequest(source: string): BrowserRequest {
         command: requireCommand(value.command, requestId),
         option: readOptionalString(value.option, "命令选项", requestId, 256),
         argument: readOptionalString(value.argument, "命令参数", requestId, 2_048),
+        targetTurnId: readOptionalString(value.targetTurnId, "目标轮次", requestId, 1_024),
       };
     case "permissions.full-access.toggle":
       return { type: "permissions.full-access.toggle", requestId };

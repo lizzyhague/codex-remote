@@ -174,8 +174,18 @@ class FakeWorkers {
     command: string,
     option: string | null,
     argument: string | null,
+    targetTurnId: string | null,
   ): Promise<Record<string, unknown>> {
-    this.#record("runCommand", projectId, sessionId, clientMessageId, command, option, argument);
+    this.#record(
+      "runCommand",
+      projectId,
+      sessionId,
+      clientMessageId,
+      command,
+      option,
+      argument,
+      targetTurnId,
+    );
     return this.commandResult;
   }
 
@@ -557,7 +567,7 @@ test("sends only the latest 20 turns and loads older history in pages", async (c
   assert.equal(third.hasOlder, false, "翻到头之后不能再显示“加载更早”");
 });
 
-test("a command that returns turns replaces the browser history in pages", async (context) => {
+test("a rewind command forwards its fixed target and returns only the receipt", async (context) => {
   const { workers, services } = setup();
   const socket = new FakeSocket();
   const connection = new BrowserConnection("phone", socket, services);
@@ -567,22 +577,23 @@ test("a command that returns turns replaces the browser history in pages", async
   workers.commandResult = {
     kind: "rewind",
     title: "已回退一轮",
-    turns: Array.from({ length: 25 }, (_, index) => completedTurn(`kept-${index + 1}`)),
+    outcome: "reverted",
+    targetTurnId: "turn-last",
+    lines: [],
   };
   connection.receiveText(request("command.run", "rewind-1", {
-    command: "rewind", option: null, argument: null,
+    command: "rewind", option: null, argument: null, targetTurnId: "turn-last",
   }));
   await connection.whenIdle();
 
   const result = data(socket.last("response"));
   assert.equal(result.kind, "rewind");
-  assert.equal(result.turns, undefined, "原始 turns 不应发给浏览器");
-  assert.equal((result.tasks as unknown[]).length, 20);
-  assert.equal((result.tasks as JsonObject[])[0]?.id, "kept-6");
-  assert.equal(result.hasOlder, true);
+  assert.equal(result.outcome, "reverted");
+  assert.equal(result.targetTurnId, "turn-last");
+  assert.equal(result.tasks, undefined);
   assert.deepEqual(
     workers.calls.find((call) => call.method === "runCommand")?.args.slice(3),
-    ["rewind", null, null],
+    ["rewind", null, null, "turn-last"],
   );
 });
 

@@ -403,6 +403,46 @@ test("times out a Worker startup and frees the project without user action", asy
   assert.equal(fixture.store.require(second.taskId).status, "running");
 });
 
+test("requires rewind to name its target turn and returns a small receipt", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 10 });
+
+  await assert.rejects(
+    fixture.manager.runCommand(
+      "project-1",
+      "thread-1",
+      "command-1",
+      "rewind",
+      null,
+      null,
+      null,
+    ),
+    (error: unknown) => error instanceof WorkerManagerError &&
+      error.code === "rewind_target_required",
+  );
+
+  assert.deepEqual(
+    await fixture.manager.runCommand(
+      "project-1",
+      "thread-1",
+      "command-2",
+      "rewind",
+      null,
+      null,
+      "turn-2",
+    ),
+    {
+      kind: "rewind",
+      outcome: "reverted",
+      targetTurnId: "turn-2",
+      title: "已回退一轮",
+      lines: [
+        "指定的一轮已从当前会话的对话上下文中移除。",
+        "这一轮已经造成的文件改动仍然保留。",
+      ],
+    },
+  );
+});
+
 test("serializes short-lived Workers for the same historical thread", async (context) => {
   let releaseFirst!: () => void;
   let reportFirstStarted!: () => void;
@@ -1130,6 +1170,7 @@ class FakeWorker {
         });
         return "native-turn-1";
       },
+      rewind: async () => "reverted" as const,
     };
     const thisOwner = this;
     this.turns = {

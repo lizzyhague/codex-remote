@@ -90,6 +90,19 @@ test("a retry notice belongs to its task and clears on later progress", () => {
   assert.ok(h.cleared.includes("task-retry:task-1"));
 });
 
+test("a live turn becomes the exact target for the next rewind", () => {
+  const h = eventHarness();
+  h.context.handleServerEvent({
+    type: "task.started",
+    taskId: "task-1",
+    nativeTurnId: "native-turn-1",
+    sessionId: "session-1",
+  });
+  assert.equal(h.context.state.rewindTargetTurnId, "native-turn-1");
+  assert.equal(h.context.state.rewindText, null);
+  assert.deepEqual(plain(h.context.state.rewindAttachments), []);
+});
+
 test("live and replayed final task errors stay in the timeline without a replay toast", () => {
   const event = {
     type: "task.completed",

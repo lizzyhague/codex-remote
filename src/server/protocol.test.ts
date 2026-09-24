@@ -169,6 +169,7 @@ test("parses the small stable browser protocol", () => {
     command: "model",
     option: "gpt-test",
     argument: null,
+    targetTurnId: null,
   });
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "command.run",
@@ -176,12 +177,14 @@ test("parses the small stable browser protocol", () => {
     command: "rewind",
     option: null,
     argument: null,
+    targetTurnId: "turn-last",
   })), {
     type: "command.run",
     requestId: "rewind-1",
     command: "rewind",
     option: null,
     argument: null,
+    targetTurnId: "turn-last",
   });
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "permissions.full-access.toggle",
