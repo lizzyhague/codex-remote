@@ -56,7 +56,7 @@ const DEFAULT_MIN_AVAILABLE_MEMORY_BYTES = 1_073_741_824;
 const DEFAULT_OFFLINE_GRACE_MS = 10_000;
 const DEFAULT_QUEUE_RETRY_MS = 5_000;
 const DEFAULT_WORKER_START_TIMEOUT_MS = 120_000;
-const TASK_START_TIMEOUT_MS = 10_000;
+const DEFAULT_TASK_START_TIMEOUT_MS = 10_000;
 const ATTACHMENT_LEASE_RENEW_INTERVAL_MS = 5 * 60 * 1_000;
 const ATTACHMENT_LEASE_RENEW_MARGIN_MS = 60_000;
 
@@ -111,6 +111,8 @@ export type SessionWorkerManagerOptions = {
   queueRetryMs?: number;
   /** Worker 初始化和会话恢复的等待上限；默认两分钟。 */
   workerStartTimeoutMs?: number;
+  /** 请求已发出后等待 native turn ID 的上限；默认十秒。 */
+  taskStartTimeoutMs?: number;
   now?: () => number;
   workerFactory?: WorkerFactory;
   availableMemory?: () => Promise<MemoryReading>;
@@ -169,6 +171,7 @@ export class SessionWorkerManager {
   readonly #offlineGraceMs: number;
   readonly #queueRetryMs: number;
   readonly #workerStartTimeoutMs: number;
+  readonly #taskStartTimeoutMs: number;
   readonly #now: () => number;
   readonly #workerFactory: WorkerFactory;
   readonly #availableMemory: () => Promise<MemoryReading>;
@@ -215,6 +218,10 @@ export class SessionWorkerManager {
     this.#workerStartTimeoutMs = positiveInteger(
       options.workerStartTimeoutMs,
       DEFAULT_WORKER_START_TIMEOUT_MS,
+    );
+    this.#taskStartTimeoutMs = positiveInteger(
+      options.taskStartTimeoutMs,
+      DEFAULT_TASK_START_TIMEOUT_MS,
     );
     this.#now = options.now ?? Date.now;
     this.#workerFactory = options.workerFactory ?? SessionWorker.create;
@@ -999,7 +1006,7 @@ export class SessionWorkerManager {
         if (!active.worker.turns.activeTurnId && !active.finishing) {
           void this.#finishWithoutTurn(active);
         }
-      }, TASK_START_TIMEOUT_MS);
+      }, this.#taskStartTimeoutMs);
       active.startTimer.unref();
 
       if (launching.cancelRequested) {
@@ -1308,7 +1315,14 @@ export class SessionWorkerManager {
   async #finishWithoutTurn(active: ActiveWorker): Promise<void> {
     if (active.finishing || this.#workers.get(active.task.threadId) !== active) return;
     active.finishing = true;
-    const status = active.interruptionReason === "user_requested" ? "interrupted" : "completed";
+    const status = active.interruptionReason === "user_requested"
+      ? "interrupted"
+      : active.task.kind === "message"
+      ? "failed"
+      : "completed";
+    const error = status === "failed"
+      ? "Codex 没有开始处理这条消息，请重试。"
+      : null;
     const stored = this.#store.tryFinish(active.task.id, [
       "queued",
       "running",
@@ -1318,9 +1332,10 @@ export class SessionWorkerManager {
       sessionId: active.task.threadId,
       taskId: active.task.id,
       status,
-      error: null,
+      error,
       interruptionReason: active.interruptionReason,
     }, this.#now(), {
+      error,
       interruptionReason: active.interruptionReason,
     });
     if (stored) this.#emit(stored, "session");

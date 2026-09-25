@@ -403,6 +403,71 @@ test("times out a Worker startup and frees the project without user action", asy
   assert.equal(fixture.store.require(second.taskId).status, "running");
 });
 
+test("fails a message that never receives a native turn id", async (context) => {
+  let releaseStart!: () => void;
+  const startGate = new Promise<void>((resolve) => {
+    releaseStart = resolve;
+  });
+  context.after(() => releaseStart());
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    taskStartTimeoutMs: 5,
+    beforeStartTurn: () => startGate,
+  });
+  fixture.manager.start();
+  const accepted = fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "这条消息没有开始",
+  );
+
+  await waitFor(() => fixture.store.require(accepted.taskId).status === "failed");
+  const failed = fixture.store.require(accepted.taskId);
+  assert.equal(failed.nativeTurnId, null);
+  assert.equal(failed.error, "Codex 没有开始处理这条消息，请重试。");
+  assert.deepEqual(fixture.store.eventsForTask(accepted.taskId).at(-1)?.event, {
+    type: "task.completed",
+    sessionId: "thread-1",
+    taskId: accepted.taskId,
+    status: "failed",
+    error: "Codex 没有开始处理这条消息，请重试。",
+    interruptionReason: null,
+  });
+  await waitFor(() => fixture.workers[0]?.closeCount === 1);
+
+  releaseStart();
+});
+
+test("keeps compact's no-turn timeout as a successful terminal task", async (context) => {
+  let releaseCompact!: () => void;
+  const compactGate = new Promise<void>((resolve) => {
+    releaseCompact = resolve;
+  });
+  context.after(() => releaseCompact());
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    taskStartTimeoutMs: 5,
+    beforeCompact: () => compactGate,
+  });
+  fixture.manager.start();
+  const accepted = fixture.manager.enqueueCommandTask(
+    "project-1",
+    "thread-1",
+    "compact-1",
+    "compact",
+  );
+
+  await waitFor(() => fixture.store.require(accepted.taskId).status === "completed");
+  const completed = fixture.store.require(accepted.taskId);
+  assert.equal(completed.nativeTurnId, null);
+  assert.equal(completed.error, null);
+  assert.deepEqual(fixture.store.eventsForTask(accepted.taskId), []);
+  await waitFor(() => fixture.workers[0]?.closeCount === 1);
+
+  releaseCompact();
+});
+
 test("requires rewind to name its target turn and returns a small receipt", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 10 });
 
@@ -1029,6 +1094,7 @@ async function managerFixture(
     maxWorkers?: number;
     minAvailableMemoryBytes?: number;
     workerStartTimeoutMs?: number;
+    taskStartTimeoutMs?: number;
     availableMemory?: SessionWorkerManagerOptions["availableMemory"];
     beforeWorkerCreate?: (signal: AbortSignal) => Promise<void>;
     beforeStartTurn?: () => Promise<void>;
@@ -1059,6 +1125,9 @@ async function managerFixture(
     queueRetryMs: 5,
     ...(options.workerStartTimeoutMs
       ? { workerStartTimeoutMs: options.workerStartTimeoutMs }
+      : {}),
+    ...(options.taskStartTimeoutMs
+      ? { taskStartTimeoutMs: options.taskStartTimeoutMs }
       : {}),
     minAvailableMemoryBytes: options.minAvailableMemoryBytes ?? 0,
     availableMemory: options.availableMemory ?? (async () => ({
