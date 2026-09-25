@@ -152,6 +152,15 @@ type ProvisionalWorker = {
   closeTimer: NodeJS.Timeout | null;
 };
 
+type WorkerOperation = {
+  worker: SessionWorker | null;
+  ownsWorker: boolean;
+  countsCapacity: boolean;
+  closeRequested: boolean;
+  done: Promise<void>;
+  resolveDone: () => void;
+};
+
 /**
  * 后端级会话主管理器。浏览器连接只负责 attach/detach；任务、writer、审批与
  * 事件日志都属于这里，因此页面断开不会销毁正在运行的 turn。
@@ -187,7 +196,7 @@ export class SessionWorkerManager {
   readonly #threadOperationTails = new Map<string, Promise<void>>();
   readonly #attachmentLeases = new Map<string, AttachmentLease>();
   readonly #workerStartControllers = new Set<AbortController>();
-  #transientWorkers = 0;
+  readonly #workerOperations = new Set<WorkerOperation>();
   #workerReservations = 0;
   #offlineSinceMs: number | null = null;
   #offlineTimer: NodeJS.Timeout | null = null;
@@ -373,12 +382,11 @@ export class SessionWorkerManager {
   }
 
   async startSession(projectId: string): Promise<ManagedSessionReady> {
+    this.#assertOpen();
     if (this.#workerCount() >= this.#maxWorkers) {
       throw new WorkerManagerError("worker_capacity", "活动 Worker 已达到上限，请稍后再试。");
     }
-    this.#workerReservations += 1;
-    let worker: SessionWorker;
-    let notice: string | null;
+    const operation = this.#beginWorkerOperation(true);
     try {
       const gate = await this.#memoryGate();
       if (gate.blocked) {
@@ -387,27 +395,33 @@ export class SessionWorkerManager {
           memoryLowMessage("暂时不能新建会话。", gate.blocked, this.#minAvailableMemoryBytes),
         );
       }
-      notice = gate.notice;
-      worker = await this.#createWorker(projectId);
+      const worker = await this.#createWorker(projectId);
+      operation.worker = worker;
+      operation.ownsWorker = true;
+      this.#assertOpen();
+      this.#recordFullAccess(worker.threadId, worker.fullAccessEnabled);
+      this.#provisionalWorkers.set(worker.threadId, { worker, closeTimer: null });
+      operation.worker = null;
+      operation.ownsWorker = false;
+      operation.countsCapacity = false;
+      // Worker 创建完成到浏览器 attach 之间也可能断线。先按无人持有处理；
+      // 正常的 attach 会在同一轮微任务中取消这个计时器。
+      this.#armProvisionalClose(worker.threadId);
+      return {
+        loadState: "ready",
+        opened: worker.opened,
+        activeTaskId: null,
+        controlsActiveTask: false,
+        replayEvents: [],
+        ...(gate.notice ? { notice: gate.notice } : {}),
+      };
     } finally {
-      this.#workerReservations -= 1;
+      await this.#finishWorkerOperation(operation);
     }
-    this.#provisionalWorkers.set(worker.threadId, { worker, closeTimer: null });
-    // Worker 创建完成到浏览器 attach 之间也可能断线。先按无人持有处理；
-    // 正常的 attach 会在同一轮微任务中取消这个计时器。
-    this.#armProvisionalClose(worker.threadId);
-    this.#recordFullAccess(worker.threadId, worker.fullAccessEnabled);
-    return {
-      loadState: "ready",
-      opened: worker.opened,
-      activeTaskId: null,
-      controlsActiveTask: false,
-      replayEvents: [],
-      ...(notice ? { notice } : {}),
-    };
   }
 
   async resumeSession(projectId: string, threadId: string): Promise<ManagedSessionOpen> {
+    this.#assertOpen();
     const active = this.#workers.get(threadId);
     if (active) {
       return this.#managedOpen(active.worker.opened, active.worker.fullAccessEnabled);
@@ -597,34 +611,35 @@ export class SessionWorkerManager {
       });
     }
 
-    const result = await this.#withIdleWorker(projectId, threadId, async (worker) => {
+    return this.#withIdleWorker(projectId, threadId, async (worker) => {
+      let result;
       if (command === "model") {
         if (!option) throw new WorkerManagerError("command_option_required", "请先选择一个模型。");
-        return worker.commands.setModel(option, argument);
-      }
-      if (command === "permissions") {
+        result = await worker.commands.setModel(option, argument);
+      } else if (command === "permissions") {
         if (!option) throw new WorkerManagerError("command_option_required", "请先选择一种权限。");
-        return worker.commands.setPermissions(option);
-      }
-      if (command === "rename") {
+        result = await worker.commands.setPermissions(option);
+      } else if (command === "rename") {
         if (!argument) {
           throw new WorkerManagerError(
             "command_argument_required",
             "请在 /rename 后面写一个会话名称。",
           );
         }
-        return worker.commands.rename(argument);
+        result = await worker.commands.rename(argument);
+      } else {
+        throw new WorkerManagerError("unknown_command", "不支持这个斜杠命令。");
       }
-      throw new WorkerManagerError("unknown_command", "不支持这个斜杠命令。");
-    });
 
-    if (typeof result.fullAccessEnabled === "boolean") {
-      this.#recordFullAccess(threadId, result.fullAccessEnabled);
-      const browserResult: Record<string, unknown> = { ...result };
-      delete browserResult.fullAccessEnabled;
-      return browserResult;
-    }
-    return result;
+      this.#assertOpen();
+      if (typeof result.fullAccessEnabled === "boolean") {
+        this.#recordFullAccess(threadId, result.fullAccessEnabled);
+        const browserResult: Record<string, unknown> = { ...result };
+        delete browserResult.fullAccessEnabled;
+        return browserResult;
+      }
+      return result;
+    });
   }
 
   answerApproval(
@@ -687,7 +702,18 @@ export class SessionWorkerManager {
     for (const launching of this.#launching.values()) {
       launching.cancelRequested = true;
     }
-    await this.#scheduleTail.catch(() => {});
+    const operations = [...this.#workerOperations];
+    const operationWorkers = new Set(
+      operations.flatMap((operation) => operation.worker ? [operation.worker] : []),
+    );
+    await Promise.all(operations.map((operation) =>
+      this.#closeOperationWorker(operation)
+    ));
+    await Promise.all([
+      this.#scheduleTail.catch(() => {}),
+      ...operations.map((operation) => operation.done),
+      ...this.#threadOperationTails.values(),
+    ]);
     await Promise.all([...this.#workers.values()].map(async (active) => {
       this.#clearStartTimer(active);
       active.interruptionReason = "backend_stopping";
@@ -699,7 +725,9 @@ export class SessionWorkerManager {
     }));
     await Promise.all([...this.#provisionalWorkers.values()].map(async (provisional) => {
       if (provisional.closeTimer) clearTimeout(provisional.closeTimer);
-      await provisional.worker.close().catch(() => {});
+      if (!operationWorkers.has(provisional.worker)) {
+        await provisional.worker.close().catch(() => {});
+      }
     }));
     this.#workers.clear();
     this.#launching.clear();
@@ -801,6 +829,7 @@ export class SessionWorkerManager {
     threadId: string | undefined,
     operation: (worker: SessionWorker, notice: string | null) => Promise<Result> | Result,
   ): Promise<Result> {
+    this.#assertOpen();
     if (threadId) {
       return this.#serializeThreadOperation(threadId, () =>
         this.#withTransientWorkerUnlocked(projectId, threadId, operation));
@@ -813,17 +842,26 @@ export class SessionWorkerManager {
     threadId: string | undefined,
     operation: (worker: SessionWorker, notice: string | null) => Promise<Result> | Result,
   ): Promise<Result> {
-    if (this.#closed) throw new WorkerManagerError("worker_manager_closed", "后端正在停止。");
+    this.#assertOpen();
     if (threadId && this.#workers.has(threadId)) {
       throw new WorkerManagerError("task_already_running", "这个会话已有任务正在运行。");
     }
     const provisional = threadId ? this.#provisionalWorkers.get(threadId) : null;
-    if (provisional) return await operation(provisional.worker, null);
+    if (provisional) {
+      const scope = this.#beginWorkerOperation(false);
+      scope.worker = provisional.worker;
+      try {
+        const result = await operation(provisional.worker, null);
+        this.#assertOpen();
+        return result;
+      } finally {
+        await this.#finishWorkerOperation(scope);
+      }
+    }
     if (this.#workerCount() >= this.#maxWorkers) {
       throw new WorkerManagerError("worker_capacity", "活动 Worker 已达到上限，请稍后再试。");
     }
-    this.#transientWorkers += 1;
-    let worker: SessionWorker | null = null;
+    const scope = this.#beginWorkerOperation(true);
     try {
       const gate = await this.#memoryGate();
       if (gate.blocked) {
@@ -832,13 +870,52 @@ export class SessionWorkerManager {
           memoryLowMessage("暂时不能打开新 Worker。", gate.blocked, this.#minAvailableMemoryBytes),
         );
       }
-      worker = await this.#createWorker(projectId, threadId);
+      const worker = await this.#createWorker(projectId, threadId);
+      scope.worker = worker;
+      scope.ownsWorker = true;
+      this.#assertOpen();
       await this.#reconcileFullAccess(worker, threadId ? this.#knownFullAccess(threadId) : undefined);
-      return await operation(worker, gate.notice);
+      const result = await operation(worker, gate.notice);
+      this.#assertOpen();
+      return result;
     } finally {
-      await worker?.close().catch(() => {});
-      this.#transientWorkers -= 1;
-      this.#schedule();
+      await this.#finishWorkerOperation(scope);
+    }
+  }
+
+  #beginWorkerOperation(countsCapacity: boolean): WorkerOperation {
+    this.#assertOpen();
+    let resolveDone!: () => void;
+    const done = new Promise<void>((resolve) => {
+      resolveDone = resolve;
+    });
+    const operation: WorkerOperation = {
+      worker: null,
+      ownsWorker: false,
+      countsCapacity,
+      closeRequested: false,
+      done,
+      resolveDone,
+    };
+    this.#workerOperations.add(operation);
+    return operation;
+  }
+
+  async #finishWorkerOperation(operation: WorkerOperation): Promise<void> {
+    if (operation.ownsWorker) await this.#closeOperationWorker(operation);
+    if (this.#workerOperations.delete(operation)) operation.resolveDone();
+    this.#schedule();
+  }
+
+  async #closeOperationWorker(operation: WorkerOperation): Promise<void> {
+    if (!operation.worker || operation.closeRequested) return;
+    operation.closeRequested = true;
+    await operation.worker.close().catch(() => {});
+  }
+
+  #assertOpen(): void {
+    if (this.#closed) {
+      throw new WorkerManagerError("worker_manager_closed", "后端正在停止。");
     }
   }
 
@@ -1564,11 +1641,15 @@ export class SessionWorkerManager {
         );
       }
     }
+    this.#assertOpen();
     return this.#recordFullAccess(worker.threadId, enabled);
   }
 
   #workerCount(): number {
-    return this.#workers.size + this.#provisionalWorkers.size + this.#transientWorkers +
+    const operationWorkers = [...this.#workerOperations].filter((operation) =>
+      operation.countsCapacity
+    ).length;
+    return this.#workers.size + this.#provisionalWorkers.size + operationWorkers +
       this.#workerReservations;
   }
 

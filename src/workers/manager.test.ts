@@ -375,6 +375,94 @@ test("counts a Worker that is still starting against the capacity limit", async 
   await first;
 });
 
+test("shutdown waits for a late new-session Worker and does not publish it", async (context) => {
+  let releaseCreate!: () => void;
+  let reportCreateStarted!: () => void;
+  const createStarted = new Promise<void>((resolve) => {
+    reportCreateStarted = resolve;
+  });
+  const createGate = new Promise<void>((resolve) => {
+    releaseCreate = resolve;
+  });
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    beforeWorkerCreate: async () => {
+      reportCreateStarted();
+      await createGate;
+    },
+  });
+
+  const starting = fixture.manager.startSession("project-1");
+  const rejected = assert.rejects(
+    starting,
+    (error: unknown) => error instanceof WorkerManagerError &&
+      error.code === "worker_manager_closed",
+  );
+  await createStarted;
+  let closeSettled = false;
+  const closing = fixture.manager.close().then(() => {
+    closeSettled = true;
+  });
+  await delay(0);
+  assert.equal(closeSettled, false);
+
+  releaseCreate();
+  await rejected;
+  await closing;
+  assert.equal(fixture.workers.length, 1);
+  assert.equal(fixture.workers[0]!.closeCount, 1);
+  await assert.rejects(
+    fixture.manager.resumeSession("project-1", fixture.workers[0]!.threadId),
+    (error: unknown) => error instanceof WorkerManagerError &&
+      error.code === "worker_manager_closed",
+  );
+});
+
+test("shutdown closes and waits for an in-flight transient Worker", async (context) => {
+  let releaseRewind!: () => void;
+  let reportRewindStarted!: () => void;
+  const rewindStarted = new Promise<void>((resolve) => {
+    reportRewindStarted = resolve;
+  });
+  const rewindGate = new Promise<void>((resolve) => {
+    releaseRewind = resolve;
+  });
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    beforeRewind: async () => {
+      reportRewindStarted();
+      await rewindGate;
+    },
+  });
+
+  const rewinding = fixture.manager.runCommand(
+    "project-1",
+    "thread-1",
+    "rewind-1",
+    "rewind",
+    null,
+    null,
+    "turn-1",
+  );
+  const rejected = assert.rejects(
+    rewinding,
+    (error: unknown) => error instanceof WorkerManagerError &&
+      error.code === "worker_manager_closed",
+  );
+  await rewindStarted;
+  let closeSettled = false;
+  const closing = fixture.manager.close().then(() => {
+    closeSettled = true;
+  });
+  await waitFor(() => fixture.workers[0]?.closeCount === 1);
+  assert.equal(closeSettled, false);
+
+  releaseRewind();
+  await rejected;
+  await closing;
+  assert.equal(fixture.workers[0]!.closeCount, 1);
+});
+
 test("times out a Worker startup and frees the project without user action", async (context) => {
   let createCalls = 0;
   let aborts = 0;
@@ -1127,6 +1215,7 @@ async function managerFixture(
     beforeWorkerCreate?: (signal: AbortSignal) => Promise<void>;
     beforeStartTurn?: () => Promise<void>;
     beforeCompact?: () => Promise<void>;
+    beforeRewind?: () => Promise<void>;
     beforeInterrupt?: () => Promise<void>;
     autoCompleteOnInterrupt?: boolean;
     uploads?: SessionWorkerManagerOptions["uploads"];
@@ -1176,6 +1265,7 @@ async function managerFixture(
         {
           ...(options.beforeStartTurn ? { beforeStartTurn: options.beforeStartTurn } : {}),
           ...(options.beforeCompact ? { beforeCompact: options.beforeCompact } : {}),
+          ...(options.beforeRewind ? { beforeRewind: options.beforeRewind } : {}),
           ...(options.beforeInterrupt ? { beforeInterrupt: options.beforeInterrupt } : {}),
           ...(options.autoCompleteOnInterrupt === undefined
             ? {}
@@ -1245,6 +1335,7 @@ class FakeWorker {
   readonly #toggleFullAccessFails: boolean;
   readonly #beforeStartTurn?: (() => Promise<void>) | undefined;
   readonly #beforeCompact?: (() => Promise<void>) | undefined;
+  readonly #beforeRewind?: (() => Promise<void>) | undefined;
   readonly #beforeInterrupt?: (() => Promise<void>) | undefined;
 
   constructor(
@@ -1254,6 +1345,7 @@ class FakeWorker {
     extras: {
       beforeStartTurn?: (() => Promise<void>) | undefined;
       beforeCompact?: (() => Promise<void>) | undefined;
+      beforeRewind?: (() => Promise<void>) | undefined;
       beforeInterrupt?: (() => Promise<void>) | undefined;
       autoCompleteOnInterrupt?: boolean | undefined;
     } = {},
@@ -1264,6 +1356,7 @@ class FakeWorker {
     this.#toggleFullAccessFails = toggleFullAccessFails;
     this.#beforeStartTurn = extras.beforeStartTurn;
     this.#beforeCompact = extras.beforeCompact;
+    this.#beforeRewind = extras.beforeRewind;
     this.#beforeInterrupt = extras.beforeInterrupt;
     this.autoCompleteOnInterrupt = extras.autoCompleteOnInterrupt !== false;
     this.opened = {
@@ -1321,7 +1414,10 @@ class FakeWorker {
         });
         return "native-turn-1";
       },
-      rewind: async () => "reverted" as const,
+      rewind: async () => {
+        await this.#beforeRewind?.();
+        return "reverted" as const;
+      },
     };
     const thisOwner = this;
     this.turns = {
