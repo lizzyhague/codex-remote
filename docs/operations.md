@@ -69,14 +69,18 @@ CSP。
 
 ## 状态文件与备份
 
-| 变量 | 内容 | 敏感度 |
+| 变量或路径 | 内容 | 敏感度 |
 | --- | --- | --- |
 | `CODEX_REMOTE_STATE_FILE` | 回收站登记：thread ID、项目 ID、删除时间、恢复目标、永久删除阶段 | 低 |
+| `CODEX_REMOTE_MARKS_FILE` | 钉住会话记录；未设置时与回收站同目录的 `marks.json` | 低 |
 | `CODEX_REMOTE_SETTINGS_FILE` | 应用设置 JSON：当前是附加 Developer 指令；未设置时与回收站同目录的 `settings.json` | 中，按用户指令对待 |
 | `CODEX_REMOTE_WORK_STATE_FILE` | Worker SQLite：已接受消息、任务状态、脱敏事件、工具输出 | 高，按对话数据对待 |
+| Worker 状态目录下的 `attachment-index/` | 会话附件显示索引：附件 ID、原名和本机真实路径 | 高，按本机路径与附件元数据对待 |
 
 SQLite 用 WAL，不要在服务运行时只复制主库文件而漏掉 `-wal`。可靠做法是无活动任务时
-停服务再复制。附件本体不在本仓库的数据目录里，备份独立上传服务时按它自己的运维说明。
+停服务再复制。备份时应同时保存表中的 JSON 文件、Worker SQLite 和整个
+`attachment-index/` 目录。附件本体不在本仓库的数据目录里，备份独立上传服务时按它自己
+的运维说明。
 
 ## 新增前端文件
 
