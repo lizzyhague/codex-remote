@@ -11,7 +11,6 @@ import {
 
 const LEGACY_TOKEN_KEY = "codex-remote.token";
 const PROJECT_KEY = "codex-remote.project";
-const SESSION_KEY = "codex-remote.session";
 const OUTBOX_KEY = "codex-remote.outbox-v2";
 const REWIND_OUTBOX_KEY = "codex-remote.rewind-outbox-v1";
 const ATTACHMENT_DRAFTS_KEY = "codex-remote.attachment-drafts-v1";
@@ -21,7 +20,6 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const SESSION_LOADING_RETRY_MS = 1_000;
 const MAX_COMMAND_OUTPUT = 100_000;
 const TOOL_TITLE_LIMIT = 72;
-/** 输入框失焦后稍等再点亮 rewind / full access，避免同一下既失焦又点到确认。 */
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const MAX_MESSAGE_ATTACHMENTS = 100;
 const TEMPORARY_INFO = Object.freeze({ lifetime: "temporary", tone: "info" });
@@ -147,7 +145,6 @@ const state = {
   stopping: false,
   commandBusy: false,
   controlsTask: false,
-  fullAccessEnabled: false,
   rewindTargetTurnId: null,
   rewindText: null,
   rewindAttachments: [],
@@ -765,9 +762,7 @@ function applyLoadingSession(
   state.running = true;
   state.stopping = false;
   state.controlsTask = loading.controlsActiveTask === true;
-  state.fullAccessEnabled = loading.fullAccessEnabled === true;
   if (!preserveAttachments) loadAttachmentDraftForCurrentSession();
-  stateSet(SESSION_KEY, sessionId);
   renderSessionMetrics();
   setCurrentSessionState("active");
   updateConversationTitle();
@@ -839,9 +834,7 @@ function applyOpenedSession(opened, { preserveAttachments = false, retryDeferred
   state.running = Boolean(opened.activeTaskId);
   state.controlsTask = Boolean(opened.controlsActiveTask);
   if (!state.running) state.stopping = false;
-  state.fullAccessEnabled = opened.fullAccessEnabled === true;
   if (!preserveAttachments) loadAttachmentDraftForCurrentSession();
-  stateSet(SESSION_KEY, state.sessionId);
   upsertSession(opened.session);
   renderSessionList();
   updateConversationTitle();
@@ -1290,13 +1283,11 @@ function resetCurrentSession() {
   state.running = false;
   state.stopping = false;
   state.controlsTask = false;
-  state.fullAccessEnabled = false;
   state.pendingAttachments = [];
   state.rewindTargetTurnId = null;
   state.rewindText = null;
   state.rewindAttachments = [];
   renderAttachmentList();
-  removeStored(SESSION_KEY);
   updateConversationTitle();
   renderSessionList();
   updateControls();
@@ -2376,10 +2367,6 @@ function addCommandResult(result) {
     if (session) session.title = result.sessionName;
     renderSessionList();
     updateConversationTitle();
-  }
-  if (typeof result.fullAccessEnabled === "boolean") {
-    state.fullAccessEnabled = result.fullAccessEnabled;
-    updateControls();
   }
   if (result.kind === "task" && !state.running) {
     state.running = true;

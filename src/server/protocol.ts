@@ -84,7 +84,6 @@ export type BrowserRequest =
     argument: string | null;
     targetTurnId: string | null;
   }
-  | { type: "permissions.full-access.toggle"; requestId: string }
   | {
     type: "attachment.ticket.create";
     requestId: string;
@@ -252,8 +251,6 @@ export function parseBrowserRequest(source: string): BrowserRequest {
         argument: readOptionalString(value.argument, "命令参数", requestId, 2_048),
         targetTurnId: readOptionalString(value.targetTurnId, "目标轮次", requestId, 1_024),
       };
-    case "permissions.full-access.toggle":
-      return { type: "permissions.full-access.toggle", requestId };
     case "attachment.ticket.create":
       return {
         type: "attachment.ticket.create",

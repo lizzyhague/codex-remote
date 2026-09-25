@@ -31,10 +31,8 @@ function resumeContext(overrides = {}) {
       running: false,
       stopping: false,
       controlsTask: false,
-      fullAccessEnabled: false,
     },
     SESSION_LOADING_RETRY_MS: 1_000,
-    SESSION_KEY: "session",
     TEMPORARY_ERROR: { lifetime: "temporary", tone: "error" },
     elements: { projectSelect: { value: "project-1" } },
     findSessionSummary: () => ({ id: "session-2", projectId: "project-1" }),
@@ -107,7 +105,6 @@ test("a queued session stays on a truthful loading screen and remains controllab
       sessionId: "session-2",
       activeTaskId: "task-2",
       controlsActiveTask: true,
-      fullAccessEnabled: false,
     }),
   });
   await context.resumeSession("session-2");
@@ -132,7 +129,6 @@ test("a loading session replaces the status with real history once the Worker is
         sessionId: "session-2",
         activeTaskId: "task-2",
         controlsActiveTask: true,
-        fullAccessEnabled: false,
       },
   });
   await context.resumeSession("session-2");

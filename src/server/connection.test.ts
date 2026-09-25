@@ -189,11 +189,6 @@ class FakeWorkers {
     return this.commandResult;
   }
 
-  async toggleFullAccess(projectId: string, sessionId: string) {
-    this.#record("toggleFullAccess", projectId, sessionId);
-    return { kind: "message", title: "Full access 已打开", fullAccessEnabled: true };
-  }
-
   async enqueueMessageWithAttachments(
     projectId: string,
     sessionId: string,
@@ -338,7 +333,6 @@ function managedOpen(opened: OpenedSession): ManagedSessionOpen {
     opened,
     activeTaskId: null,
     controlsActiveTask: false,
-    fullAccessEnabled: false,
     replayEvents: [],
   };
 }
@@ -349,7 +343,6 @@ function managedLoading(sessionId: string, loadState: "queued" | "starting"): Ma
     sessionId,
     activeTaskId: "task-loading",
     controlsActiveTask: true,
-    fullAccessEnabled: false,
   };
 }
 
@@ -464,7 +457,6 @@ test("opens a loading session only for browsers that understand loading states",
     sessionId: "session-loading",
     activeTaskId: "task-loading",
     controlsActiveTask: true,
-    fullAccessEnabled: false,
   });
   assert.equal(workers.attached.get("phone"), "session-loading");
 
@@ -640,27 +632,6 @@ test("refuses session housekeeping while the project has a task", async (context
   const response = socket.last("response")!;
   assert.equal(response.ok, false);
   assert.equal((response.error as JsonObject).code, "project_busy");
-});
-
-test("refuses session settings changes while a task is running", async (context) => {
-  const { workers, services } = setup();
-  const socket = new FakeSocket();
-  const connection = new BrowserConnection("phone", socket, services);
-  context.after(() => connection.disconnect());
-  await openSession(connection);
-
-  workers.runningSessions.add("session-1");
-  connection.receiveText(request("permissions.full-access.toggle", "toggle-1"));
-  await connection.whenIdle();
-  const blocked = socket.last("response")!;
-  assert.equal(blocked.ok, false);
-  assert.equal((blocked.error as JsonObject).code, "task_already_running");
-  assert.equal(workers.calls.some((call) => call.method === "toggleFullAccess"), false);
-
-  workers.runningSessions.delete("session-1");
-  connection.receiveText(request("permissions.full-access.toggle", "toggle-2"));
-  await connection.whenIdle();
-  assert.equal(data(socket.last("response")).fullAccessEnabled, true);
 });
 
 test("switching projects detaches the session and marks running ones as active", async (context) => {

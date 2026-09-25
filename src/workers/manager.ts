@@ -77,7 +77,6 @@ export type ManagedSessionReady = {
   notice?: string;
   activeTaskId: string | null;
   controlsActiveTask: boolean;
-  fullAccessEnabled: boolean;
   replayEvents: StoredWorkerEvent[];
 };
 
@@ -86,7 +85,6 @@ export type ManagedSessionLoading = {
   sessionId: string;
   activeTaskId: string;
   controlsActiveTask: true;
-  fullAccessEnabled: boolean;
 };
 
 export type ManagedSessionOpen = ManagedSessionReady | ManagedSessionLoading;
@@ -398,13 +396,12 @@ export class SessionWorkerManager {
     // Worker 创建完成到浏览器 attach 之间也可能断线。先按无人持有处理；
     // 正常的 attach 会在同一轮微任务中取消这个计时器。
     this.#armProvisionalClose(worker.threadId);
-    const fullAccessEnabled = this.#recordFullAccess(worker.threadId, worker.fullAccessEnabled);
+    this.#recordFullAccess(worker.threadId, worker.fullAccessEnabled);
     return {
       loadState: "ready",
       opened: worker.opened,
       activeTaskId: null,
       controlsActiveTask: false,
-      fullAccessEnabled,
       replayEvents: [],
       ...(notice ? { notice } : {}),
     };
@@ -426,7 +423,6 @@ export class SessionWorkerManager {
         sessionId: threadId,
         activeTaskId: pending.id,
         controlsActiveTask: true,
-        fullAccessEnabled: this.#knownFullAccess(threadId) === true,
       };
     }
     return this.#withTransientWorker(projectId, threadId, async (worker, notice) => {
@@ -624,18 +620,9 @@ export class SessionWorkerManager {
 
     if (typeof result.fullAccessEnabled === "boolean") {
       this.#recordFullAccess(threadId, result.fullAccessEnabled);
-    }
-    return result;
-  }
-
-  async toggleFullAccess(
-    projectId: string,
-    threadId: string,
-  ): Promise<Record<string, unknown>> {
-    const result = await this.#withIdleWorker(projectId, threadId, (worker) =>
-      worker.commands.toggleFullAccess());
-    if (typeof result.fullAccessEnabled === "boolean") {
-      this.#recordFullAccess(threadId, result.fullAccessEnabled);
+      const browserResult: Record<string, unknown> = { ...result };
+      delete browserResult.fullAccessEnabled;
+      return browserResult;
     }
     return result;
   }
@@ -797,7 +784,7 @@ export class SessionWorkerManager {
   }
 
   #managedOpen(opened: OpenedSession, fullAccessEnabled: boolean): ManagedSessionReady {
-    fullAccessEnabled = this.#recordFullAccess(opened.session.id, fullAccessEnabled);
+    this.#recordFullAccess(opened.session.id, fullAccessEnabled);
     const pending = this.#store.pendingForThread(opened.session.id);
     const replayTask = pending ?? terminalReplayTask(this.#store.latestForThread(opened.session.id));
     return {
@@ -805,7 +792,6 @@ export class SessionWorkerManager {
       opened,
       activeTaskId: pending?.id ?? null,
       controlsActiveTask: pending !== null,
-      fullAccessEnabled,
       replayEvents: replayTask ? this.#store.eventsForTask(replayTask.id) : [],
     };
   }

@@ -32,7 +32,7 @@ function harness() {
     RECONNECT_DELAY_MS: 2500, REQUEST_TIMEOUT_MS: 15000, SESSION_LOADING_RETRY_MS: 1000,
     CONNECTION_NOTICE_KEY: "connection",
     MAX_ATTACHMENT_BYTES: 25 * 1024 * 1024, MAX_MESSAGE_ATTACHMENTS: 100,
-    PROJECT_KEY: "project", SESSION_KEY: "session", ATTACHMENT_DRAFTS_KEY: "drafts",
+    PROJECT_KEY: "project", ATTACHMENT_DRAFTS_KEY: "drafts",
     state: {
       generation: 0, socket: null, reconnectAllowed: true, reconnectTimer: null,
       authenticated: false, connectionReady: false, projectId: "project-1", sessionId: "session-1",

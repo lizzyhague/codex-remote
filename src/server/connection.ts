@@ -249,11 +249,6 @@ export class BrowserConnection {
       }
       case "command.run":
         return this.#runCommand(request);
-      case "permissions.full-access.toggle": {
-        const { projectId, sessionId } = this.#requireSession();
-        this.#assertCanChangeSettings();
-        return this.#services.workers.toggleFullAccess(projectId, sessionId);
-      }
       case "attachment.ticket.create": {
         if (!this.#services.uploads) {
           throw new BrowserRequestError("uploads_unavailable", "当前后端没有启用附件服务。");
@@ -414,7 +409,6 @@ export class BrowserConnection {
       ),
       activeTaskId: managed.activeTaskId,
       controlsActiveTask: managed.controlsActiveTask,
-      fullAccessEnabled: managed.fullAccessEnabled,
       ...(managed.notice ? { notice: managed.notice } : {}),
       replayEvents: managed.replayEvents.map((stored) => ({
         ...stored.event,
@@ -541,21 +535,6 @@ export class BrowserConnection {
     // 已经收到的请求仍可在队列里完成，但 #openSession 不会让它重新挂载。
     this.#services.workers.clientDisconnected(this.#id);
     this.#detachSession();
-  }
-
-  /**
-   * 模型、权限和工作模式都是写在 thread 上的设置，运行中的任务会立刻受影响。
-   * 没有这道检查，一台并没有拿到任务控制权的设备也能在别人的任务跑到一半时
-   * 把沙箱放开到“完全访问”。
-   */
-  #assertCanChangeSettings(): void {
-    const { sessionId } = this.#requireSession();
-    if (this.#services.workers.activeTask(sessionId)) {
-      throw new BrowserRequestError(
-        "task_already_running",
-        "这个会话有任务正在运行，请先等它结束或停止它，再修改会话设置。",
-      );
-    }
   }
 
   #requireSession(): { projectId: string; sessionId: string } {

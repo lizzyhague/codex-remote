@@ -187,13 +187,6 @@ test("parses the small stable browser protocol", () => {
     targetTurnId: "turn-last",
   });
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
-    type: "permissions.full-access.toggle",
-    requestId: "permissions-toggle-1",
-  })), {
-    type: "permissions.full-access.toggle",
-    requestId: "permissions-toggle-1",
-  });
-  assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "settings.get",
     requestId: "settings-1",
   })), {
@@ -231,6 +224,13 @@ test("rejects arbitrary paths and unknown operations", () => {
   );
   assert.throws(
     () => parseBrowserRequest(JSON.stringify({ type: "shell.exec", requestId: "r2" })),
+    (error: unknown) => error instanceof ProtocolError && error.code === "unknown_message_type",
+  );
+  assert.throws(
+    () => parseBrowserRequest(JSON.stringify({
+      type: "permissions.full-access.toggle",
+      requestId: "removed-full-access-toggle",
+    })),
     (error: unknown) => error instanceof ProtocolError && error.code === "unknown_message_type",
   );
   assert.throws(

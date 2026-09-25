@@ -115,11 +115,40 @@ test("auto-approves an execution request for an offline Full access turn", async
   worker.complete("completed");
 });
 
+test("refuses a permission change while the session has an active task", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 10 });
+  fixture.manager.start();
+  fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "还在执行");
+  await fixture.waitForWorker("thread-1");
+
+  await assert.rejects(
+    fixture.manager.runCommand(
+      "project-1",
+      "thread-1",
+      "permission-1",
+      "permissions",
+      ":full-access",
+      null,
+      null,
+    ),
+    (error: unknown) => error instanceof WorkerManagerError &&
+      error.code === "task_already_running",
+  );
+});
+
 
 test("restores Full access after replacing a transient Worker", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 1 });
-  const toggled = await fixture.manager.toggleFullAccess("project-1", "thread-1");
-  assert.equal(toggled.fullAccessEnabled, true);
+  const changed = await fixture.manager.runCommand(
+    "project-1",
+    "thread-1",
+    "permission-1",
+    "permissions",
+    ":full-access",
+    null,
+    null,
+  );
+  assert.equal(changed.fullAccessEnabled, undefined);
   fixture.manager.start();
   const accepted = fixture.manager.enqueueMessage(
     "project-1",
@@ -783,7 +812,6 @@ test("reports queued and starting without returning stale session history", asyn
     sessionId: "thread-2",
     activeTaskId: second.taskId,
     controlsActiveTask: true,
-    fullAccessEnabled: false,
   });
 
   firstWorker.complete("completed");
@@ -1270,6 +1298,15 @@ class FakeWorker {
         if (this.#toggleFullAccessFails) throw new Error("测试权限恢复失败");
         this.#fullAccess = !this.#fullAccess;
         return {
+          fullAccessEnabled: this.#fullAccess,
+        };
+      },
+      setPermissions: async (profileId: string) => {
+        this.#fullAccess = profileId === ":full-access";
+        return {
+          kind: "message" as const,
+          title: "权限已更新",
+          lines: [],
           fullAccessEnabled: this.#fullAccess,
         };
       },
