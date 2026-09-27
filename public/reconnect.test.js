@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 
+import { projectDisplayLabel } from "./project-labels.js";
+
 const source = await readFile(new URL("./app.js", import.meta.url), "utf8");
 function section(start, end) {
   return source.slice(source.indexOf(start), source.indexOf(end));
@@ -28,6 +30,7 @@ function harness() {
   const element = () => ({ value: "", hidden: false, replaceChildren() {}, append() {} });
   const context = vm.createContext({
     URL, URLSearchParams, AbortController,
+    projectDisplayLabel,
     location: { protocol: "https:", host: "example.com", search: "" },
     RECONNECT_DELAY_MS: 2500, REQUEST_TIMEOUT_MS: 15000, SESSION_LOADING_RETRY_MS: 1000,
     CONNECTION_NOTICE_KEY: "connection",

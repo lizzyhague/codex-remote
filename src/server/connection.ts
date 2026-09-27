@@ -372,6 +372,9 @@ export class BrowserConnection {
     // 接收者，不能再让完成得较晚的请求把死连接挂回会话。
     if (this.#disconnected) return managed;
     if (managed.loadState !== "ready") {
+      if (managed.projectId !== projectId) {
+        throw new WorkerManagerError("session_project_mismatch", "这个会话不属于所选项目。");
+      }
       if (!acceptLoadingStates) {
         throw new WorkerManagerError(
           "worker_starting",
@@ -380,20 +383,25 @@ export class BrowserConnection {
       }
       this.#deferredEvents = [];
       this.#detachSession();
-      this.#projectId = projectId;
+      this.#projectId = managed.projectId;
       this.#sessionId = managed.sessionId;
-      this.#services.workers.attachSession(this.#id, managed.sessionId);
+      this.#services.workers.attachSession(this.#id, managed.projectId, managed.sessionId);
       this.#olderTurns = [];
-      return managed;
+      const { projectId: _projectId, ...browserManaged } = managed;
+      return browserManaged;
+    }
+    const openedProjectId = managed.opened.session.projectId;
+    if (openedProjectId !== projectId) {
+      throw new WorkerManagerError("session_project_mismatch", "这个会话不属于所选项目。");
     }
     // 这一句之后新会话的事件就会往这条连接上发，而“会话已打开”的响应还要等
     // 下面那次附件同步才发得出去。页面此时还不知道自己被切过去了，收到的增量
     // 无处安放，随后又会被首屏渲染清掉。扣住它们，等响应发完再补。
     this.#deferredEvents = [];
     this.#detachSession();
-    this.#projectId = projectId;
+    this.#projectId = openedProjectId;
     this.#sessionId = managed.opened.session.id;
-    this.#services.workers.attachSession(this.#id, this.#sessionId);
+    this.#services.workers.attachSession(this.#id, openedProjectId, this.#sessionId);
     const mappings = await this.#services.workers.syncAttachmentMappings?.(
       managed.opened.session.id,
       managed.opened.turns,

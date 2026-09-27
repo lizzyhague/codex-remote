@@ -62,6 +62,7 @@ export class ProjectCatalog {
     }
 
     const seenIds = new Set<string>();
+    const rootsByRealPath = new Map<string, string>();
     const resolvedRoots: ResolvedRoot[] = [];
 
     for (const root of roots) {
@@ -80,8 +81,13 @@ export class ProjectCatalog {
       if (!rootStats.isDirectory()) {
         throw new Error(`项目根目录不是文件夹：${root.path}`);
       }
+      const conflictingRootId = rootsByRealPath.get(rootRealPath);
+      if (conflictingRootId) {
+        throw new Error(`项目根目录指向同一位置：${conflictingRootId} 与 ${root.id}`);
+      }
 
       seenIds.add(root.id);
+      rootsByRealPath.set(rootRealPath, root.id);
       resolvedRoots.push({ ...root, realPath: rootRealPath });
     }
 
@@ -127,6 +133,7 @@ export class ProjectCatalog {
 
   async #scanRoots(): Promise<ResolvedProject[]> {
     const projects: ResolvedProject[] = [];
+    const projectsByRealPath = new Map<string, string>();
 
     for (const root of this.#roots) {
       const entries = await readdir(root.realPath, { withFileTypes: true });
@@ -147,8 +154,14 @@ export class ProjectCatalog {
           continue;
         }
 
+        const projectId = `${root.id}/${encodeURIComponent(entry.name)}`;
+        const conflictingProjectId = projectsByRealPath.get(candidateRealPath);
+        if (conflictingProjectId) {
+          throw new Error(`项目目录身份重复：${conflictingProjectId} 与 ${projectId}`);
+        }
+        projectsByRealPath.set(candidateRealPath, projectId);
         projects.push({
-          id: `${root.id}/${encodeURIComponent(entry.name)}`,
+          id: projectId,
           name: entry.name,
           rootId: root.id,
           path: candidateRealPath,
@@ -176,4 +189,3 @@ function isProjectConfigFile(value: unknown): value is ProjectConfigFile {
       typeof root.path === "string"
     );
 }
-

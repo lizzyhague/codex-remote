@@ -65,6 +65,7 @@ const STATIC_FILES: Record<string, { file: string; contentType: string }> = {
   "/notice.js": { file: "notice.js", contentType: "text/javascript; charset=utf-8" },
   "/slash-menu.js": { file: "slash-menu.js", contentType: "text/javascript; charset=utf-8" },
   "/display-timezone.js": { file: "display-timezone.js", contentType: "text/javascript; charset=utf-8" },
+  "/project-labels.js": { file: "project-labels.js", contentType: "text/javascript; charset=utf-8" },
   "/styles.css": { file: "styles.css", contentType: "text/css; charset=utf-8" },
   "/manifest.webmanifest": {
     file: "manifest.webmanifest",

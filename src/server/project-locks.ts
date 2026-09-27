@@ -35,6 +35,11 @@ export class ProjectTaskLocks {
     return this.#leases.get(projectId)?.ownerId === ownerId;
   }
 
+  matches(projectId: string, ownerId: string, sessionId: string): boolean {
+    const lease = this.#leases.get(projectId);
+    return lease?.ownerId === ownerId && lease.sessionId === sessionId;
+  }
+
   release(projectId: string, ownerId: string): boolean {
     if (!this.owns(projectId, ownerId)) {
       return false;

@@ -119,7 +119,7 @@ class FakeWorkers {
     this.attached.delete(clientId);
   }
 
-  attachSession(clientId: string, threadId: string): void {
+  attachSession(clientId: string, _projectId: string, threadId: string): void {
     this.attached.set(clientId, threadId);
   }
 
@@ -337,9 +337,14 @@ function managedOpen(opened: OpenedSession): ManagedSessionOpen {
   };
 }
 
-function managedLoading(sessionId: string, loadState: "queued" | "starting"): ManagedSessionOpen {
+function managedLoading(
+  sessionId: string,
+  loadState: "queued" | "starting",
+  projectId = "projects/demo",
+): ManagedSessionOpen {
   return {
     loadState,
+    projectId,
     sessionId,
     activeTaskId: "task-loading",
     controlsActiveTask: true,
@@ -465,6 +470,35 @@ test("opens a loading session only for browsers that understand loading states",
   assert.equal(workers.calls.some((call) =>
     call.method === "stopTask" && call.args[0] === "session-loading"
   ), true);
+});
+
+test("refuses a ready or pending session whose canonical project differs from the request", async (context) => {
+  const { workers, services } = setup();
+  const socket = new FakeSocket();
+  const connection = new BrowserConnection("phone", socket, services);
+  context.after(() => connection.disconnect());
+  await openSession(connection, "session-current");
+
+  const foreign = openedSession("session-foreign");
+  foreign.session.projectId = "projects/foreign";
+  workers.opens.set("session-foreign", managedOpen(foreign));
+  workers.opens.set(
+    "session-pending-foreign",
+    managedLoading("session-pending-foreign", "queued", "projects/foreign"),
+  );
+
+  for (const sessionId of ["session-foreign", "session-pending-foreign"]) {
+    connection.receiveText(request("session.resume", `open-${sessionId}`, {
+      projectId: "projects/demo",
+      sessionId,
+      acceptLoadingStates: true,
+    }));
+    await connection.whenIdle();
+    const response = socket.last("response")!;
+    assert.equal(response.ok, false);
+    assert.equal((response.error as JsonObject).code, "session_project_mismatch");
+    assert.equal(workers.attached.get("phone"), "session-current");
+  }
 });
 
 test("holds events raised while opening until the page has been told about the session", async (context) => {

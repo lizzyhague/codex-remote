@@ -78,7 +78,8 @@ cp config/projects.example.json config/projects.json
 ```
 
 编辑 `config/projects.json`，把 `path` 改为真实的绝对路径。每个根目录下面第一层的
-普通文件夹会成为网页中的可选项目：
+普通文件夹会成为网页中的可选项目。每个 root ID 和经 `realpath` 解析后的根目录都必须
+唯一；不同 root 下若有同名项目，网页会用公开的 root ID 消歧，不会显示主机路径：
 
 ```json
 {

@@ -60,6 +60,7 @@ const DEFAULT_WORKER_START_TIMEOUT_MS = 120_000;
 const DEFAULT_TASK_START_TIMEOUT_MS = 10_000;
 const ATTACHMENT_LEASE_RENEW_INTERVAL_MS = 5 * 60 * 1_000;
 const ATTACHMENT_LEASE_RENEW_MARGIN_MS = 60_000;
+const SESSION_PROJECT_MISMATCH_MESSAGE = "这个会话不属于所选项目。";
 
 export class WorkerManagerError extends Error {
   readonly code: string;
@@ -83,6 +84,8 @@ export type ManagedSessionReady = {
 
 export type ManagedSessionLoading = {
   loadState: "queued" | "starting";
+  /** 后端内部用来维持连接挂载身份；发送浏览器前会移除。 */
+  projectId: string;
   sessionId: string;
   activeTaskId: string;
   controlsActiveTask: true;
@@ -290,6 +293,7 @@ export class SessionWorkerManager {
     attachmentIds: string[],
     text = "",
   ): Promise<PreparedTaskAttachments | null> {
+    this.#assertKnownThreadProject(projectId, threadId);
     if (attachmentIds.length === 0) return null;
     if (!this.#uploads) {
       throw new WorkerManagerError("uploads_unavailable", "当前后端没有启用附件服务。");
@@ -430,6 +434,7 @@ export class SessionWorkerManager {
 
   async resumeSession(projectId: string, threadId: string): Promise<ManagedSessionOpen> {
     this.#assertOpen();
+    this.#assertKnownThreadProject(projectId, threadId);
     const active = this.#workers.get(threadId);
     if (active) {
       return this.#managedOpen(active.worker.opened, active.worker.fullAccessEnabled);
@@ -442,6 +447,7 @@ export class SessionWorkerManager {
     if (pending) {
       return {
         loadState: this.#launching.has(threadId) ? "starting" : "queued",
+        projectId: pending.projectId,
         sessionId: threadId,
         activeTaskId: pending.id,
         controlsActiveTask: true,
@@ -689,7 +695,8 @@ export class SessionWorkerManager {
     return this.#store.pendingForThread(threadId);
   }
 
-  attachSession(clientId: string, threadId: string): void {
+  attachSession(clientId: string, projectId: string, threadId: string): void {
+    this.#assertKnownThreadProject(projectId, threadId);
     this.detachSession(clientId);
     // WebSocket 断开时在线登记会立即删除；较晚完成的请求不能重新占住会话。
     if (!this.#authenticatedClients.has(clientId)) return;
@@ -801,6 +808,7 @@ export class SessionWorkerManager {
     preparedAttachments: PreparedTaskAttachments | null = null,
   ): { accepted: true; taskId: string; status: WorkerTask["status"]; duplicate: boolean } {
     if (this.#closed) throw new WorkerManagerError("worker_manager_closed", "后端正在停止。");
+    this.#assertKnownThreadProject(projectId, threadId);
     const createdAtMs = this.#now();
     const permissionMode: WorkerPermissionMode = this.#knownDesiredFullAccess(threadId)
       ? "full_access"
@@ -895,6 +903,7 @@ export class SessionWorkerManager {
     operation: (worker: SessionWorker, notice: string | null) => Promise<Result> | Result,
   ): Promise<Result> {
     this.#assertOpen();
+    if (threadId) this.#assertKnownThreadProject(projectId, threadId);
     if (threadId && this.#workers.has(threadId)) {
       throw new WorkerManagerError("task_already_running", "这个会话已有任务正在运行。");
     }
@@ -998,6 +1007,7 @@ export class SessionWorkerManager {
     operation: (worker: SessionWorker) => Promise<Result> | Result,
   ): Promise<Result> {
     return this.#serializeThreadOperation(threadId, () => {
+      this.#assertKnownThreadProject(projectId, threadId);
       if (this.#store.pendingForThread(threadId)) {
         throw new WorkerManagerError(
           "task_already_running",
@@ -1066,6 +1076,12 @@ export class SessionWorkerManager {
     let worker: SessionWorker | null = null;
     let workerReserved = false;
     try {
+      if (!this.#locks.matches(task.projectId, ownerId, task.threadId)) {
+        throw new WorkerManagerError(
+          "project_lock_mismatch",
+          "任务的项目锁身份不一致，Worker 没有启动。",
+        );
+      }
       if (launching.cancelRequested) {
         await this.#abandonLaunch(launching);
         return;
@@ -1081,6 +1097,9 @@ export class SessionWorkerManager {
         return;
       }
       const provisional = this.#provisionalWorkers.get(task.threadId);
+      if (provisional) {
+        this.#assertWorkerIdentity(task.projectId, task.threadId, provisional.worker);
+      }
       if (provisional?.closeTimer) clearTimeout(provisional.closeTimer);
       if (provisional) this.#provisionalWorkers.delete(task.threadId);
       if (provisional) {
@@ -1202,7 +1221,7 @@ export class SessionWorkerManager {
     timer.unref();
     this.#workerStartControllers.add(controller);
     try {
-      return await this.#workerFactory({
+      const worker = await this.#workerFactory({
         projectId,
         projects: this.#projects,
         trash: this.#trash,
@@ -1220,6 +1239,13 @@ export class SessionWorkerManager {
           if (active) void this.#failActive(active, error);
         },
       });
+      try {
+        this.#assertWorkerIdentity(projectId, threadId ?? worker.threadId, worker);
+      } catch (error) {
+        await worker.close().catch(() => {});
+        throw error;
+      }
+      return worker;
     } catch (error) {
       if (timedOut) {
         throw new WorkerManagerError(
@@ -1526,6 +1552,38 @@ export class SessionWorkerManager {
       throw new WorkerManagerError("task_already_running", "这个会话已有任务正在运行。");
     }
     throw new WorkerManagerError("project_busy", "这个项目已有另一个任务正在运行。");
+  }
+
+  #assertKnownThreadProject(projectId: string, threadId: string): void {
+    const active = this.#workers.get(threadId);
+    const launching = this.#launching.get(threadId);
+    const provisional = this.#provisionalWorkers.get(threadId);
+    const pending = this.#store.pendingForThread(threadId);
+    const knownProjectIds = [
+      active?.task.projectId,
+      active?.worker.opened.session.projectId,
+      launching?.task.projectId,
+      launching?.worker?.opened.session.projectId,
+      provisional?.worker.opened.session.projectId,
+      pending?.projectId,
+    ].filter((candidate): candidate is string => typeof candidate === "string");
+    if (knownProjectIds.some((candidate) => candidate !== projectId)) {
+      throw new WorkerManagerError("session_project_mismatch", SESSION_PROJECT_MISMATCH_MESSAGE);
+    }
+  }
+
+  #assertWorkerIdentity(
+    projectId: string,
+    threadId: string,
+    worker: SessionWorker,
+  ): void {
+    if (
+      worker.opened.session.projectId !== projectId ||
+      worker.opened.session.id !== threadId ||
+      worker.threadId !== threadId
+    ) {
+      throw new WorkerManagerError("session_project_mismatch", SESSION_PROJECT_MISMATCH_MESSAGE);
+    }
   }
 
   #beginLaunch(task: WorkerTask, ownerId: string): LaunchingTask {

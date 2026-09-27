@@ -8,6 +8,7 @@ import {
   resolveDisplayTimeZone,
   saveDisplayTimezonePreference,
 } from "./display-timezone.js";
+import { projectDisplayLabel } from "./project-labels.js";
 
 const LEGACY_TOKEN_KEY = "codex-remote.token";
 const PROJECT_KEY = "codex-remote.project";
@@ -585,7 +586,7 @@ async function loadProjects(generation = state.generation) {
   for (const project of projects) {
     const option = document.createElement("option");
     option.value = project.id;
-    option.textContent = project.name;
+    option.textContent = projectDisplayLabel(project, projects);
     elements.projectSelect.append(option);
   }
 
@@ -1004,7 +1005,10 @@ function appendSessionText(container, session) {
 }
 
 function projectDirectoryName(projectId) {
-  return state.projects.find((project) => project.id === projectId)?.name || "目录不可用";
+  return projectDisplayLabel(
+    state.projects.find((project) => project.id === projectId),
+    state.projects,
+  );
 }
 
 function createSessionMark(session) {

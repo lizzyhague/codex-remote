@@ -36,3 +36,27 @@ test("只列出根目录下一层的普通项目文件夹", async (context) => {
     /不在允许的根目录/u,
   );
 });
+
+test("拒绝让两个 root ID 指向同一个规范物理根", async (context) => {
+  const temporaryDirectory = await mkdtemp(path.join(tmpdir(), "codex-remote-project-roots-"));
+  context.after(() => rm(temporaryDirectory, { recursive: true, force: true }));
+
+  const root = path.join(temporaryDirectory, "projects");
+  const alias = path.join(temporaryDirectory, "projects-alias");
+  await mkdir(root);
+  await symlink(root, alias, "dir");
+
+  for (const secondPath of [root, alias]) {
+    await assert.rejects(
+      ProjectCatalog.fromRoots([
+        { id: "primary", path: root },
+        { id: "secondary", path: secondPath },
+      ]),
+      (error: unknown) => {
+        assert.match(String((error as Error).message), /primary 与 secondary/u);
+        assert.equal(String((error as Error).message).includes(temporaryDirectory), false);
+        return true;
+      },
+    );
+  }
+});

@@ -74,6 +74,7 @@ test("serves health and requires a cookie before the WebSocket upgrade", async (
       "/notice.js",
       "/slash-menu.js",
       "/display-timezone.js",
+      "/project-labels.js",
     ]) {
       const response = await fetch("http://" + address.host + ":" + address.port + asset);
       assert.equal(response.status, 200, asset + " should be served");

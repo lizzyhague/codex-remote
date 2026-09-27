@@ -605,7 +605,7 @@ test("keeps a brand-new empty thread only while a browser is attached", async (c
   fixture.manager.start();
   const opened = await fixture.manager.startSession("project-1");
   const worker = fixture.workers[0]!;
-  fixture.manager.attachSession("phone", opened.opened.session.id);
+  fixture.manager.attachSession("phone", "project-1", opened.opened.session.id);
   await delay(10);
   assert.equal(worker.closeCount, 0);
   fixture.manager.detachSession("phone");
@@ -631,7 +631,7 @@ test("a disconnected client cannot attach to a session", async (context) => {
   const worker = fixture.workers[0]!;
 
   fixture.manager.clientDisconnected("phone");
-  fixture.manager.attachSession("phone", opened.opened.session.id);
+  fixture.manager.attachSession("phone", "project-1", opened.opened.session.id);
 
   await waitFor(() => worker.closeCount === 1);
   assert.equal(worker.started, false);
@@ -642,7 +642,7 @@ test("promotes the empty-session Worker for the first accepted message", async (
   fixture.manager.clientAuthenticated("phone");
   fixture.manager.start();
   const opened = await fixture.manager.startSession("project-1");
-  fixture.manager.attachSession("phone", opened.opened.session.id);
+  fixture.manager.attachSession("phone", "project-1", opened.opened.session.id);
   await fixture.manager.enqueueMessage(
     "project-1",
     opened.opened.session.id,
@@ -654,12 +654,127 @@ test("promotes the empty-session Worker for the first accepted message", async (
   fixture.workers[0]!.complete("completed");
 });
 
+test("rejects the wrong project before reusing or attaching an active Worker", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 20 });
+  fixture.manager.clientAuthenticated("phone");
+  fixture.manager.start();
+  await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "正在执行",
+  );
+  const worker = await fixture.waitForWorker("thread-1");
+
+  await assert.rejects(
+    fixture.manager.resumeSession("project-2", "thread-1"),
+    isProjectMismatch,
+  );
+  await assert.rejects(
+    fixture.manager.enqueueMessage("project-2", "thread-1", "message-2", "错误项目"),
+    isProjectMismatch,
+  );
+  await assert.rejects(
+    fixture.manager.runCommand(
+      "project-2",
+      "thread-1",
+      "command-1",
+      "model",
+      "gpt-test",
+      null,
+      null,
+    ),
+    isProjectMismatch,
+  );
+  assert.throws(
+    () => fixture.manager.attachSession("phone", "project-2", "thread-1"),
+    isProjectMismatch,
+  );
+  worker.complete("completed");
+});
+
+test("rejects the wrong project before reusing a provisional Worker", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 20 });
+  fixture.manager.clientAuthenticated("phone");
+  fixture.manager.start();
+  const opened = await fixture.manager.startSession("project-1");
+  const threadId = opened.opened.session.id;
+  fixture.manager.attachSession("phone", "project-1", threadId);
+
+  await assert.rejects(fixture.manager.resumeSession("project-2", threadId), isProjectMismatch);
+  await assert.rejects(
+    fixture.manager.enqueueMessage("project-2", threadId, "message-1", "错误项目"),
+    isProjectMismatch,
+  );
+  await assert.rejects(
+    fixture.manager.commandOptions("project-2", threadId, "model"),
+    isProjectMismatch,
+  );
+  assert.throws(
+    () => fixture.manager.attachSession("phone", "project-2", threadId),
+    isProjectMismatch,
+  );
+  assert.equal(fixture.store.pendingForThread(threadId), null);
+  assert.equal(fixture.workers[0]!.started, false);
+});
+
+test("rejects the wrong project for a persisted pending session", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 20 });
+  fixture.store.admit({
+    id: "pending-task",
+    clientMessageId: "pending-message",
+    projectId: "project-1",
+    threadId: "thread-1",
+    kind: "message",
+    payload: "仍在排队",
+    permissionMode: "manual",
+    createdAtMs: 1,
+  });
+
+  await assert.rejects(
+    fixture.manager.resumeSession("project-2", "thread-1"),
+    isProjectMismatch,
+  );
+  assert.throws(
+    () => fixture.manager.attachSession("phone", "project-2", "thread-1"),
+    isProjectMismatch,
+  );
+  assert.equal(fixture.store.require("pending-task").status, "queued");
+});
+
+test("never promotes a provisional Worker under a different project's lock", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 50 });
+  fixture.manager.clientAuthenticated("phone");
+  const opened = await fixture.manager.startSession("project-1");
+  const threadId = opened.opened.session.id;
+  fixture.manager.attachSession("phone", "project-1", threadId);
+  fixture.store.admit({
+    id: "stale-wrong-project-task",
+    clientMessageId: "stale-wrong-project-message",
+    projectId: "project-2",
+    threadId,
+    kind: "message",
+    payload: "不能在错误目录启动",
+    permissionMode: "manual",
+    createdAtMs: 1,
+  });
+
+  fixture.manager.start();
+  await waitFor(() => fixture.store.require("stale-wrong-project-task").status === "failed");
+  assert.equal(fixture.workers[0]!.startTurnCalls, 0);
+  assert.equal(fixture.workers[0]!.started, false);
+  assert.equal(fixture.locks.acquire("project-2", "probe", "probe-session"), true);
+  assert.equal(fixture.locks.release("project-2", "probe"), true);
+  const resumed = await fixture.manager.resumeSession("project-1", threadId);
+  assert.equal(resumed.loadState, "ready");
+});
+
 test("fails a promoted new-session task when its Worker exits", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 10 });
   fixture.manager.clientAuthenticated("phone");
   fixture.manager.start();
   const opened = await fixture.manager.startSession("project-1");
-  fixture.manager.attachSession("phone", opened.opened.session.id);
+  fixture.manager.attachSession("phone", "project-1", opened.opened.session.id);
   const accepted = await fixture.manager.enqueueMessage(
     "project-1",
     opened.opened.session.id,
@@ -1260,6 +1375,7 @@ test("reports queued and starting without returning stale session history", asyn
   const queued = await fixture.manager.resumeSession("project-2", "thread-2");
   assert.deepEqual(queued, {
     loadState: "queued",
+    projectId: "project-2",
     sessionId: "thread-2",
     activeTaskId: second.taskId,
     controlsActiveTask: true,
@@ -2070,4 +2186,10 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isProjectMismatch(error: unknown): boolean {
+  return error instanceof WorkerManagerError &&
+    error.code === "session_project_mismatch" &&
+    /不属于所选项目/u.test(error.message);
 }
