@@ -21,6 +21,7 @@ import {
 import type { SessionWorker, SessionWorkerOptions } from "./session-worker.ts";
 import { WorkerStateStore } from "./state-store.ts";
 import { ApplicationSettingsStore } from "../settings/store.ts";
+import type { WorkerInteractionRequest } from "./interaction-broker.ts";
 
 test("keeps an accepted turn running after the browser disconnects", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 10 });
@@ -40,6 +41,171 @@ test("keeps an accepted turn running after the browser disconnects", async (cont
   worker.complete("completed");
   await waitFor(() => fixture.store.require(accepted.taskId).status === "completed");
   assert.equal(fixture.store.require(accepted.taskId).status, "completed");
+});
+
+test("publishes recognizable path-redacted approval scopes and resolves an answer only once", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 50 });
+  const events: Array<{ audience: string; event: Record<string, unknown> }> = [];
+  fixture.manager.onEvent((stored) => events.push({
+    audience: stored.audience,
+    event: stored.event,
+  }));
+  fixture.manager.clientAuthenticated("phone");
+  fixture.manager.start();
+  fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "需要审批",
+  );
+  const worker = await fixture.waitForWorker();
+
+  worker.requestCommandApproval("cat /home/private/project/secret.txt");
+  const commandEvents = () => events.filter(({ event }) => event.type === "approval.requested");
+  await waitFor(() => commandEvents().length === 1);
+  const commandEvent = commandEvents()[0]!;
+  assert.equal(commandEvent.audience, "all");
+  assert.deepEqual(commandEvent.event.sourceSession, {
+    id: "thread-1",
+    title: "测试会话",
+  });
+  assert.equal(JSON.stringify(commandEvent.event).includes("/home/private"), false);
+  assert.deepEqual(commandEvent.event.approval, {
+    id: "command-approval-1",
+    kind: "command",
+    reason: "读取 ‹主机路径›",
+    startedAtMs: (commandEvent.event.approval as { startedAtMs: number }).startedAtMs,
+    commandSummary: "cat ‹主机路径›",
+    network: { host: "registry.npmjs.org", protocol: "https" },
+    canApprove: true,
+  });
+
+  // 新设备认证时会得到同一条仍有效的待答项；它回答后所有设备收到全局终态。
+  fixture.manager.clientAuthenticated("computer");
+  await waitFor(() => commandEvents().length === 2);
+  assert.deepEqual(fixture.manager.answerApproval("command-approval-1", "approve_once"), {
+    answered: true,
+  });
+  assert.throws(
+    () => fixture.manager.answerApproval("command-approval-1", "approve_once"),
+    (error: unknown) => error instanceof WorkerManagerError && error.code === "approval_not_found",
+  );
+  const commandResolved = events.filter(({ event }) =>
+    event.type === "approval.resolved" && event.approvalId === "command-approval-1"
+  );
+  assert.equal(commandResolved.length, 1);
+  assert.equal(commandResolved[0]?.audience, "all");
+
+  worker.requestPermissionsApproval({
+    network: { enabled: true },
+    fileSystem: {
+      read: ["/home/private/project/secret.txt"],
+      write: ["/"],
+      entries: [{
+        access: "read",
+        path: {
+          type: "special",
+          value: { kind: "project_roots", subpath: "src/generated" },
+        },
+      }],
+    },
+  });
+  await waitFor(() => commandEvents().length === 3);
+  const permissionEvent = commandEvents()[2]!.event;
+  assert.equal(JSON.stringify(permissionEvent).includes("/home/private"), false);
+  assert.deepEqual(
+    (permissionEvent.approval as { permissionSummary: string[] }).permissionSummary,
+    [
+      "网络：允许额外网络访问",
+      "读取：…/secret.txt",
+      "写入：文件系统根目录",
+      "读取：项目目录/…/generated",
+    ],
+  );
+  assert.equal((permissionEvent.approval as { canApprove: boolean }).canApprove, true);
+  fixture.manager.answerApproval("permissions-approval-1", "decline");
+  worker.complete("completed");
+});
+
+test("refuses approval when a future permission shape cannot be displayed completely", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 50 });
+  const events: Record<string, unknown>[] = [];
+  fixture.manager.onEvent((stored) => events.push(stored.event));
+  fixture.manager.clientAuthenticated("phone");
+  fixture.manager.start();
+  fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "需要审批");
+  const worker = await fixture.waitForWorker();
+  worker.requestPermissionsApproval({ futureCapability: { secret: true } });
+  await waitFor(() => events.some((event) => event.type === "approval.requested"));
+  const requested = events.find((event) => event.type === "approval.requested")!;
+  assert.equal((requested.approval as { canApprove: boolean }).canApprove, false);
+  assert.throws(
+    () => fixture.manager.answerApproval("permissions-approval-1", "approve_once"),
+    (error: unknown) => error instanceof WorkerManagerError &&
+      error.code === "approval_scope_unavailable",
+  );
+  assert.deepEqual(fixture.manager.answerApproval("permissions-approval-1", "decline"), {
+    answered: true,
+  });
+  worker.complete("completed");
+});
+
+test("task completion globally resolves pending approval and interaction cards", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 50 });
+  const events: Array<{ audience: string; event: Record<string, unknown> }> = [];
+  fixture.manager.onEvent((stored) => events.push({
+    audience: stored.audience,
+    event: stored.event,
+  }));
+  fixture.manager.clientAuthenticated("phone");
+  fixture.manager.start();
+  fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "等待回答");
+  const worker = await fixture.waitForWorker();
+  worker.requestApproval();
+  worker.requestInteraction();
+  worker.complete("completed");
+
+  await waitFor(() => worker.closeCount === 1);
+  const resolved = events.filter(({ event }) =>
+    event.type === "approval.resolved" || event.type === "interaction.resolved"
+  );
+  assert.deepEqual(resolved.map(({ audience, event }) => ({
+    audience,
+    type: event.type,
+    id: event.approvalId ?? event.interactionId,
+  })), [
+    { audience: "all", type: "approval.resolved", id: "approval-1" },
+    { audience: "all", type: "interaction.resolved", id: "interaction-1" },
+  ]);
+});
+
+test("an unexpected Worker exit globally resolves every pending request", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 50 });
+  const events: Array<{ audience: string; event: Record<string, unknown> }> = [];
+  fixture.manager.onEvent((stored) => events.push({
+    audience: stored.audience,
+    event: stored.event,
+  }));
+  fixture.manager.clientAuthenticated("phone");
+  fixture.manager.start();
+  const accepted = fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "等待回答",
+  );
+  const worker = await fixture.waitForWorker();
+  worker.requestApproval();
+  worker.requestInteraction();
+  worker.exitUnexpectedly();
+
+  await waitFor(() => fixture.store.require(accepted.taskId).status === "failed");
+  await waitFor(() => worker.closeCount === 1);
+  const resolved = events.filter(({ event }) =>
+    event.type === "approval.resolved" || event.type === "interaction.resolved"
+  );
+  assert.equal(resolved.length, 2);
+  assert.ok(resolved.every(({ audience }) => audience === "all"));
 });
 
 test("cancels the whole manual turn when an offline approval outlives grace", async (context) => {
@@ -1308,11 +1474,7 @@ class FakeWorker {
   readonly commands;
   readonly turns;
   readonly approvals;
-  readonly interactions = {
-    pendingForThread: () => [],
-    answer: () => false,
-    cancelThread: () => 0,
-  };
+  readonly interactions;
   started = false;
   startedAttachments: Array<{ path: string }> = [];
   startTurnCalls = 0;
@@ -1330,6 +1492,7 @@ class FakeWorker {
   #interruptRequested = false;
   #pendingResolve: ((value: boolean) => void) | null = null;
   #pendingApproval: ApprovalRequest | null = null;
+  #pendingInteraction: WorkerInteractionRequest | null = null;
   readonly #options: SessionWorkerOptions;
   #fullAccess: boolean;
   readonly #toggleFullAccessFails: boolean;
@@ -1501,6 +1664,30 @@ class FakeWorker {
         return 1;
       },
     };
+    this.interactions = {
+      pendingForThread: () => this.#pendingInteraction ? [this.#pendingInteraction] : [],
+      answer: (id: string, action: string) => {
+        if (this.#pendingInteraction?.id !== id) return false;
+        this.#pendingInteraction = null;
+        this.#options.onInteractionEvent?.({
+          type: "interaction_resolved",
+          interactionId: id,
+          resolution: action === "submit" ? "submitted" : "cancelled",
+        });
+        return true;
+      },
+      cancelThread: () => {
+        if (!this.#pendingInteraction) return 0;
+        const id = this.#pendingInteraction.id;
+        this.#pendingInteraction = null;
+        this.#options.onInteractionEvent?.({
+          type: "interaction_resolved",
+          interactionId: id,
+          resolution: "cancelled",
+        });
+        return 1;
+      },
+    };
   }
 
   get threadId(): string {
@@ -1530,6 +1717,62 @@ class FakeWorker {
     this.#options.onApprovalEvent?.({
       type: "approval_requested",
       approval: this.#pendingApproval,
+    });
+  }
+
+  requestCommandApproval(command: string | null): void {
+    this.#pendingApproval = {
+      id: "command-approval-1",
+      kind: "command",
+      threadId: this.#threadId,
+      turnId: "native-turn-1",
+      itemId: "command-1",
+      reason: "读取 /home/private/project/secret.txt",
+      startedAtMs: Date.now(),
+      command,
+      network: { host: "registry.npmjs.org", protocol: "https" },
+    };
+    this.#options.onApprovalEvent?.({
+      type: "approval_requested",
+      approval: this.#pendingApproval,
+    });
+  }
+
+  requestPermissionsApproval(permissions: Record<string, unknown>): void {
+    this.#pendingApproval = {
+      id: "permissions-approval-1",
+      kind: "permissions",
+      threadId: this.#threadId,
+      turnId: "native-turn-1",
+      itemId: "permissions-1",
+      reason: "需要额外文件系统权限",
+      startedAtMs: Date.now(),
+      permissions,
+    };
+    this.#options.onApprovalEvent?.({
+      type: "approval_requested",
+      approval: this.#pendingApproval,
+    });
+  }
+
+  requestInteraction(): void {
+    this.#pendingInteraction = {
+      id: "interaction-1",
+      kind: "user_input",
+      threadId: this.#threadId,
+      turnId: "native-turn-1",
+      questions: [{
+        id: "choice",
+        header: "选择",
+        question: "继续吗？",
+        isOther: false,
+        isSecret: false,
+        options: [{ label: "继续", description: "继续任务" }],
+      }],
+    };
+    this.#options.onInteractionEvent?.({
+      type: "interaction_requested",
+      interaction: this.#pendingInteraction,
     });
   }
 
@@ -1565,6 +1808,8 @@ class FakeWorker {
 
   async close(): Promise<void> {
     this.closeCount += 1;
+    this.approvals.cancelThread();
+    this.interactions.cancelThread();
   }
 
   #stream(event: CodexStreamEvent): void {

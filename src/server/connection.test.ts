@@ -518,13 +518,37 @@ test("forwards worker events for the open session and hides other sessions", asy
   await openSession(computer, "session-2");
 
   workers.emit({ type: "message.delta", sessionId: "session-1", delta: "你" }, "session", "session-1");
-  // 审批要送到所有已登录设备，即使它们正在看别的会话。
-  workers.emit({ type: "approval.requested", approval: { id: "a-1" } }, "all", "session-1");
+  // 待答请求及其终态要送到所有已登录设备，即使它们正在看别的会话。
+  workers.emit({
+    type: "approval.requested",
+    sessionId: "session-1",
+    sourceSession: { id: "session-1", title: "第一条会话" },
+    approval: { id: "a-1" },
+  }, "all", "session-1");
+  workers.emit({
+    type: "interaction.requested",
+    sessionId: "session-1",
+    sourceSession: { id: "session-1", title: "第一条会话" },
+    interaction: { id: "i-1" },
+  }, "all", "session-1");
+  workers.emit({
+    type: "approval.resolved",
+    sessionId: "session-1",
+    approvalId: "a-1",
+  }, "all", "session-1");
 
   assert.deepEqual(phoneSocket.events("message.delta").map((event) => event.delta), ["你"]);
   assert.deepEqual(computerSocket.events("message.delta"), []);
   assert.equal(phoneSocket.events("approval.requested").length, 1);
   assert.equal(computerSocket.events("approval.requested").length, 1);
+  assert.equal(phoneSocket.events("interaction.requested").length, 1);
+  assert.equal(computerSocket.events("interaction.requested").length, 1);
+  assert.equal(phoneSocket.events("approval.resolved").length, 1);
+  assert.equal(computerSocket.events("approval.resolved").length, 1);
+  assert.deepEqual(computerSocket.events("approval.requested")[0]?.sourceSession, {
+    id: "session-1",
+    title: "第一条会话",
+  });
   // 事件带着管理器给的序号，断线重连后前端才能去重。
   assert.equal(phoneSocket.events("message.delta")[0]?.sequence, 1);
 });

@@ -1705,7 +1705,11 @@ async function stopTask() {
 }
 
 function handleServerEvent(event, replay = false) {
-  if (handleLoadingSessionEvent(event, replay)) return;
+  const loadingHandled = handleLoadingSessionEvent(event, replay);
+  const pendingRequestEvent = event.type === "approval.requested" ||
+    event.type === "approval.resolved" || event.type === "interaction.requested" ||
+    event.type === "interaction.resolved";
+  if (loadingHandled && !pendingRequestEvent) return;
   if (isTaskProgressEvent(event.type)) {
     clearNotice(taskNoticeKey("retry", event.taskId || event.sessionId));
   }
@@ -1832,20 +1836,20 @@ function handleServerEvent(event, replay = false) {
       }
       break;
     case "approval.requested":
-      hideThinking();
-      addApproval(event.approval, event.sessionId);
+      if (event.sessionId === state.sessionId) hideThinking();
+      addApproval(event.approval, event.sourceSession, event.sessionId);
       break;
     case "approval.resolved":
       removeApproval(event.approvalId);
-      if (state.running) showThinking();
+      if (event.sessionId === state.sessionId && state.running) showThinking();
       break;
     case "interaction.requested":
-      hideThinking();
-      addInteraction(event.interaction, event.sessionId);
+      if (event.sessionId === state.sessionId) hideThinking();
+      addInteraction(event.interaction, event.sourceSession, event.sessionId);
       break;
     case "interaction.resolved":
       removeInteraction(event.interactionId);
-      if (state.running) showThinking();
+      if (event.sessionId === state.sessionId && state.running) showThinking();
       break;
   }
 }
@@ -2377,28 +2381,33 @@ function addCommandResult(result) {
     scrollToBottom(false);
   }
 }
-function addApproval(approval, sessionId = null) {
+function addApproval(approval, sourceSession = null, sessionId = null) {
   if (!approval?.id || elements.approvalList.querySelector(`[data-approval-id="${CSS.escape(approval.id)}"]`)) {
     return;
   }
   const card = document.createElement("section");
   card.className = "approval-card";
   card.dataset.approvalId = approval.id;
+  card.dataset.sessionId = sourceSession?.id || sessionId || "";
   const description = document.createElement("p");
   description.textContent = approval.reason || (approval.kind === "command"
     ? "Codex 请求执行一项操作。"
     : approval.kind === "permissions"
     ? "Codex 请求为本轮增加权限。"
     : "Codex 请求修改文件。");
-  const detail = document.createElement("small");
-  const session = findSessionSummary(sessionId);
-  const sessionLabel = sessionId && sessionId !== state.sessionId
-    ? `${session?.title || "另一个会话"} · `
-    : "";
-  detail.textContent = approval.network
-    ? `网络访问：${approval.network.protocol}://${approval.network.host}`
-    : `${sessionLabel}请选择本次允许，或拒绝。`;
-  description.append(detail);
+  const source = document.createElement("small");
+  source.textContent = `来源会话：${pendingRequestSessionLabel(sourceSession, sessionId)}`;
+  description.append(source);
+  for (const line of approvalScopeLines(approval)) {
+    const detail = document.createElement("small");
+    detail.textContent = line;
+    description.append(detail);
+  }
+  if (approval.canApprove === false) {
+    const unavailable = document.createElement("small");
+    unavailable.textContent = "完整范围无法在网页中安全显示，只能拒绝。";
+    description.append(unavailable);
+  }
 
   const decline = document.createElement("button");
   decline.className = "danger";
@@ -2410,8 +2419,40 @@ function addApproval(approval, sessionId = null) {
   approve.textContent = "本次允许";
   decline.addEventListener("click", () => void answerApproval(card, approval.id, "decline"));
   approve.addEventListener("click", () => void answerApproval(card, approval.id, "approve_once"));
-  card.append(description, decline, approve);
+  card.append(description, decline);
+  if (approval.canApprove !== false) card.append(approve);
   elements.approvalList.append(card);
+}
+
+function pendingRequestSessionLabel(sourceSession, fallbackSessionId = null) {
+  const sessionId = typeof sourceSession?.id === "string" && sourceSession.id
+    ? sourceSession.id
+    : fallbackSessionId;
+  const title = typeof sourceSession?.title === "string" && sourceSession.title.trim()
+    ? sourceSession.title.trim()
+    : findSessionSummary(sessionId)?.title || "未命名会话";
+  const shortId = typeof sessionId === "string" && sessionId
+    ? sessionId.slice(0, 8)
+    : "未知";
+  return `${title} · ${shortId}`;
+}
+
+function approvalScopeLines(approval) {
+  const lines = [];
+  if (typeof approval.commandSummary === "string" && approval.commandSummary) {
+    lines.push(`命令：${approval.commandSummary}`);
+  }
+  if (
+    approval.network && typeof approval.network.protocol === "string" &&
+    typeof approval.network.host === "string"
+  ) {
+    lines.push(`网络访问：${approval.network.protocol}://${approval.network.host}`);
+  }
+  if (Array.isArray(approval.permissionSummary)) {
+    lines.push(...approval.permissionSummary.filter((line) => typeof line === "string"));
+  }
+  if (lines.length === 0) lines.push("请选择本次允许，或拒绝。");
+  return lines;
 }
 
 async function requestSlashCommand(type, payload = {}) {
@@ -2709,7 +2750,7 @@ async function answerApproval(card, approvalId, decision) {
   buttons.forEach((button) => { button.disabled = true; });
   try {
     await request("approval.answer", { approvalId, decision });
-    if (state.running) showThinking();
+    if (state.running && card.dataset.sessionId === state.sessionId) showThinking();
   } catch (error) {
     buttons.forEach((button) => { button.disabled = false; });
     showNotice(errorMessage(error), TEMPORARY_ERROR);
@@ -2721,7 +2762,7 @@ function removeApproval(approvalId) {
   elements.approvalList.querySelector(selector)?.remove();
 }
 
-function addInteraction(interaction, sessionId = null) {
+function addInteraction(interaction, sourceSession = null, sessionId = null) {
   if (
     !interaction?.id ||
     elements.approvalList.querySelector(
@@ -2731,11 +2772,12 @@ function addInteraction(interaction, sessionId = null) {
   const card = document.createElement("section");
   card.className = "approval-card";
   card.dataset.interactionId = interaction.id;
-  const session = findSessionSummary(sessionId);
+  card.dataset.sessionId = sourceSession?.id || sessionId || "";
   const heading = document.createElement("p");
-  heading.textContent = sessionId && sessionId !== state.sessionId
-    ? `${session?.title || "另一个会话"}需要你的输入。`
-    : "Codex 需要你的输入。";
+  heading.textContent = "Codex 需要你的输入。";
+  const source = document.createElement("small");
+  source.textContent = `来源会话：${pendingRequestSessionLabel(sourceSession, sessionId)}`;
+  heading.append(source);
   card.append(heading);
 
   const fields = new Map();
@@ -3034,7 +3076,6 @@ function clearTimeline() {
   elements.historyLoader.hidden = true;
   hideThinking();
   elements.timeline.replaceChildren();
-  elements.approvalList.replaceChildren();
 }
 
 function showEmpty(text) {

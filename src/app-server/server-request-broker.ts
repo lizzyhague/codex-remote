@@ -100,13 +100,21 @@ export abstract class ServerRequestBroker<
     const matches = [...this.#pending.entries()].filter(([, pending]) =>
       predicate(pending.item)
     );
+    let firstError: unknown = null;
     for (const [id, pending] of matches) {
-      this.#transport.respondToServerRequest(
-        pending.requestId,
-        this.cancelResponse(pending.item),
-      );
-      this.#remove(id, "cancelled");
+      try {
+        this.#transport.respondToServerRequest(
+          pending.requestId,
+          this.cancelResponse(pending.item),
+        );
+      } catch (error) {
+        firstError ??= error;
+      } finally {
+        // Worker 已经退出时回复可能失败，但浏览器里的待答项仍必须终结。
+        this.#remove(id, "cancelled");
+      }
     }
+    if (firstError) throw firstError;
     return matches.length;
   }
 

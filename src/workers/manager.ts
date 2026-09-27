@@ -11,6 +11,7 @@ import {
 import type { AttachmentDisplayMapping } from "../attachments/path-redaction.ts";
 import {
   AttachmentPathStreamRedactor,
+  redactKnownAttachmentPaths,
   redactKnownAttachmentPathsDeep,
 } from "../attachments/path-redaction.ts";
 import { collectHistoryAttachmentRecords } from "../server/history.ts";
@@ -90,7 +91,7 @@ export type ManagedSessionLoading = {
 export type ManagedSessionOpen = ManagedSessionReady | ManagedSessionLoading;
 
 export type WorkerManagerEvent = StoredWorkerEvent & {
-  /** 审批发给所有已认证客户端；其他事件只发给正在查看该会话的客户端。 */
+  /** 待答请求发给所有已认证客户端；其他事件只发给正在查看该会话的客户端。 */
   audience: "session" | "all";
 };
 
@@ -647,6 +648,16 @@ export class SessionWorkerManager {
     decision: "approve_once" | "decline",
   ): { answered: true } {
     for (const active of this.#workers.values()) {
+      const approval = active.worker.approvals
+        .pendingForThread(active.task.threadId)
+        .find((candidate) => candidate.id === approvalId);
+      if (!approval) continue;
+      if (decision === "approve_once" && !approvalCanBeShownSafely(approval)) {
+        throw new WorkerManagerError(
+          "approval_scope_unavailable",
+          "这项审批的完整范围无法在网页中安全显示，只能拒绝。",
+        );
+      }
       if (active.worker.approvals.answer(approvalId, decision)) {
         return { answered: true };
       }
@@ -1189,6 +1200,7 @@ export class SessionWorkerManager {
     if (!browserEvent) return;
     if (event.type === "turn_completed") {
       active.finishing = true;
+      this.#cancelPendingRequests(active);
       const status = event.status === "interrupted"
         ? "interrupted"
         : event.status === "failed"
@@ -1229,6 +1241,7 @@ export class SessionWorkerManager {
         type: "approval.requested",
         sessionId: active.task.threadId,
         taskId: active.task.id,
+        sourceSession: publicSourceSession(active),
         approval: publicApproval(event.approval, this.peekAttachmentMappings(active.task.threadId)),
       }, this.#now());
 
@@ -1278,6 +1291,7 @@ export class SessionWorkerManager {
         type: "interaction.requested",
         sessionId: active.task.threadId,
         taskId: active.task.id,
+        sourceSession: publicSourceSession(active),
         interaction: publicInteraction(
           event.interaction,
           this.peekAttachmentMappings(active.task.threadId),
@@ -1378,6 +1392,7 @@ export class SessionWorkerManager {
   async #finishWithoutTurn(active: ActiveWorker): Promise<void> {
     if (active.finishing || this.#workers.get(active.task.threadId) !== active) return;
     active.finishing = true;
+    this.#cancelPendingRequests(active);
     const status = active.interruptionReason === "user_requested"
       ? "interrupted"
       : active.task.kind === "message"
@@ -1409,6 +1424,7 @@ export class SessionWorkerManager {
     if (active.finishing) return;
     active.finishing = true;
     console.error(`会话 Worker ${active.task.threadId} 失败：${errorMessage(error)}`);
+    this.#cancelPendingRequests(active);
     const stored = this.#store.tryFinish(active.task.id, [
       "queued",
       "running",
@@ -1428,17 +1444,32 @@ export class SessionWorkerManager {
     this.#clearStartTimer(active);
     if (active.cleaned) return;
     active.cleaned = true;
-    if (this.#workers.get(active.task.threadId) === active) {
-      this.#workers.delete(active.task.threadId);
-    }
     try {
       await active.worker.close();
     } catch (error) {
       console.error(`关闭会话 Worker 失败：${errorMessage(error)}`);
     } finally {
+      // close() 会同步取消 broker 中的待答项。保留 active 映射到这里，Manager
+      // 才能把对应 resolved 事件广播给所有设备。
+      if (this.#workers.get(active.task.threadId) === active) {
+        this.#workers.delete(active.task.threadId);
+      }
       await this.#releaseTaskAttachmentLease(active.task.id);
       this.#locks.release(active.task.projectId, active.ownerId);
       this.#schedule();
+    }
+  }
+
+  #cancelPendingRequests(active: ActiveWorker): void {
+    try {
+      active.worker.approvals.cancelThread(active.task.threadId);
+    } catch (error) {
+      console.error(`取消会话审批失败：${errorMessage(error)}`);
+    }
+    try {
+      active.worker.interactions.cancelThread(active.task.threadId);
+    } catch (error) {
+      console.error(`取消会话交互失败：${errorMessage(error)}`);
     }
   }
 
@@ -1478,6 +1509,7 @@ export class SessionWorkerManager {
       if (!active.finishing) {
         active.interruptionReason = "user_requested";
         active.finishing = true;
+        this.#cancelPendingRequests(active);
         const stored = this.#store.tryFinish(
           task.id,
           ["queued", "running", "waiting_for_permission"],
@@ -1783,13 +1815,222 @@ function publicApproval(
   approval: ApprovalRequest,
   mappings: readonly AttachmentDisplayMapping[] = [],
 ): Record<string, unknown> {
-  return redactKnownAttachmentPathsDeep({
+  const base = {
     id: approval.id,
     kind: approval.kind,
-    reason: approval.reason,
+    reason: publicApprovalText(approval.reason, mappings),
     startedAtMs: approval.startedAtMs,
-    ...(approval.kind === "command" ? { network: approval.network } : {}),
-  }, mappings);
+  };
+  if (approval.kind === "command") {
+    return {
+      ...base,
+      commandSummary: publicCommandSummary(approval.command, mappings),
+      network: approval.network,
+      canApprove: approvalCanBeShownSafely(approval),
+    };
+  }
+  if (approval.kind === "permissions") {
+    const summary = publicPermissionSummary(approval.permissions, mappings);
+    return {
+      ...base,
+      permissionSummary: summary.lines,
+      canApprove: summary.complete,
+    };
+  }
+  return { ...base, canApprove: true };
+}
+
+function publicSourceSession(active: ActiveWorker): { id: string; title: string } {
+  return {
+    id: active.task.threadId,
+    title: active.worker.opened.session.title,
+  };
+}
+
+function approvalCanBeShownSafely(approval: ApprovalRequest): boolean {
+  if (approval.kind === "command") {
+    return publicCommandSummary(approval.command, []).length > 0 || approval.network !== null;
+  }
+  if (approval.kind === "permissions") {
+    return publicPermissionSummary(approval.permissions, []).complete;
+  }
+  return true;
+}
+
+function publicApprovalText(
+  value: string | null,
+  mappings: readonly AttachmentDisplayMapping[],
+): string | null {
+  if (!value) return null;
+  const summary = redactPathBearingTokens(redactKnownAttachmentPaths(value, mappings));
+  return clipPublicSummary(summary);
+}
+
+function publicCommandSummary(
+  value: string | null,
+  mappings: readonly AttachmentDisplayMapping[],
+): string {
+  if (!value?.trim()) return "";
+  const summary = redactPathBearingTokens(redactKnownAttachmentPaths(value.trim(), mappings));
+  return clipPublicSummary(summary);
+}
+
+function redactPathBearingTokens(value: string): string {
+  return value.split(/(\s+)/u).map((token) => {
+    if (!token || /^\s+$/u.test(token)) return token;
+    if (token.includes("/") || token.includes("\\")) return "‹主机路径›";
+    const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=/u.exec(token);
+    if (assignment) return `${assignment[1]}=‹值已隐藏›`;
+    return token;
+  }).join("");
+}
+
+function publicPermissionSummary(
+  permissions: Record<string, unknown>,
+  mappings: readonly AttachmentDisplayMapping[],
+): { lines: string[]; complete: boolean } {
+  const lines: string[] = [];
+  let complete = Object.keys(permissions).every((key) =>
+    key === "network" || key === "fileSystem"
+  );
+
+  if (permissions.network !== null && permissions.network !== undefined) {
+    const network = asObject(permissions.network);
+    if (!network || !Object.keys(network).every((key) => key === "enabled")) {
+      complete = false;
+    } else if (network.enabled === true) {
+      lines.push("网络：允许额外网络访问");
+    } else if (network.enabled === false) {
+      lines.push("网络：不增加网络访问");
+    } else {
+      complete = false;
+    }
+  }
+
+  if (permissions.fileSystem !== null && permissions.fileSystem !== undefined) {
+    const fileSystem = asObject(permissions.fileSystem);
+    if (!fileSystem || !Object.keys(fileSystem).every((key) =>
+      key === "read" || key === "write" || key === "entries" || key === "globScanMaxDepth"
+    )) {
+      complete = false;
+    } else {
+      if (
+        fileSystem.globScanMaxDepth !== null &&
+        fileSystem.globScanMaxDepth !== undefined &&
+        (
+          typeof fileSystem.globScanMaxDepth !== "number" ||
+          !Number.isSafeInteger(fileSystem.globScanMaxDepth) ||
+          fileSystem.globScanMaxDepth < 0
+        )
+      ) {
+        complete = false;
+      }
+      for (const [key, label] of [["read", "读取"], ["write", "写入"]] as const) {
+        const values = fileSystem[key];
+        if (values === null || values === undefined) continue;
+        if (!Array.isArray(values)) {
+          complete = false;
+          continue;
+        }
+        for (const value of values) {
+          if (typeof value !== "string") {
+            complete = false;
+            continue;
+          }
+          lines.push(`${label}：${publicPathScope(value, mappings)}`);
+        }
+      }
+      if (fileSystem.entries !== null && fileSystem.entries !== undefined) {
+        if (!Array.isArray(fileSystem.entries)) {
+          complete = false;
+        } else {
+          for (const rawEntry of fileSystem.entries) {
+            const entry = asObject(rawEntry);
+            const access = entry?.access;
+            const scope = entry ? publicFileSystemEntryScope(entry.path, mappings) : null;
+            if (
+              !entry || (access !== "read" && access !== "write" && access !== "deny") ||
+              scope === null || !Object.keys(entry).every((key) => key === "path" || key === "access")
+            ) {
+              complete = false;
+              continue;
+            }
+            const label = access === "read" ? "读取" : access === "write" ? "写入" : "禁止";
+            lines.push(`${label}：${scope}`);
+          }
+        }
+      }
+    }
+  }
+
+  if (lines.length === 0) complete = false;
+  if (lines.length > 20) complete = false;
+  return {
+    lines: lines.slice(0, 20).concat(lines.length > 20 ? [`另有 ${lines.length - 20} 项范围`] : []),
+    complete,
+  };
+}
+
+function publicFileSystemEntryScope(
+  value: unknown,
+  mappings: readonly AttachmentDisplayMapping[],
+): string | null {
+  const path = asObject(value);
+  if (!path || typeof path.type !== "string") return null;
+  if (
+    path.type === "path" && typeof path.path === "string" &&
+    Object.keys(path).every((key) => key === "type" || key === "path")
+  ) {
+    return publicPathScope(path.path, mappings);
+  }
+  if (
+    path.type === "glob_pattern" && typeof path.pattern === "string" &&
+    Object.keys(path).every((key) => key === "type" || key === "pattern")
+  ) {
+    return `匹配 ${publicPathScope(path.pattern, mappings)}`;
+  }
+  if (
+    path.type !== "special" ||
+    !Object.keys(path).every((key) => key === "type" || key === "value")
+  ) return null;
+  const special = asObject(path.value);
+  if (!special || typeof special.kind !== "string") return null;
+  if (
+    special.kind === "root" && Object.keys(special).every((key) => key === "kind")
+  ) return "文件系统根目录";
+  if (
+    special.kind === "minimal" && Object.keys(special).every((key) => key === "kind")
+  ) return "最小系统范围";
+  if (
+    (special.kind === "tmpdir" || special.kind === "slash_tmp") &&
+    Object.keys(special).every((key) => key === "kind")
+  ) return "临时目录";
+  if (special.kind === "project_roots") {
+    if (!Object.keys(special).every((key) => key === "kind" || key === "subpath")) return null;
+    return typeof special.subpath === "string" && special.subpath
+      ? `项目目录/${publicPathScope(special.subpath, mappings)}`
+      : "项目目录";
+  }
+  // unknown 携带的宿主路径可以安全隐藏，但隐藏后无法让用户判断授权范围。
+  if (special.kind === "unknown") return null;
+  return null;
+}
+
+function publicPathScope(
+  value: string,
+  mappings: readonly AttachmentDisplayMapping[],
+): string {
+  const attachment = redactKnownAttachmentPaths(value, mappings);
+  if (attachment !== value) return attachment;
+  const normalized = value.replaceAll("\\", "/").replace(/\/+$/u, "");
+  if (!normalized) return "文件系统根目录";
+  const name = normalized.split("/").at(-1)?.trim();
+  return name ? `…/${clipPublicSummary(name, 80)}` : "主机路径（完整路径已隐藏）";
+}
+
+function clipPublicSummary(value: string, limit = 240): string {
+  const normalized = value.replace(/\s+/gu, " ").trim();
+  return normalized.length <= limit ? normalized : `${normalized.slice(0, limit - 1)}…`;
 }
 
 function publicInteraction(

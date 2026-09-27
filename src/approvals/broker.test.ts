@@ -11,6 +11,7 @@ import {
 
 class FakeTransport implements ApprovalTransport {
   readonly responses: Array<{ id: RequestId; result: unknown }> = [];
+  failResponses = false;
   readonly #requestListeners = new Set<AppServerMessageListener>();
   readonly #notificationListeners = new Set<AppServerMessageListener>();
 
@@ -25,6 +26,7 @@ class FakeTransport implements ApprovalTransport {
   }
 
   respondToServerRequest(id: RequestId, result: unknown): void {
+    if (this.failResponses) throw new Error("测试连接已经退出");
     this.responses.push({ id, result });
   }
 
@@ -147,6 +149,26 @@ test("cancels pending approvals for a disconnected thread", () => {
     { id: 3, result: { decision: "cancel" } },
   ]);
   assert.equal(broker.cancelThread("thread-1"), 0);
+});
+
+test("resolves pending UI state even when cancellation cannot reach app-server", () => {
+  const transport = new FakeTransport();
+  const broker = new ApprovalBroker(transport);
+  const events: ApprovalEvent[] = [];
+  broker.onEvent((event) => events.push(event));
+  transport.request(commandRequest("request-command"));
+  const requested = events[0];
+  assert.equal(requested?.type, "approval_requested");
+  if (requested?.type !== "approval_requested") return;
+
+  transport.failResponses = true;
+  assert.throws(() => broker.cancelThread("thread-1"), /连接已经退出/u);
+  assert.deepEqual(events[1], {
+    type: "approval_resolved",
+    approvalId: requested.approval.id,
+    resolution: "cancelled",
+  });
+  assert.equal(broker.answer(requested.approval.id, "decline"), false);
 });
 
 test("grants only the permission profile requested for this turn", () => {

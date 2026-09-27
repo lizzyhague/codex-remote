@@ -151,18 +151,29 @@ export class SessionWorker {
     if (this.#closing) return;
     this.#closing = true;
     this.#unsubscribeStream();
-    this.#unsubscribeApprovals();
-    this.#unsubscribeInteractions();
     this.commands.dispose();
     this.turns.dispose();
+    let cancellationError: unknown = null;
     try {
-      this.approvals.cancelAll();
-      this.interactions.cancelThread(this.threadId);
+      // Manager 仍订阅着 broker；先终结待答项，让所有浏览器都能收口卡片。
+      try {
+        this.approvals.cancelAll();
+      } catch (error) {
+        cancellationError = error;
+      }
+      try {
+        this.interactions.cancelThread(this.threadId);
+      } catch (error) {
+        cancellationError ??= error;
+      }
     } finally {
+      this.#unsubscribeApprovals();
+      this.#unsubscribeInteractions();
       this.approvals.dispose();
       this.interactions.dispose();
       await this.client.close();
     }
+    if (cancellationError) throw cancellationError;
   }
 }
 
