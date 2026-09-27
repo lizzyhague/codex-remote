@@ -11,12 +11,14 @@ function section(start, end) {
 test("requested true keeps the stopping state until the task completes", async () => {
   const notices = [];
   const resumes = [];
+  const requests = [];
   const button = { disabled: false, textContent: "停止", classList: { toggle() {} } };
   const context = vm.createContext({
     state: {
       running: true,
       stopping: false,
       controlsTask: true,
+      projectId: "project-1",
       sessionId: "session-1",
       authenticated: true,
       connectionReady: true,
@@ -24,7 +26,10 @@ test("requested true keeps the stopping state until the task completes", async (
     TEMPORARY_WARNING: { lifetime: "temporary", tone: "warning" },
     TEMPORARY_ERROR: { lifetime: "temporary", tone: "error" },
     elements: { taskButton: button },
-    request: async () => ({ requested: true }),
+    request: async (type, payload) => {
+      requests.push({ type, payload });
+      return { requested: true };
+    },
     resumeSession: async (sessionId) => {
       resumes.push({ sessionId });
     },
@@ -47,6 +52,10 @@ test("requested true keeps the stopping state until the task completes", async (
   assert.equal(button.textContent, "停止中");
   assert.equal(notices.length, 0);
   assert.equal(resumes.length, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(requests)), [{
+    type: "task.stop",
+    payload: { projectId: "project-1", sessionId: "session-1" },
+  }]);
 });
 
 test("requested false resyncs the session and does not clear running itself", async () => {
@@ -57,6 +66,7 @@ test("requested false resyncs the session and does not clear running itself", as
       running: true,
       stopping: false,
       controlsTask: true,
+      projectId: "project-1",
       sessionId: "session-1",
       authenticated: true,
       connectionReady: true,
@@ -88,6 +98,7 @@ test("a failed stop request restores the button and keeps the task running", asy
       running: true,
       stopping: false,
       controlsTask: true,
+      projectId: "project-1",
       sessionId: "session-1",
       authenticated: true,
       connectionReady: true,
@@ -126,6 +137,7 @@ test("a compaction past its instruction is refused without resyncing the session
       running: true,
       stopping: false,
       controlsTask: true,
+      projectId: "project-1",
       sessionId: "session-1",
       authenticated: true,
       connectionReady: true,

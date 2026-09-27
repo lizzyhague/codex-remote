@@ -90,6 +90,8 @@ test("a rewind names the visible turn and restores its draft after reloading his
 
   assert.equal(menuResult, null);
   assert.deepEqual(h.requests.map(({ type }) => type), ["command.run", "session.resume"]);
+  assert.equal(h.requests[0].payload.projectId, "project-1");
+  assert.equal(h.requests[0].payload.sessionId, "session-1");
   assert.equal(h.requests[0].payload.targetTurnId, "turn-2");
   assert.equal(h.context.elements.messageInput.value, "原来的问题");
   assert.equal(h.context.state.pendingAttachments[0].id, "attachment-1");
@@ -124,6 +126,8 @@ test("a PWA reopen retries the same turn instead of selecting the new latest tur
       : { session: { id: "session-1" }, tasks: [] });
 
   assert.equal(await reopened.context.retryPendingRewindForCurrentSession(), true);
+  assert.equal(reopened.requests[0].payload.projectId, "project-1");
+  assert.equal(reopened.requests[0].payload.sessionId, "session-1");
   assert.equal(reopened.requests[0].payload.targetTurnId, "turn-2");
   assert.equal(reopened.context.elements.messageInput.value, "原来的问题");
   assert.equal(storage.has("rewind-outbox"), false);

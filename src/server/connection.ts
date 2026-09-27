@@ -230,7 +230,7 @@ export class BrowserConnection {
       case "settings.update":
         return this.#requireSettings().update(request.developerInstructions);
       case "session.metrics": {
-        const { sessionId } = this.#requireSession();
+        const { sessionId } = this.#requireSessionTarget(request);
         return {
           sessionId,
           metrics: await this.#services.workers.metrics.read(
@@ -240,20 +240,20 @@ export class BrowserConnection {
         };
       }
       case "history.older":
-        return this.#loadOlderHistory();
+        return this.#loadOlderHistory(request);
       case "commands.list":
         return { commands: COMMAND_CATALOG };
       case "command.options": {
-        const { projectId, sessionId } = this.#requireSession();
+        const { projectId, sessionId } = this.#requireSessionTarget(request);
         return this.#services.workers.commandOptions(projectId, sessionId, request.command);
       }
       case "command.run":
         return this.#runCommand(request);
       case "attachment.ticket.create": {
+        const { projectId, sessionId } = this.#requireSessionTarget(request);
         if (!this.#services.uploads) {
           throw new BrowserRequestError("uploads_unavailable", "当前后端没有启用附件服务。");
         }
-        const { projectId, sessionId } = this.#requireSession();
         return this.#services.uploads.createTicket({
           caller: "codex",
           projectId,
@@ -264,7 +264,7 @@ export class BrowserConnection {
         });
       }
       case "message.send": {
-        const { projectId, sessionId } = this.#requireSession();
+        const { projectId, sessionId } = this.#requireSessionTarget(request);
         return this.#services.workers.enqueueMessageWithAttachments(
           projectId,
           sessionId,
@@ -274,7 +274,7 @@ export class BrowserConnection {
         );
       }
       case "task.stop":
-        return this.#services.workers.stopTask(this.#requireSession().sessionId);
+        return this.#services.workers.stopTask(this.#requireSessionTarget(request).sessionId);
       case "approval.answer":
         return this.#services.workers.answerApproval(request.approvalId, request.decision);
       case "interaction.answer":
@@ -446,8 +446,10 @@ export class BrowserConnection {
     return this.#services.workers.peekAttachmentMappings?.(this.#sessionId) ?? [];
   }
 
-  #loadOlderHistory(): { tasks: ReturnType<typeof toBrowserTasks>; hasOlder: boolean } {
-    this.#requireSession();
+  #loadOlderHistory(
+    request: Extract<BrowserRequest, { type: "history.older" }>,
+  ): { tasks: ReturnType<typeof toBrowserTasks>; hasOlder: boolean } {
+    this.#requireSessionTarget(request);
     const start = Math.max(0, this.#olderTurns.length - HISTORY_PAGE_SIZE);
     const turns = this.#olderTurns.slice(start);
     this.#olderTurns.length = start;
@@ -460,7 +462,7 @@ export class BrowserConnection {
   async #runCommand(
     request: Extract<BrowserRequest, { type: "command.run" }>,
   ): Promise<unknown> {
-    const { projectId, sessionId } = this.#requireSession();
+    const { projectId, sessionId } = this.#requireSessionTarget(request);
     return this.#services.workers.runCommand(
       projectId,
       sessionId,
@@ -550,6 +552,22 @@ export class BrowserConnection {
       throw new BrowserRequestError("session_not_open", "请先新建或恢复一个会话。");
     }
     return { projectId: this.#projectId, sessionId: this.#sessionId };
+  }
+
+  #requireSessionTarget(
+    target: { projectId: string; sessionId: string },
+  ): { projectId: string; sessionId: string } {
+    const current = this.#requireSession();
+    if (
+      target.projectId !== current.projectId ||
+      target.sessionId !== current.sessionId
+    ) {
+      throw new BrowserRequestError(
+        "session_target_mismatch",
+        "请求的会话已经不是当前打开的会话。请重新打开原会话后重试。",
+      );
+    }
+    return current;
   }
 
   /** 放开这个连接对当前会话的占用。已经接受的后台任务不受影响。 */

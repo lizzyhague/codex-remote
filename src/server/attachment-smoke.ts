@@ -39,12 +39,12 @@ async function main(): Promise<void> {
     if (typeof session?.id !== "string") throw new Error("新会话没有返回 ID。");
     cleanupSessionId = session.id;
 
-    const imageAttachment = await uploadAttachment(socket, baseUrl, {
+    const imageAttachment = await uploadAttachment(socket, baseUrl, project.id, session.id, {
       name: "ui-fixture.png",
       mime: "image/png",
       bytes: image,
     });
-    const noteAttachment = await uploadAttachment(socket, baseUrl, {
+    const noteAttachment = await uploadAttachment(socket, baseUrl, project.id, session.id, {
       name: "note.txt",
       mime: "text/plain",
       bytes: note,
@@ -53,6 +53,8 @@ async function main(): Promise<void> {
     const clientMessageId = randomUUID();
     const completion = socket.waitForTaskCompletion(clientMessageId, timeoutMs);
     const accepted = asObject(await socket.request("message.send", {
+      projectId: project.id,
+      sessionId: session.id,
       clientMessageId,
       text: [
         "这是附件路径输入的自动冒烟测试。请使用可用工具打开图片和文本文件。",
@@ -123,9 +125,13 @@ type UploadFixture = { name: string; mime: string; bytes: Buffer };
 async function uploadAttachment(
   socket: SmokeSocket,
   remoteUrl: string,
+  projectId: string,
+  sessionId: string,
   fixture: UploadFixture,
 ): Promise<Record<string, unknown>> {
   const ticket = asObject(await socket.request("attachment.ticket.create", {
+    projectId,
+    sessionId,
     originalName: fixture.name,
     declaredMime: fixture.mime,
     expectedSize: fixture.bytes.byteLength,

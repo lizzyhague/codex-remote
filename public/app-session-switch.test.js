@@ -161,15 +161,20 @@ test("a failed switch falls back to no session instead of an empty one", async (
 function loadOlderContext(navigationBusy) {
   const requests = [];
   const context = vm.createContext({
-    state: { sessionId: "session-1", authenticated: true, navigationBusy },
+    state: {
+      projectId: "project-1",
+      sessionId: "session-1",
+      authenticated: true,
+      navigationBusy,
+    },
     TEMPORARY_ERROR: { lifetime: "temporary", tone: "error" },
     elements: {
       loadOlderButton: { disabled: false, textContent: "加载更早" },
       historyLoader: { hidden: true, after() {} },
       timeline: { scrollHeight: 100, scrollTop: 0, children: [] },
     },
-    request: async (type) => {
-      requests.push(type);
+    request: async (type, payload) => {
+      requests.push({ type, payload });
       return { tasks: [], hasOlder: false };
     },
     renderTasks: () => 0,
@@ -185,10 +190,13 @@ test("loading older history is refused while a session switch is in flight", asy
   await busy.context.loadOlderHistory();
   assert.deepEqual(busy.requests, []);
 
-  // 后端翻页用的是连接当前打开的会话，所以这一页只有在没有切换时才安全。
+  // 后端会核对点击时看到的项目和会话，不会在导航后推进新会话的游标。
   const idle = loadOlderContext(false);
   await idle.context.loadOlderHistory();
-  assert.deepEqual(idle.requests, ["history.older"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(idle.requests)), [{
+    type: "history.older",
+    payload: { projectId: "project-1", sessionId: "session-1" },
+  }]);
 });
 
 test("session loading states explain what the backend is waiting for", () => {

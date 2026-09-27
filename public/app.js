@@ -1385,10 +1385,12 @@ function renderTasks(tasks) {
 }
 
 async function loadOlderHistory() {
-  if (!state.sessionId || !state.authenticated || elements.loadOlderButton.disabled) return;
-  // 切换会话时这个按钮已经随时间线一起撤下去了，这里是第二道：后端翻页用的是
-  // 连接当前打开的会话，切换先到的话，被翻掉的是新会话的一页。
+  if (!state.projectId || !state.sessionId || !state.authenticated ||
+      elements.loadOlderButton.disabled) return;
+  // 切换会话时这个按钮已经随时间线一起撤下去了；这里仍拒绝新的点击。
+  // 已发出的请求另外携带它当时看见的项目和会话，后端不匹配就不推进游标。
   if (state.navigationBusy) return;
+  const projectId = state.projectId;
   const sessionId = state.sessionId;
   const oldHeight = elements.timeline.scrollHeight;
   const oldTop = elements.timeline.scrollTop;
@@ -1397,8 +1399,8 @@ async function loadOlderHistory() {
   elements.loadOlderButton.textContent = "加载中……";
 
   try {
-    const data = await request("history.older");
-    if (sessionId !== state.sessionId) return;
+    const data = await request("history.older", { projectId, sessionId });
+    if (projectId !== state.projectId || sessionId !== state.sessionId) return;
     renderTasks(Array.isArray(data?.tasks) ? data.tasks : []);
     const addedNodes = [...elements.timeline.children]
       .filter((node) => !existingNodes.has(node));
@@ -1420,9 +1422,12 @@ async function loadOlderHistory() {
 async function sendMessage() {
   const text = elements.messageInput.value.trim();
   const attachments = readyAttachments();
-  if ((!text && attachments.length === 0) || !state.sessionId || state.running ||
+  if ((!text && attachments.length === 0) || !state.projectId || !state.sessionId || state.running ||
     !state.connectionReady || hasUnfinishedUploads()) return;
   if (attachments.length === 0 && await slashCommands.submit(text)) return;
+  const projectId = state.projectId;
+  const sessionId = state.sessionId;
+  if (!projectId || !sessionId) return;
 
   hideEmpty();
   const displayText = displayTextWithAttachments(text, attachments);
@@ -1441,13 +1446,15 @@ async function sendMessage() {
   const clientMessageId = createClientMessageId();
   saveOutbox({
     clientMessageId,
-    projectId: state.projectId,
-    sessionId: state.sessionId,
+    projectId,
+    sessionId,
     text,
     attachmentIds: attachments.map((attachment) => attachment.id),
   });
   try {
     await request("message.send", {
+      projectId,
+      sessionId,
       text,
       clientMessageId,
       attachmentIds: attachments.map((attachment) => attachment.id),
@@ -1549,6 +1556,8 @@ async function startUpload(draft) {
   updateControls();
   try {
     const ticket = await request("attachment.ticket.create", {
+      projectId,
+      sessionId,
       originalName: file.name || "未命名文件",
       declaredMime: file.type || "application/octet-stream",
       expectedSize: file.size,
@@ -1683,12 +1692,15 @@ function displayTextWithAttachments(text, attachments) {
 }
 
 async function stopTask() {
-  if (!state.running || !state.controlsTask || state.stopping) return;
+  if (!state.projectId || !state.sessionId || !state.running ||
+      !state.controlsTask || state.stopping) return;
+  const projectId = state.projectId;
+  const sessionId = state.sessionId;
   state.stopping = true;
   elements.taskButton.disabled = true;
   elements.taskButton.textContent = "停止中";
   try {
-    const result = await request("task.stop");
+    const result = await request("task.stop", { projectId, sessionId });
     if (result?.requested === false) {
       state.stopping = false;
       // 压缩指令已经发给模型，后端不会去打断它；时间线没有变化，不必重新载入。
@@ -2461,11 +2473,21 @@ function approvalScopeLines(approval) {
 
 async function requestSlashCommand(type, payload = {}) {
   if (type !== "command.run" || payload.command !== "rewind") {
-    return request(type, payload);
+    if (type !== "command.run") return request(type, payload);
+    if (!state.projectId || !state.sessionId) {
+      throw new Error("请先打开一个会话。");
+    }
+    return request(type, {
+      ...payload,
+      projectId: state.projectId,
+      sessionId: state.sessionId,
+    });
   }
   const pending = pendingRewindForCurrentSession() ?? beginPendingRewind();
   const result = await request("command.run", {
     ...payload,
+    projectId: pending.projectId,
+    sessionId: pending.sessionId,
     targetTurnId: pending.targetTurnId,
   });
   await applyRewindResult(result, pending);
@@ -2552,6 +2574,8 @@ async function retryPendingRewindForCurrentSession() {
   updateControls();
   try {
     const result = await request("command.run", {
+      projectId: pending.projectId,
+      sessionId: pending.sessionId,
       command: "rewind",
       option: null,
       argument: null,
@@ -2638,6 +2662,8 @@ async function retryOutboxForCurrentSession() {
   for (const outbox of matches) {
     try {
       await request("message.send", {
+        projectId: outbox.projectId,
+        sessionId: outbox.sessionId,
         text: outbox.text,
         clientMessageId: outbox.clientMessageId,
         attachmentIds: outbox.attachmentIds,
@@ -3412,16 +3438,18 @@ function slashMenuElement() {
 let metricsRequestPending = false;
 let metricsRefreshQueued = false;
 async function refreshSessionMetrics() {
-  if (!state.authenticated || !state.sessionId) return;
+  if (!state.authenticated || !state.projectId || !state.sessionId) return;
   metricsRefreshQueued = true;
   if (document.hidden || metricsRequestPending) return;
   metricsRefreshQueued = false;
+  const projectId = state.projectId;
   const sessionId = state.sessionId;
   const generation = state.generation;
   metricsRequestPending = true;
   try {
-    const data = await request("session.metrics");
-    if (state.sessionId !== sessionId || state.generation !== generation) return;
+    const data = await request("session.metrics", { projectId, sessionId });
+    if (state.projectId !== projectId || state.sessionId !== sessionId ||
+        state.generation !== generation) return;
     state.metrics = data.sessionId === sessionId ? data.metrics : null;
     const session = findSessionSummary(sessionId);
     if (
@@ -3433,7 +3461,8 @@ async function refreshSessionMetrics() {
       renderSessionList();
     }
   } catch {
-    if (state.sessionId !== sessionId || state.generation !== generation) return;
+    if (state.projectId !== projectId || state.sessionId !== sessionId ||
+        state.generation !== generation) return;
     state.metrics = null;
   } finally {
     metricsRequestPending = false;
@@ -3501,12 +3530,13 @@ function closeComposerPicker() {
 }
 
 async function refreshPickerLabels() {
+  const projectId = state.projectId;
   const sessionId = state.sessionId;
-  if (!sessionId || !state.authenticated) return;
+  if (!projectId || !sessionId || !state.authenticated) return;
   await Promise.all(["model", "permissions"].map(async command => {
     try {
-      const data = await request("command.options", { command });
-      if (state.sessionId !== sessionId) return;
+      const data = await request("command.options", { projectId, sessionId, command });
+      if (state.projectId !== projectId || state.sessionId !== sessionId) return;
       const selected = data.items?.find(item => item.selected);
       const label = selected?.label || "默认";
       const kind = command === "model" ? "model" : "permission";
@@ -3575,22 +3605,31 @@ async function openComposerPicker(command) {
   if (wasOpen) return;
   trigger.setAttribute("aria-expanded", "true");
   const pickerGeneration = state.pickerGeneration;
+  const projectId = state.projectId;
   const sessionId = state.sessionId;
+  if (!projectId || !sessionId) return;
   try {
-    const data = await request("command.options", { command });
-    if (state.sessionId !== sessionId || state.pickerGeneration !== pickerGeneration) return;
+    const data = await request("command.options", { projectId, sessionId, command });
+    if (state.projectId !== projectId || state.sessionId !== sessionId ||
+        state.pickerGeneration !== pickerGeneration) return;
     const items = data.items || [];
     const selected = items.find(item => item.selected);
     composerPickers[kind].label.textContent = selected?.label || "默认";
     const choose = async (item, argument = null) => {
-      if (state.sessionId !== sessionId || trigger.disabled) return;
+      if (state.projectId !== projectId || state.sessionId !== sessionId || trigger.disabled) return;
       if (item.danger && !window.confirm("完全访问会让 Codex 不受项目沙箱限制地操作主机。确定只为当前会话选择吗？")) return;
       closeComposerPicker();
       state.commandBusy = true;
       updateControls();
       try {
-        const result = await request("command.run", { command, option: item.id, argument });
-        if (state.sessionId === sessionId) addCommandResult(result);
+        const result = await request("command.run", {
+          projectId,
+          sessionId,
+          command,
+          option: item.id,
+          argument,
+        });
+        if (state.projectId === projectId && state.sessionId === sessionId) addCommandResult(result);
         await refreshPickerLabels();
       } catch (error) { showNotice(errorMessage(error), TEMPORARY_ERROR); }
       finally { state.commandBusy = false; updateControls(); trigger.focus(); }

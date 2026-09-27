@@ -8,6 +8,8 @@ import {
   ProtocolError,
 } from "./protocol.ts";
 
+const SESSION_TARGET = { projectId: "projects/demo", sessionId: "session-1" };
+
 test("parses the small stable browser protocol", () => {
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "sessions.list",
@@ -26,11 +28,13 @@ test("parses the small stable browser protocol", () => {
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "message.send",
     requestId: "send-1",
+    ...SESSION_TARGET,
     clientMessageId: "018-message",
     text: "后台执行",
   })), {
     type: "message.send",
     requestId: "send-1",
+    ...SESSION_TARGET,
     clientMessageId: "018-message",
     text: "后台执行",
     attachmentIds: [],
@@ -38,12 +42,14 @@ test("parses the small stable browser protocol", () => {
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "attachment.ticket.create",
     requestId: "ticket-1",
+    ...SESSION_TARGET,
     originalName: "screen.png",
     declaredMime: "image/png",
     expectedSize: 123,
   })), {
     type: "attachment.ticket.create",
     requestId: "ticket-1",
+    ...SESSION_TARGET,
     originalName: "screen.png",
     declaredMime: "image/png",
     expectedSize: 123,
@@ -51,12 +57,14 @@ test("parses the small stable browser protocol", () => {
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "message.send",
     requestId: "send-attachment",
+    ...SESSION_TARGET,
     clientMessageId: "message-attachment",
     text: "",
     attachmentIds: ["attachment-1", "attachment-1"],
   })), {
     type: "message.send",
     requestId: "send-attachment",
+    ...SESSION_TARGET,
     clientMessageId: "message-attachment",
     text: "",
     attachmentIds: ["attachment-1"],
@@ -129,9 +137,11 @@ test("parses the small stable browser protocol", () => {
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "history.older",
     requestId: "history-1",
+    ...SESSION_TARGET,
   })), {
     type: "history.older",
     requestId: "history-1",
+    ...SESSION_TARGET,
   });
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "session.resume",
@@ -160,12 +170,14 @@ test("parses the small stable browser protocol", () => {
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "command.run",
     requestId: "command-1",
+    ...SESSION_TARGET,
     command: "model",
     option: "gpt-test",
     argument: null,
   })), {
     type: "command.run",
     requestId: "command-1",
+    ...SESSION_TARGET,
     command: "model",
     option: "gpt-test",
     argument: null,
@@ -174,6 +186,7 @@ test("parses the small stable browser protocol", () => {
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "command.run",
     requestId: "rewind-1",
+    ...SESSION_TARGET,
     command: "rewind",
     option: null,
     argument: null,
@@ -181,6 +194,7 @@ test("parses the small stable browser protocol", () => {
   })), {
     type: "command.run",
     requestId: "rewind-1",
+    ...SESSION_TARGET,
     command: "rewind",
     option: null,
     argument: null,
@@ -222,6 +236,17 @@ test("rejects arbitrary paths and unknown operations", () => {
     })),
     (error: unknown) => error instanceof ProtocolError && error.code === "invalid_field",
   );
+  const projected = parseBrowserRequest(JSON.stringify({
+    type: "message.send",
+    requestId: "path-extra",
+    ...SESSION_TARGET,
+    text: "hello",
+    cwd: "/home/private/project",
+    path: "/home/private/project/note.txt",
+  }));
+  assert.equal("cwd" in projected, false);
+  assert.equal("path" in projected, false);
+  assert.doesNotMatch(JSON.stringify(projected), /\/home\/private/u);
   assert.throws(
     () => parseBrowserRequest(JSON.stringify({ type: "shell.exec", requestId: "r2" })),
     (error: unknown) => error instanceof ProtocolError && error.code === "unknown_message_type",
@@ -237,6 +262,7 @@ test("rejects arbitrary paths and unknown operations", () => {
     () => parseBrowserRequest(JSON.stringify({
       type: "command.run",
       requestId: "bad-command",
+      ...SESSION_TARGET,
       command: "not-real",
     })),
     (error: unknown) => error instanceof ProtocolError && error.code === "unknown_command",
@@ -278,12 +304,44 @@ test("rejects arbitrary paths and unknown operations", () => {
   );
 });
 
+test("requires an explicit project and session on every current-session request", () => {
+  const requests = [
+    { type: "session.metrics" },
+    { type: "history.older" },
+    { type: "command.options", command: "model" },
+    { type: "command.run", command: "compact" },
+    {
+      type: "attachment.ticket.create",
+      originalName: "note.txt",
+      declaredMime: "text/plain",
+      expectedSize: 1,
+    },
+    { type: "message.send", text: "hello" },
+    { type: "task.stop" },
+  ];
+  for (const [index, request] of requests.entries()) {
+    for (const missing of ["projectId", "sessionId"] as const) {
+      const target: Partial<typeof SESSION_TARGET> = { ...SESSION_TARGET };
+      delete target[missing];
+      assert.throws(
+        () => parseBrowserRequest(JSON.stringify({
+          ...request,
+          requestId: `target-${index}-${missing}`,
+          ...target,
+        })),
+        (error: unknown) => error instanceof ProtocolError && error.code === "invalid_field",
+      );
+    }
+  }
+});
+
 test("rejects a message that is too long instead of dropping the connection", () => {
   // 40 万个汉字在 UTF-8 下超过 1 MiB，但整帧仍小于 ws 的 2 MiB 上限，
   // 所以浏览器应该收到一条可读的错误，而不是被直接断开。
   const source = JSON.stringify({
     type: "message.send",
     requestId: "too-long",
+    ...SESSION_TARGET,
     text: "字".repeat(400_000),
   });
   assert.ok(Buffer.byteLength(source, "utf8") < MAX_BROWSER_MESSAGE_BYTES);
@@ -295,6 +353,7 @@ test("rejects a message that is too long instead of dropping the connection", ()
   const accepted = parseBrowserRequest(JSON.stringify({
     type: "message.send",
     requestId: "ok",
+    ...SESSION_TARGET,
     text: "字".repeat(1_000),
   }));
   assert.equal(accepted.type, "message.send");
@@ -302,6 +361,7 @@ test("rejects a message that is too long instead of dropping the connection", ()
     () => parseBrowserRequest(JSON.stringify({
       type: "message.send",
       requestId: "empty",
+      ...SESSION_TARGET,
       text: "  ",
       attachmentIds: [],
     })),
@@ -314,7 +374,7 @@ test("rejects removed usage and status commands", () => {
   for (const command of ["usage", "status"]) {
     for (const type of ["command.run", "command.options"]) {
       assert.throws(() => parseBrowserRequest(JSON.stringify({
-        type, requestId: "removed-command", command,
+        type, requestId: "removed-command", ...SESSION_TARGET, command,
       })));
     }
   }

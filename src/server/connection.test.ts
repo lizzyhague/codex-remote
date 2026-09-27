@@ -465,7 +465,10 @@ test("opens a loading session only for browsers that understand loading states",
   });
   assert.equal(workers.attached.get("phone"), "session-loading");
 
-  connection.receiveText(request("task.stop", "stop-loading"));
+  connection.receiveText(request("task.stop", "stop-loading", {
+    projectId: "projects/demo",
+    sessionId: "session-loading",
+  }));
   await connection.whenIdle();
   assert.equal(workers.calls.some((call) =>
     call.method === "stopTask" && call.args[0] === "session-loading"
@@ -602,14 +605,20 @@ test("sends only the latest 20 turns and loads older history in pages", async (c
   assert.equal((first.tasks as JsonObject[])[0]?.id, "turn-26");
   assert.equal(first.hasOlder, true);
 
-  connection.receiveText(request("history.older", "older-1"));
+  connection.receiveText(request("history.older", "older-1", {
+    projectId: "projects/demo",
+    sessionId: "session-long",
+  }));
   await connection.whenIdle();
   const second = data(socket.last("response"));
   assert.equal((second.tasks as unknown[]).length, 20);
   assert.equal((second.tasks as JsonObject[])[0]?.id, "turn-6");
   assert.equal(second.hasOlder, true);
 
-  connection.receiveText(request("history.older", "older-2"));
+  connection.receiveText(request("history.older", "older-2", {
+    projectId: "projects/demo",
+    sessionId: "session-long",
+  }));
   await connection.whenIdle();
   const third = data(socket.last("response"));
   assert.equal((third.tasks as unknown[]).length, 5);
@@ -632,6 +641,7 @@ test("a rewind command forwards its fixed target and returns only the receipt", 
     lines: [],
   };
   connection.receiveText(request("command.run", "rewind-1", {
+    projectId: "projects/demo", sessionId: "session-1",
     command: "rewind", option: null, argument: null, targetTurnId: "turn-last",
   }));
   await connection.whenIdle();
@@ -671,7 +681,10 @@ test("archiving the open session closes it and tells every device", async (conte
   assert.equal(computerSocket.events("sessions.changed").at(-1)?.closedSessionId, null);
   assert.equal(workers.attached.has("phone"), false, "会话关掉后必须 detach");
 
-  phone.receiveText(request("history.older", "older-after-archive"));
+  phone.receiveText(request("history.older", "older-after-archive", {
+    projectId: "projects/demo",
+    sessionId: "session-1",
+  }));
   await phone.whenIdle();
   assert.equal(phoneSocket.last("response")?.ok, false);
 });
@@ -720,9 +733,12 @@ test("routes task requests to the worker manager", async (context) => {
   await openSession(connection);
 
   connection.receiveText(request("message.send", "send-1", {
+    projectId: "projects/demo", sessionId: "session-1",
     text: "检查项目", clientMessageId: "client-1", attachmentIds: [],
   }));
-  connection.receiveText(request("task.stop", "stop-1"));
+  connection.receiveText(request("task.stop", "stop-1", {
+    projectId: "projects/demo", sessionId: "session-1",
+  }));
   connection.receiveText(request("approval.answer", "approve-1", {
     approvalId: "a-1", decision: "approve_once",
   }));
@@ -745,6 +761,103 @@ test("routes task requests to the worker manager", async (context) => {
   assert.equal(socket.messages.filter((message) => message.ok === false).length, 0);
 });
 
+test("keeps every current-session request bound to its explicit target", async (context) => {
+  const { workers, services } = setup();
+  const opened = openedSession("session-2");
+  opened.turns = Array.from({ length: 45 }, (_, index) => completedTurn(`turn-${index + 1}`));
+  workers.opens.set("session-2", managedOpen(opened));
+  const socket = new FakeSocket();
+  const connection = new BrowserConnection("phone", socket, services);
+  context.after(() => connection.disconnect());
+
+  await openSession(connection, "session-1");
+  await openSession(connection, "session-2");
+  workers.calls.length = 0;
+
+  const staleRequests: Array<{ type: string; fields?: JsonObject }> = [
+    { type: "session.metrics" },
+    { type: "history.older" },
+    { type: "command.options", fields: { command: "model" } },
+    {
+      type: "command.run",
+      fields: { command: "compact", option: null, argument: null, targetTurnId: null },
+    },
+    {
+      type: "attachment.ticket.create",
+      fields: { originalName: "note.txt", declaredMime: "text/plain", expectedSize: 1 },
+    },
+    {
+      type: "message.send",
+      fields: { text: "不能改投", clientMessageId: "stale-message", attachmentIds: [] },
+    },
+    { type: "task.stop" },
+  ];
+  for (const [index, stale] of staleRequests.entries()) {
+    connection.receiveText(request(stale.type, `stale-${index}`, {
+      projectId: "projects/demo",
+      sessionId: "session-1",
+      ...stale.fields,
+    }));
+  }
+  await connection.whenIdle();
+
+  for (const [index] of staleRequests.entries()) {
+    const response = socket.messages.find((message) => message.requestId === `stale-${index}`);
+    assert.equal(response?.ok, false);
+    assert.equal((response?.error as JsonObject).code, "session_target_mismatch");
+  }
+  assert.deepEqual(workers.calls, [], "错目标请求不能到达 Worker 或附件服务");
+
+  // 错目标的历史请求没有推进 session-2 的游标。
+  connection.receiveText(request("history.older", "current-history", {
+    projectId: "projects/demo",
+    sessionId: "session-2",
+  }));
+  await connection.whenIdle();
+  const history = data(socket.messages.find((message) => message.requestId === "current-history"));
+  assert.equal((history.tasks as JsonObject[])[0]?.id, "turn-6");
+});
+
+test("an outbox message cannot move to a session opened between retries", async (context) => {
+  const { workers, services } = setup();
+  const socket = new FakeSocket();
+  const connection = new BrowserConnection("phone", socket, services);
+  context.after(() => connection.disconnect());
+  await openSession(connection, "session-1");
+  workers.calls.length = 0;
+
+  connection.receiveText(request("message.send", "retry-1", {
+    projectId: "projects/demo",
+    sessionId: "session-1",
+    text: "第一条",
+    clientMessageId: "outbox-1",
+    attachmentIds: [],
+  }));
+  connection.receiveText(request("session.resume", "open-session-2", {
+    projectId: "projects/demo",
+    sessionId: "session-2",
+  }));
+  connection.receiveText(request("message.send", "retry-2", {
+    projectId: "projects/demo",
+    sessionId: "session-1",
+    text: "第二条",
+    clientMessageId: "outbox-2",
+    attachmentIds: [],
+  }));
+  await connection.whenIdle();
+
+  assert.equal(socket.messages.find((message) => message.requestId === "retry-1")?.ok, true);
+  assert.equal(socket.messages.find((message) => message.requestId === "open-session-2")?.ok, true);
+  const refused = socket.messages.find((message) => message.requestId === "retry-2");
+  assert.equal(refused?.ok, false);
+  assert.equal((refused?.error as JsonObject).code, "session_target_mismatch");
+  assert.deepEqual(
+    workers.calls.filter((call) => call.method === "enqueueMessageWithAttachments")
+      .map((call) => call.args.slice(0, 4)),
+    [["projects/demo", "session-1", "outbox-1", "第一条"]],
+  );
+});
+
 test("task requests without an open session are refused", async (context) => {
   const { workers, services } = setup();
   const socket = new FakeSocket();
@@ -752,6 +865,7 @@ test("task requests without an open session are refused", async (context) => {
   context.after(() => connection.disconnect());
 
   connection.receiveText(request("message.send", "send-1", {
+    projectId: "projects/demo", sessionId: "session-1",
     text: "你好", clientMessageId: "client-1", attachmentIds: [],
   }));
   await connection.whenIdle();

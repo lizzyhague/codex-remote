@@ -23,6 +23,11 @@ export const MAX_MESSAGE_TEXT_BYTES = 1_048_576;
 /** 正文字符数上限，用于在计算字节数之前先挡掉明显过长的输入。 */
 const MAX_MESSAGE_TEXT_LENGTH = 524_288;
 
+type BrowserSessionTarget = {
+  projectId: string;
+  sessionId: string;
+};
+
 export type BrowserRequest =
   | { type: "projects.list"; requestId: string }
   | {
@@ -62,43 +67,43 @@ export type BrowserRequest =
     sessionId: string;
     title: string;
   }
-  | { type: "session.metrics"; requestId: string }
+  | ({ type: "session.metrics"; requestId: string } & BrowserSessionTarget)
   | { type: "settings.get"; requestId: string }
   | {
     type: "settings.update";
     requestId: string;
     developerInstructions: string;
   }
-  | { type: "history.older"; requestId: string }
+  | ({ type: "history.older"; requestId: string } & BrowserSessionTarget)
   | { type: "commands.list"; requestId: string }
-  | {
+  | ({
     type: "command.options";
     requestId: string;
     command: CommandName;
-  }
-  | {
+  } & BrowserSessionTarget)
+  | ({
     type: "command.run";
     requestId: string;
     command: CommandName;
     option: string | null;
     argument: string | null;
     targetTurnId: string | null;
-  }
-  | {
+  } & BrowserSessionTarget)
+  | ({
     type: "attachment.ticket.create";
     requestId: string;
     originalName: string;
     declaredMime: string;
     expectedSize: number;
-  }
-  | {
+  } & BrowserSessionTarget)
+  | ({
     type: "message.send";
     requestId: string;
     clientMessageId: string;
     text: string;
     attachmentIds: string[];
-  }
-  | { type: "task.stop"; requestId: string }
+  } & BrowserSessionTarget)
+  | ({ type: "task.stop"; requestId: string } & BrowserSessionTarget)
   | {
     type: "approval.answer";
     requestId: string;
@@ -172,7 +177,7 @@ export function parseBrowserRequest(source: string): BrowserRequest {
 
   switch (value.type) {
     case "session.metrics":
-      return { type: "session.metrics", requestId };
+      return { type: "session.metrics", requestId, ...requireSessionTarget(value, requestId) };
     case "settings.get":
       return { type: "settings.get", requestId };
     case "settings.update":
@@ -233,19 +238,21 @@ export function parseBrowserRequest(source: string): BrowserRequest {
         title: requireString(value.title, "会话名称", requestId, 160),
       };
     case "history.older":
-      return { type: "history.older", requestId };
+      return { type: "history.older", requestId, ...requireSessionTarget(value, requestId) };
     case "commands.list":
       return { type: "commands.list", requestId };
     case "command.options":
       return {
         type: "command.options",
         requestId,
+        ...requireSessionTarget(value, requestId),
         command: requireCommand(value.command, requestId),
       };
     case "command.run":
       return {
         type: "command.run",
         requestId,
+        ...requireSessionTarget(value, requestId),
         command: requireCommand(value.command, requestId),
         option: readOptionalString(value.option, "命令选项", requestId, 256),
         argument: readOptionalString(value.argument, "命令参数", requestId, 2_048),
@@ -255,6 +262,7 @@ export function parseBrowserRequest(source: string): BrowserRequest {
       return {
         type: "attachment.ticket.create",
         requestId,
+        ...requireSessionTarget(value, requestId),
         originalName: requireString(value.originalName, "文件名", requestId, 1_024),
         declaredMime: readOptionalString(value.declaredMime, "MIME", requestId, 255) ??
           "application/octet-stream",
@@ -272,6 +280,7 @@ export function parseBrowserRequest(source: string): BrowserRequest {
       return {
         type: "message.send",
         requestId,
+        ...requireSessionTarget(value, requestId),
         // 旧前端缓存升级期间可能暂时不带该字段；requestId 仍是单次连接内唯一值。
         // 新前端会传持久 UUID，才能在断线重试时获得跨连接幂等性。
         clientMessageId: value.clientMessageId === undefined
@@ -282,7 +291,7 @@ export function parseBrowserRequest(source: string): BrowserRequest {
       };
     }
     case "task.stop":
-      return { type: "task.stop", requestId };
+      return { type: "task.stop", requestId, ...requireSessionTarget(value, requestId) };
     case "approval.answer": {
       const decision = value.decision;
       if (decision !== "approve_once" && decision !== "decline") {
@@ -311,6 +320,16 @@ export function parseBrowserRequest(source: string): BrowserRequest {
     default:
       throw new ProtocolError("unknown_message_type", "不支持这种消息类型。", requestId);
   }
+}
+
+function requireSessionTarget(
+  value: Record<string, unknown>,
+  requestId: string,
+): BrowserSessionTarget {
+  return {
+    projectId: requireString(value.projectId, "项目 ID", requestId, 1_024),
+    sessionId: requireString(value.sessionId, "会话 ID", requestId, 1_024),
+  };
 }
 
 function readSessionView(value: unknown, requestId: string): BrowserSessionView {

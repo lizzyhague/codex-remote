@@ -181,7 +181,7 @@ test("leaving a session clears only its current context notice", () => {
   assert.deepEqual(cleared, ["task-retry:task-1"]);
 });
 
-function outboxHarness(request) {
+function outboxHarness(request, entries = null) {
   const shown = [];
   const clearedNotices = [];
   const removed = [];
@@ -194,7 +194,7 @@ function outboxHarness(request) {
   };
   const context = vm.createContext({
     state: { authenticated: true, projectId: "project-1", sessionId: "session-1" },
-    loadOutbox: () => [outbox],
+    loadOutbox: () => entries ?? [outbox],
     request,
     clearOutbox: (id) => removed.push(id),
     clearNotice: (key) => clearedNotices.push(key),
@@ -210,11 +210,55 @@ function outboxHarness(request) {
 }
 
 test("a successful outbox retry clears its delivery state", async () => {
-  const h = outboxHarness(async () => ({ accepted: true }));
+  const requests = [];
+  const h = outboxHarness(async (type, payload) => {
+    requests.push({ type, payload });
+    return { accepted: true };
+  });
   await h.context.retryOutboxForCurrentSession();
   assert.deepEqual(h.removed, ["message-1"]);
   assert.deepEqual(h.clearedNotices, ["delivery:message-1"]);
   assert.deepEqual(h.shown, []);
+  assert.deepEqual(plain(requests), [{
+    type: "message.send",
+    payload: {
+      projectId: "project-1",
+      sessionId: "session-1",
+      text: "hello",
+      clientMessageId: "message-1",
+      attachmentIds: [],
+    },
+  }]);
+});
+
+test("every outbox retry keeps its stored target after navigation", async () => {
+  const entries = ["message-1", "message-2"].map((clientMessageId) => ({
+    projectId: "project-1",
+    sessionId: "session-1",
+    clientMessageId,
+    text: clientMessageId,
+    attachmentIds: [],
+  }));
+  const requests = [];
+  let h;
+  h = outboxHarness(async (type, payload) => {
+    requests.push({ type, payload });
+    if (requests.length === 1) {
+      h.context.state.projectId = "project-2";
+      h.context.state.sessionId = "session-2";
+    }
+    return { accepted: true };
+  }, entries);
+
+  await h.context.retryOutboxForCurrentSession();
+  assert.deepEqual(plain(requests.map(({ payload }) => ({
+    projectId: payload.projectId,
+    sessionId: payload.sessionId,
+    clientMessageId: payload.clientMessageId,
+  }))), [
+    { projectId: "project-1", sessionId: "session-1", clientMessageId: "message-1" },
+    { projectId: "project-1", sessionId: "session-1", clientMessageId: "message-2" },
+  ]);
 });
 
 test("a definitive outbox failure replaces delivery state with a persistent error", async () => {
