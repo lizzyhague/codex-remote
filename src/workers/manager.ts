@@ -202,6 +202,8 @@ export class SessionWorkerManager {
   readonly #attachmentLeases = new Map<string, AttachmentLease>();
   readonly #workerStartControllers = new Set<AbortController>();
   readonly #workerOperations = new Set<WorkerOperation>();
+  /** 已离开可查 map、仍在异步收尾的 Worker 关闭与清理；总关闭必须等它们真正结束。 */
+  readonly #closingWork = new Set<Promise<void>>();
   #workerReservations = 0;
   #offlineSinceMs: number | null = null;
   #offlineTimer: NodeJS.Timeout | null = null;
@@ -411,6 +413,8 @@ export class SessionWorkerManager {
       operation.worker = worker;
       operation.ownsWorker = true;
       this.#assertOpen();
+      // 退出回调早于登记时找不到任何角色；发布前在这里拦下，由 operation 关闭。
+      this.#assertWorkerAlive(worker);
       this.#recordDesiredFullAccess(worker.threadId, worker.fullAccessEnabled);
       this.#provisionalWorkers.set(worker.threadId, { worker, closeTimer: null });
       operation.worker = null;
@@ -718,7 +722,9 @@ export class SessionWorkerManager {
     if (!provisional || this.#sessionAttached(threadId) || provisional.closeTimer) return;
     provisional.closeTimer = setTimeout(() => {
       provisional.closeTimer = null;
-      if (!this.#sessionAttached(threadId)) void this.#closeProvisional(threadId);
+      if (!this.#sessionAttached(threadId)) {
+        void this.#closeProvisional(threadId, provisional.worker);
+      }
     }, this.#offlineGraceMs);
     provisional.closeTimer.unref();
   }
@@ -755,15 +761,19 @@ export class SessionWorkerManager {
       active.worker.approvals.cancelThread(active.worker.threadId);
       active.worker.interactions.cancelThread(active.worker.threadId);
       await active.worker.turns.interruptActiveTurn().catch(() => false);
-      await active.worker.close().catch(() => {});
+      await this.#closeWorker(active.worker).catch(() => {});
       this.#locks.release(active.task.projectId, active.ownerId);
     }));
     await Promise.all([...this.#provisionalWorkers.values()].map(async (provisional) => {
       if (provisional.closeTimer) clearTimeout(provisional.closeTimer);
       if (!operationWorkers.has(provisional.worker)) {
-        await provisional.worker.close().catch(() => {});
+        await this.#closeWorker(provisional.worker).catch(() => {});
       }
     }));
+    // 终态清理、空会话回收和意外退出的收尾可能已离开可查 map；它们只在这里仍有持有者。
+    while (this.#closingWork.size > 0) {
+      await Promise.all(this.#closingWork);
+    }
     this.#workers.clear();
     this.#launching.clear();
     this.#provisionalWorkers.clear();
@@ -974,7 +984,7 @@ export class SessionWorkerManager {
   async #closeOperationWorker(operation: WorkerOperation): Promise<void> {
     if (!operation.worker || operation.closeRequested) return;
     operation.closeRequested = true;
-    await operation.worker.close().catch(() => {});
+    await this.#closeWorker(operation.worker).catch(() => {});
   }
 
   #assertOpen(): void {
@@ -1124,6 +1134,7 @@ export class SessionWorkerManager {
         await this.#abandonLaunch(launching);
         return;
       }
+      this.#assertWorkerAlive(worker);
       const marked = this.#store.tryMarkRunning(task.id, null, permissionMode, this.#now());
       if (!marked) {
         await this.#abandonLaunch(launching);
@@ -1204,7 +1215,7 @@ export class SessionWorkerManager {
             : "Worker 无法启动，请查看服务日志。",
         }, this.#now(), { error: errorMessage(error) });
         if (event) this.#emit(event, "session");
-        await worker?.close().catch(() => {});
+        if (worker) await this.#closeWorker(worker).catch(() => {});
         this.#locks.release(task.projectId, ownerId);
         await this.#releaseTaskAttachmentLease(task.id);
       }
@@ -1234,15 +1245,12 @@ export class SessionWorkerManager {
         onStreamEvent: (event) => this.#handleStreamEvent(event),
         onApprovalEvent: (event) => this.#handleApprovalEvent(event),
         onInteractionEvent: (event) => this.#handleInteractionEvent(event),
-        onUnexpectedExit: (exitedThreadId, error) => {
-          const active = this.#workers.get(exitedThreadId);
-          if (active) void this.#failActive(active, error);
-        },
+        onUnexpectedExit: (exited, error) => this.#handleUnexpectedExit(exited, error),
       });
       try {
         this.#assertWorkerIdentity(projectId, threadId ?? worker.threadId, worker);
       } catch (error) {
-        await worker.close().catch(() => {});
+        await this.#closeWorker(worker).catch(() => {});
         throw error;
       }
       return worker;
@@ -1516,20 +1524,22 @@ export class SessionWorkerManager {
     this.#clearStartTimer(active);
     if (active.cleaned) return;
     active.cleaned = true;
-    try {
-      await active.worker.close();
-    } catch (error) {
-      console.error(`关闭会话 Worker 失败：${errorMessage(error)}`);
-    } finally {
-      // close() 会同步取消 broker 中的待答项。保留 active 映射到这里，Manager
-      // 才能把对应 resolved 事件广播给所有设备。
-      if (this.#workers.get(active.task.threadId) === active) {
-        this.#workers.delete(active.task.threadId);
+    await this.#holdClosing((async () => {
+      try {
+        await this.#closeWorker(active.worker);
+      } catch (error) {
+        console.error(`关闭会话 Worker 失败：${errorMessage(error)}`);
+      } finally {
+        // close() 会同步取消 broker 中的待答项。保留 active 映射到这里，Manager
+        // 才能把对应 resolved 事件广播给所有设备。
+        if (this.#workers.get(active.task.threadId) === active) {
+          this.#workers.delete(active.task.threadId);
+        }
+        await this.#releaseTaskAttachmentLease(active.task.id);
+        this.#locks.release(active.task.projectId, active.ownerId);
+        this.#schedule();
       }
-      await this.#releaseTaskAttachmentLease(active.task.id);
-      this.#locks.release(active.task.projectId, active.ownerId);
-      this.#schedule();
-    }
+    })());
   }
 
   #cancelPendingRequests(active: ActiveWorker): void {
@@ -1637,7 +1647,7 @@ export class SessionWorkerManager {
     );
     if (stored) this.#emit(stored, "session");
     if (launching.worker) {
-      await launching.worker.close().catch((error: unknown) => {
+      await this.#closeWorker(launching.worker).catch((error: unknown) => {
         console.error(`关闭启动中的会话 Worker 失败：${errorMessage(error)}`);
       });
     }
@@ -1800,15 +1810,53 @@ export class SessionWorkerManager {
     return [...this.#clientSessions.values()].includes(threadId);
   }
 
-  async #closeProvisional(threadId: string): Promise<void> {
+  /** 所有 Worker 关闭都经过这里登记，删 map 后的收尾仍由 Manager 持有到结束。 */
+  #closeWorker(worker: SessionWorker): Promise<void> {
+    return this.#holdClosing(worker.close());
+  }
+
+  #holdClosing(work: Promise<void>): Promise<void> {
+    const held = work.then(() => {}, () => {});
+    this.#closingWork.add(held);
+    void held.then(() => this.#closingWork.delete(held));
+    return work;
+  }
+
+  /** 意外退出只作用于该实例此刻仍担任的角色；其余阶段由当时的所有者在 RPC 失败或发布前处理。 */
+  #handleUnexpectedExit(worker: SessionWorker, error: Error): void {
+    const threadId = worker.threadId;
+    const active = this.#workers.get(threadId);
+    if (active?.worker === worker) {
+      void this.#failActive(active, error);
+      return;
+    }
+    if (this.#provisionalWorkers.get(threadId)?.worker === worker) {
+      console.error(`空会话 Worker ${threadId} 意外退出：${errorMessage(error)}`);
+      void this.#closeProvisional(threadId, worker);
+    }
+  }
+
+  #assertWorkerAlive(worker: SessionWorker): void {
+    if (worker.exited) {
+      throw new WorkerManagerError(
+        "worker_exited",
+        "会话 Worker 启动后已退出，请重试。",
+      );
+    }
+  }
+
+  async #closeProvisional(threadId: string, worker: SessionWorker): Promise<void> {
     const provisional = this.#provisionalWorkers.get(threadId);
-    if (!provisional) return;
+    if (provisional?.worker !== worker) return;
+    if (provisional.closeTimer) clearTimeout(provisional.closeTimer);
     this.#provisionalWorkers.delete(threadId);
-    await provisional.worker.close().catch((error: unknown) => {
-      console.error(`关闭空会话 Worker 失败：${errorMessage(error)}`);
-    });
-    this.#sessionDesiredFullAccess.delete(threadId);
-    this.#schedule();
+    await this.#holdClosing((async () => {
+      await this.#closeWorker(worker).catch((error: unknown) => {
+        console.error(`关闭空会话 Worker 失败：${errorMessage(error)}`);
+      });
+      this.#sessionDesiredFullAccess.delete(threadId);
+      this.#schedule();
+    })());
   }
 
   async #registerPreparedAttachments(

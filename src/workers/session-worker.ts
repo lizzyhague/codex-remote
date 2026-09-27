@@ -34,7 +34,8 @@ export type SessionWorkerOptions = {
   onStreamEvent?: (event: CodexStreamEvent) => void;
   onApprovalEvent?: (event: ApprovalEvent) => void;
   onInteractionEvent?: (event: WorkerInteractionEvent) => void;
-  onUnexpectedExit?: (threadId: string, error: Error) => void;
+  /** 传回具体实例，调用方据此核对当前所有权，旧实例的迟到退出不能误伤同 thread 的新实例。 */
+  onUnexpectedExit?: (worker: SessionWorker, error: Error) => void;
   settings?: ApplicationSettingsStore;
 };
 
@@ -61,7 +62,8 @@ export class SessionWorker {
   readonly #unsubscribeStream: () => void;
   readonly #unsubscribeApprovals: () => void;
   readonly #unsubscribeInteractions: () => void;
-  #closing = false;
+  #closing: Promise<void> | null = null;
+  #exited = false;
 
   private constructor(
     client: AppServerClient,
@@ -87,7 +89,6 @@ export class SessionWorker {
     if (options.startupSignal?.aborted) {
       throw new SessionWorkerStartCancelledError();
     }
-    let worker: SessionWorker | null = null;
     const client = new AppServerClient({
       ...(options.codexBinary ? { codexBinary: options.codexBinary } : {}),
       ...(options.workingDirectory ? { workingDirectory: options.workingDirectory } : {}),
@@ -110,7 +111,7 @@ export class SessionWorker {
       throwIfStartupCancelled(options.startupSignal);
       const approvals = new ApprovalBroker(client);
       const interactions = new InteractionBroker(client);
-      worker = new SessionWorker(
+      const worker = new SessionWorker(
         client,
         opened,
         approvals,
@@ -120,9 +121,10 @@ export class SessionWorker {
         options.onInteractionEvent ?? (() => {}),
       );
       void client.whenExited().then(() => {
-        if (worker && !worker.#closing) {
+        worker.#exited = true;
+        if (!worker.#closing) {
           options.onUnexpectedExit?.(
-            worker.threadId,
+            worker,
             new Error("会话 Worker 的 codex app-server 已退出。"),
           );
         }
@@ -147,9 +149,18 @@ export class SessionWorker {
     return this.commands.fullAccessEnabled();
   }
 
-  async close(): Promise<void> {
-    if (this.#closing) return;
-    this.#closing = true;
+  /** 子进程已经结束。退出回调晚于这个事实送达，发布 Worker 前要看这里。 */
+  get exited(): boolean {
+    return this.#exited;
+  }
+
+  /** 并发调用返回同一个 Promise，所有调用者都等到进程组真正关闭。 */
+  close(): Promise<void> {
+    this.#closing ??= this.#close();
+    return this.#closing;
+  }
+
+  async #close(): Promise<void> {
     this.#unsubscribeStream();
     this.commands.dispose();
     this.turns.dispose();

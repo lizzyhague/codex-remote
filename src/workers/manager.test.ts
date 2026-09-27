@@ -789,6 +789,143 @@ test("fails a promoted new-session task when its Worker exits", async (context) 
   assert.equal(worker.closeCount, 1);
 });
 
+test("releases an attached provisional Worker as soon as it exits unexpectedly", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 60_000, maxWorkers: 1 });
+  fixture.manager.clientAuthenticated("phone");
+  fixture.manager.start();
+  const opened = await fixture.manager.startSession("project-1");
+  const threadId = opened.opened.session.id;
+  fixture.manager.attachSession("phone", "project-1", threadId);
+  const dead = fixture.workers[0]!;
+
+  dead.exitUnexpectedly();
+  await waitFor(() => dead.closeCount === 1);
+
+  // 页面仍 attach，但死亡 Worker 已不占容量；首条消息改由新 Worker 恢复会话。
+  const accepted = await fixture.manager.enqueueMessage(
+    "project-1",
+    threadId,
+    "message-1",
+    "第一条",
+  );
+  const replacement = await fixture.waitForWorker(threadId);
+  assert.notEqual(replacement, dead);
+  assert.equal(dead.startTurnCalls, 0);
+  assert.equal(fixture.createdOptions[1]?.threadId, threadId);
+  replacement.complete("completed");
+  await waitFor(() => fixture.store.require(accepted.taskId).status === "completed");
+  await waitFor(() => replacement.closeCount === 1);
+  await fixture.manager.startSession("project-1");
+  assert.equal(fixture.workers.length, 3);
+});
+
+test("never publishes a new-session Worker that exited before registration", async (context) => {
+  let exitNext = true;
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 60_000,
+    maxWorkers: 1,
+    afterWorkerCreate: (worker) => {
+      if (!exitNext) return;
+      exitNext = false;
+      worker.exitUnexpectedly();
+    },
+  });
+
+  await assert.rejects(
+    fixture.manager.startSession("project-1"),
+    (error: unknown) => error instanceof WorkerManagerError && error.code === "worker_exited",
+  );
+  assert.equal(fixture.workers[0]!.closeCount, 1);
+  const next = await fixture.manager.startSession("project-1");
+  assert.equal(next.loadState, "ready");
+  assert.equal(fixture.workers.length, 2);
+});
+
+test("a stale Worker's late exit does not fail the thread's newer Worker", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 60_000 });
+  fixture.manager.start();
+  const first = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "第一条",
+  );
+  const stale = await fixture.waitForWorker("thread-1");
+  stale.complete("completed");
+  await waitFor(() => fixture.store.require(first.taskId).status === "completed");
+  await waitFor(() => stale.closeCount === 1);
+
+  const second = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-2",
+    "第二条",
+  );
+  await waitFor(() => fixture.workers.length === 2 && fixture.workers[1]!.started);
+  const current = fixture.workers[1]!;
+
+  stale.exitUnexpectedly();
+  await delay(10);
+  assert.equal(fixture.store.require(second.taskId).status, "running");
+  assert.equal(current.closeCount, 0);
+  current.complete("completed");
+  await waitFor(() => fixture.store.require(second.taskId).status === "completed");
+});
+
+test("shutdown waits for an active Worker whose terminal cleanup is still closing", async (context) => {
+  let releaseClose!: () => void;
+  const closeGate = new Promise<void>((resolve) => {
+    releaseClose = resolve;
+  });
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 60_000,
+    beforeWorkerClose: () => closeGate,
+  });
+  fixture.manager.start();
+  await fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "第一条");
+  const worker = await fixture.waitForWorker("thread-1");
+  worker.complete("completed");
+  await waitFor(() => worker.closeCount === 1);
+
+  let closeSettled = false;
+  const closing = fixture.manager.close().then(() => {
+    closeSettled = true;
+  });
+  await delay(10);
+  assert.equal(closeSettled, false);
+  assert.equal(fixture.locks.acquire("project-1", "probe", "probe-session"), false);
+
+  releaseClose();
+  await closing;
+  assert.equal(fixture.locks.acquire("project-1", "probe", "probe-session"), true);
+});
+
+test("shutdown waits for a reclaimed provisional Worker that is still closing", async (context) => {
+  let releaseClose!: () => void;
+  const closeGate = new Promise<void>((resolve) => {
+    releaseClose = resolve;
+  });
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 5,
+    beforeWorkerClose: () => closeGate,
+  });
+  fixture.manager.start();
+  await fixture.manager.startSession("project-1");
+  const worker = fixture.workers[0]!;
+  await waitFor(() => worker.closeCount === 1);
+
+  let closeSettled = false;
+  const closing = fixture.manager.close().then(() => {
+    closeSettled = true;
+  });
+  await delay(10);
+  assert.equal(closeSettled, false);
+
+  releaseClose();
+  await closing;
+  assert.equal(worker.closeCount, 1);
+});
+
 test("counts a Worker that is still starting against the capacity limit", async (context) => {
   let releaseCreate!: () => void;
   let reportCreateStarted!: () => void;
@@ -1717,6 +1854,8 @@ async function managerFixture(
     taskStartTimeoutMs?: number;
     availableMemory?: SessionWorkerManagerOptions["availableMemory"];
     beforeWorkerCreate?: (signal: AbortSignal) => Promise<void>;
+    afterWorkerCreate?: (worker: FakeWorker) => void;
+    beforeWorkerClose?: (worker: FakeWorker) => Promise<void>;
     beforeStartTurn?: () => Promise<void>;
     beforeCompact?: () => Promise<void>;
     beforeRewind?: () => Promise<void>;
@@ -1788,12 +1927,14 @@ async function managerFixture(
             ? { beforeSetPermissions: options.beforeSetPermissions }
             : {}),
           ...(options.beforeInterrupt ? { beforeInterrupt: options.beforeInterrupt } : {}),
+          ...(options.beforeWorkerClose ? { beforeClose: options.beforeWorkerClose } : {}),
           ...(options.autoCompleteOnInterrupt === undefined
             ? {}
             : { autoCompleteOnInterrupt: options.autoCompleteOnInterrupt }),
         },
       );
       workers.push(worker);
+      options.afterWorkerCreate?.(worker);
       return worker as unknown as SessionWorker;
     },
     ...(options.uploads ? { uploads: options.uploads } : {}),
@@ -1836,6 +1977,7 @@ class FakeWorker {
   compactCalls = 0;
   interruptCount = 0;
   closeCount = 0;
+  exited = false;
   cancelledApprovals = 0;
   approved = 0;
   readonly autoCompleteOnInterrupt: boolean;
@@ -1856,6 +1998,8 @@ class FakeWorker {
   readonly #beforeRewind?: (() => Promise<void>) | undefined;
   readonly #beforeSetPermissions?: ((profileId: string) => Promise<void>) | undefined;
   readonly #beforeInterrupt?: (() => Promise<void>) | undefined;
+  readonly #beforeClose?: ((worker: FakeWorker) => Promise<void>) | undefined;
+  #closing: Promise<void> | null = null;
 
   constructor(
     options: SessionWorkerOptions,
@@ -1867,6 +2011,7 @@ class FakeWorker {
       beforeRewind?: (() => Promise<void>) | undefined;
       beforeSetPermissions?: ((profileId: string) => Promise<void>) | undefined;
       beforeInterrupt?: (() => Promise<void>) | undefined;
+      beforeClose?: ((worker: FakeWorker) => Promise<void>) | undefined;
       autoCompleteOnInterrupt?: boolean | undefined;
     } = {},
   ) {
@@ -1879,6 +2024,7 @@ class FakeWorker {
     this.#beforeRewind = extras.beforeRewind;
     this.#beforeSetPermissions = extras.beforeSetPermissions;
     this.#beforeInterrupt = extras.beforeInterrupt;
+    this.#beforeClose = extras.beforeClose;
     this.autoCompleteOnInterrupt = extras.autoCompleteOnInterrupt !== false;
     this.opened = {
       session: {
@@ -2159,14 +2305,22 @@ class FakeWorker {
   }
 
   exitUnexpectedly(): void {
+    this.exited = true;
     this.#options.onUnexpectedExit?.(
-      this.threadId,
+      this as unknown as SessionWorker,
       new Error("测试 Worker 异常退出"),
     );
   }
 
-  async close(): Promise<void> {
+  /** 与 SessionWorker 相同：并发 close() 共享同一次关闭。 */
+  close(): Promise<void> {
+    this.#closing ??= this.#close();
+    return this.#closing;
+  }
+
+  async #close(): Promise<void> {
     this.closeCount += 1;
+    await this.#beforeClose?.(this);
     this.approvals.cancelThread();
     this.interactions.cancelThread();
   }
