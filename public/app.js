@@ -9,12 +9,24 @@ import {
   saveDisplayTimezonePreference,
 } from "./display-timezone.js";
 import { projectDisplayLabel } from "./project-labels.js";
+import {
+  RecoveryStateError,
+  RecoveryStateStore,
+  acceptMessageDelivery,
+  beginMessageDelivery,
+  beginRewind,
+  completeRewind,
+  composerDraft,
+  recoverMessageDelivery,
+  setComposerDraft,
+} from "./recovery-state.js";
 
 const LEGACY_TOKEN_KEY = "codex-remote.token";
 const PROJECT_KEY = "codex-remote.project";
 const OUTBOX_KEY = "codex-remote.outbox-v2";
 const REWIND_OUTBOX_KEY = "codex-remote.rewind-outbox-v1";
 const ATTACHMENT_DRAFTS_KEY = "codex-remote.attachment-drafts-v1";
+const RECOVERY_KEY = "codex-remote.recovery-v1";
 const SIDEBAR_COLLAPSED_KEY = "codex-remote.sidebar-collapsed";
 const RECONNECT_DELAY_MS = 2_500;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -27,6 +39,18 @@ const TEMPORARY_INFO = Object.freeze({ lifetime: "temporary", tone: "info" });
 const TEMPORARY_WARNING = Object.freeze({ lifetime: "temporary", tone: "warning" });
 const TEMPORARY_ERROR = Object.freeze({ lifetime: "temporary", tone: "error" });
 const CONNECTION_NOTICE_KEY = "connection";
+const RECOVERY_NOTICE_KEY = "recovery-storage";
+
+const recoveryStore = new RecoveryStateStore(localStorage, {
+  key: RECOVERY_KEY,
+  legacy: {
+    messages: OUTBOX_KEY,
+    rewinds: REWIND_OUTBOX_KEY,
+    attachmentDrafts: ATTACHMENT_DRAFTS_KEY,
+  },
+});
+let recoveryProblemSignature = null;
+const volatileComposerDrafts = new Map();
 
 const elements = {
   loginView: byId("login-view"),
@@ -150,6 +174,8 @@ const state = {
   rewindText: null,
   rewindAttachments: [],
   pendingAttachments: [],
+  composerProjectId: null,
+  composerSessionId: null,
   attachmentUploads: new Map(),
   requestNumber: 0,
   pendingRequests: new Map(),
@@ -203,6 +229,7 @@ elements.tokenForm.addEventListener("submit", (event) => {
 });
 
 elements.projectSelect.addEventListener("change", () => {
+  persistCurrentComposerDraft();
   state.projectId = elements.projectSelect.value || null;
   resetCurrentSession();
   elements.sessionSearchInput.value = "";
@@ -314,6 +341,7 @@ elements.attachmentInput.addEventListener("change", () => {
 });
 
 elements.messageInput.addEventListener("input", () => {
+  persistCurrentComposerDraft();
   resizeComposer();
   closeComposerPicker();
   slashCommands.handleInput();
@@ -698,6 +726,7 @@ async function resumeSession(sessionId) {
     return;
   }
   if (selected?.projectId && selected.projectId !== state.projectId) {
+    persistCurrentComposerDraft();
     state.projectId = selected.projectId;
     stateSet(PROJECT_KEY, state.projectId);
     elements.projectSelect.value = state.projectId;
@@ -749,6 +778,9 @@ function applyLoadingSession(
   sessionId,
   { preserveAttachments = false } = {},
 ) {
+  const preserveComposer = preserveAttachments &&
+    state.composerProjectId === state.projectId && state.composerSessionId === sessionId;
+  if (!preserveComposer) persistCurrentComposerDraft();
   const previousSessionId = state.sessionId;
   if (state.sessionId && state.sessionId !== sessionId) {
     clearCurrentSessionNotice(state.sessionId);
@@ -763,7 +795,7 @@ function applyLoadingSession(
   state.running = true;
   state.stopping = false;
   state.controlsTask = loading.controlsActiveTask === true;
-  if (!preserveAttachments) loadAttachmentDraftForCurrentSession();
+  if (!preserveComposer) loadComposerDraftForCurrentSession();
   renderSessionMetrics();
   setCurrentSessionState("active");
   updateConversationTitle();
@@ -821,6 +853,9 @@ async function refreshLoadingSession() {
 }
 
 function applyOpenedSession(opened, { preserveAttachments = false, retryDeferred = true } = {}) {
+  const preserveComposer = preserveAttachments &&
+    state.composerProjectId === state.projectId && state.composerSessionId === opened.session.id;
+  if (!preserveComposer) persistCurrentComposerDraft();
   if (state.sessionId && state.sessionId !== opened.session.id) {
     clearCurrentSessionNotice(state.sessionId);
   }
@@ -835,7 +870,7 @@ function applyOpenedSession(opened, { preserveAttachments = false, retryDeferred
   state.running = Boolean(opened.activeTaskId);
   state.controlsTask = Boolean(opened.controlsActiveTask);
   if (!state.running) state.stopping = false;
-  if (!preserveAttachments) loadAttachmentDraftForCurrentSession();
+  if (!preserveComposer) loadComposerDraftForCurrentSession();
   upsertSession(opened.session);
   renderSessionList();
   updateConversationTitle();
@@ -1273,6 +1308,7 @@ function trashRemainingText(purgeAt) {
 }
 
 function resetCurrentSession() {
+  persistCurrentComposerDraft();
   if (state.sessionId) clearCurrentSessionNotice(state.sessionId);
   abortAttachmentUploads();
   clearSessionResumeTimer();
@@ -1288,10 +1324,14 @@ function resetCurrentSession() {
   state.stopping = false;
   state.controlsTask = false;
   state.pendingAttachments = [];
+  state.composerProjectId = null;
+  state.composerSessionId = null;
+  elements.messageInput.value = "";
   state.rewindTargetTurnId = null;
   state.rewindText = null;
   state.rewindAttachments = [];
   renderAttachmentList();
+  resizeComposer();
   updateConversationTitle();
   renderSessionList();
   updateControls();
@@ -1429,12 +1469,32 @@ async function sendMessage() {
   const sessionId = state.sessionId;
   if (!projectId || !sessionId) return;
 
+  const outbox = {
+    clientMessageId: createClientMessageId(),
+    projectId,
+    sessionId,
+    text,
+    attachmentIds: attachments.map((attachment) => attachment.id),
+    attachments: publicAttachments(attachments),
+    createdAtMs: Date.now(),
+  };
+  if (!storeMessageForDelivery(outbox)) {
+    showNotice("无法安全保存待发送消息，因此没有发送；正文和附件仍留在输入框。", {
+      lifetime: "persistent",
+      tone: "error",
+      key: RECOVERY_NOTICE_KEY,
+      force: true,
+    });
+    return;
+  }
+
   hideEmpty();
   const displayText = displayTextWithAttachments(text, attachments);
   const optimistic = addMessage("user", displayText, `local-${Date.now()}`, false);
   state.pendingUserMessages.push({ text: displayText, element: optimistic, taskId: null });
   elements.messageInput.value = "";
-  setPendingAttachments(state.pendingAttachments.filter((attachment) => attachment.status !== "ready"));
+  state.pendingAttachments = state.pendingAttachments.filter((attachment) => attachment.status !== "ready");
+  renderAttachmentList();
   resizeComposer();
   state.running = true;
   state.controlsTask = true;
@@ -1443,35 +1503,27 @@ async function sendMessage() {
   updateControls();
   scrollToBottom(true);
 
-  const clientMessageId = createClientMessageId();
-  saveOutbox({
-    clientMessageId,
-    projectId,
-    sessionId,
-    text,
-    attachmentIds: attachments.map((attachment) => attachment.id),
-  });
   try {
     await request("message.send", {
       projectId,
       sessionId,
       text,
-      clientMessageId,
-      attachmentIds: attachments.map((attachment) => attachment.id),
+      clientMessageId: outbox.clientMessageId,
+      attachmentIds: outbox.attachmentIds,
     });
-    clearOutbox(clientMessageId);
-    clearNotice(deliveryNoticeKey(clientMessageId));
+    acceptStoredMessage(outbox.clientMessageId);
+    clearNotice(deliveryNoticeKey(outbox.clientMessageId));
   } catch (error) {
     const uncertainDelivery = error?.code === "request_timeout" || !state.authenticated;
     if (uncertainDelivery) {
       showNotice("连接在确认消息前中断。消息 ID 已保留；重新打开这个会话后会安全重试。", {
         lifetime: "state",
         tone: "warning",
-        key: deliveryNoticeKey(clientMessageId),
+        key: deliveryNoticeKey(outbox.clientMessageId),
       });
       return;
     }
-    clearOutbox(clientMessageId);
+    const recovered = recoverStoredMessage(outbox);
     const pendingIndex = state.pendingUserMessages.findIndex((pending) =>
       pending.element === optimistic
     );
@@ -1479,19 +1531,24 @@ async function sendMessage() {
     // 这条消息没有送到 Codex。撤掉气泡并把原文放回输入框，不要让用户
     // 白写一次——尤其是长消息被后端拒绝或连接刚好断开的时候。
     optimistic.remove();
-    state.running = false;
-    state.stopping = false;
-    state.controlsTask = false;
-    setCurrentSessionState("idle");
-    hideThinking();
-    const draft = elements.messageInput.value;
-    const restorable = !draft.trim();
-    showNotice(restorable
-      ? `${errorMessage(error)}消息已经放回输入框。`
-      : `${errorMessage(error)}未发送的消息和当前草稿都已保留在输入框。`, TEMPORARY_ERROR);
-    updateControls();
-    setPendingAttachments(mergeAttachments(attachments, state.pendingAttachments));
-    restoreComposerText(restorable ? text : `${text}\n\n${draft}`);
+    if (projectId === state.projectId && sessionId === state.sessionId) {
+      state.running = false;
+      state.stopping = false;
+      state.controlsTask = false;
+      setCurrentSessionState("idle");
+      hideThinking();
+      loadComposerDraftForCurrentSession();
+      updateControls();
+    }
+    showNotice(recovered === "persisted"
+      ? `${errorMessage(error)}消息已经放回原会话的输入草稿。`
+      : recovered === "volatile"
+      ? `${errorMessage(error)}消息仍由当前页面和待确认记录共同保留。`
+      : `${errorMessage(error)}消息仍保留在原会话的待确认记录中。`, {
+      lifetime: "persistent",
+      tone: "error",
+      key: deliveryNoticeKey(outbox.clientMessageId),
+    });
   }
 }
 
@@ -1592,7 +1649,7 @@ async function startUpload(draft) {
       statusText: "上传完成",
       file: null,
     });
-    persistCurrentAttachmentDraft();
+    persistCurrentComposerDraft();
   } catch (error) {
     if (!controller.signal.aborted && (generation !== state.generation ||
         !state.connectionReady || state.socket?.readyState !== WebSocket.OPEN)) {
@@ -1667,7 +1724,7 @@ function readyAttachments() {
 
 function setPendingAttachments(attachments) {
   state.pendingAttachments = attachments;
-  persistCurrentAttachmentDraft();
+  persistCurrentComposerDraft();
   renderAttachmentList();
   updateControls();
 }
@@ -2507,7 +2564,9 @@ function beginPendingRewind() {
     attachments: publicAttachments(state.rewindAttachments),
     createdAtMs: Date.now(),
   };
-  savePendingRewind(pending);
+  if (!storePendingRewind(pending)) {
+    throw new Error("无法安全保存回退记录，因此没有执行回退。");
+  }
   return pending;
 }
 
@@ -2537,9 +2596,9 @@ async function applyRewindResult(result, pending) {
   if (!ready) {
     throw new Error("回退已经受理，但会话历史尚未准备好；连接恢复后会继续确认。");
   }
-  if (result.outcome !== "stale") restorePendingRewindDraft(pending);
-  clearPendingRewind(pending);
-  clearNotice(rewindNoticeKey(pending));
+  const completed = finishPendingRewind(pending, result.outcome !== "stale");
+  if (result.outcome !== "stale") loadComposerDraftForCurrentSession();
+  if (completed === "persisted") clearNotice(rewindNoticeKey(pending));
   addCommandResult(result);
   if (opened.notice) showNotice(opened.notice, {
     lifetime: "persistent",
@@ -2548,26 +2607,15 @@ async function applyRewindResult(result, pending) {
   });
 }
 
-function restorePendingRewindDraft(pending) {
-  const attachments = publicAttachments(pending.attachments);
-  if (
-    (pending.text !== null || attachments.length > 0) &&
-    !elements.messageInput.value.trim() &&
-    state.pendingAttachments.length === 0
-  ) {
-    restoreComposerText(pending.text || "");
-    setPendingAttachments(attachments.map((attachment) => ({
-      ...attachment,
-      clientId: createClientMessageId(),
-      status: "ready",
-      statusText: "已从回退消息恢复",
-    })));
-  }
-}
-
 async function retryPendingRewindForCurrentSession() {
   if (!state.authenticated) return false;
-  const pending = pendingRewindForCurrentSession();
+  if (!ensureRecoveryPersisted()) return false;
+  let pending;
+  try {
+    pending = pendingRewindForCurrentSession();
+  } catch {
+    return false;
+  }
   if (!pending) return true;
   const wasBusy = state.commandBusy;
   state.commandBusy = true;
@@ -2604,50 +2652,29 @@ async function retryDeferredActionsForCurrentSession() {
 }
 
 function pendingRewindForCurrentSession() {
-  return loadPendingRewinds().find((entry) =>
+  const entries = loadPendingRewinds();
+  if (!entries) throw new Error("无法读取浏览器中的回退记录。");
+  return entries.find((entry) =>
     entry.projectId === state.projectId && entry.sessionId === state.sessionId
   ) ?? null;
 }
 
-function savePendingRewind(entry) {
-  const entries = loadPendingRewinds().filter((candidate) =>
-    candidate.projectId !== entry.projectId || candidate.sessionId !== entry.sessionId
-  );
-  entries.push(entry);
-  stateSet(REWIND_OUTBOX_KEY, JSON.stringify(entries.slice(-20)));
+function storePendingRewind(entry) {
+  return updateRecoveryState(
+    (recovery) => beginRewind(recovery, entry),
+    { retainOnFailure: false },
+  )?.committed === true;
 }
 
 function loadPendingRewinds() {
-  try {
-    const value = JSON.parse(stateGet(REWIND_OUTBOX_KEY) || "[]");
-    if (!Array.isArray(value)) return [];
-    return value.filter((entry) =>
-      entry && typeof entry === "object" &&
-      typeof entry.projectId === "string" &&
-      typeof entry.sessionId === "string" &&
-      typeof entry.targetTurnId === "string" &&
-      (entry.text === null || typeof entry.text === "string")
-    ).map((entry) => ({
-      projectId: entry.projectId,
-      sessionId: entry.sessionId,
-      targetTurnId: entry.targetTurnId,
-      text: entry.text,
-      attachments: publicAttachments(entry.attachments),
-      createdAtMs: Number.isFinite(entry.createdAtMs) ? entry.createdAtMs : 0,
-    }));
-  } catch {
-    return [];
-  }
+  return readRecoveryState()?.rewinds ?? null;
 }
 
-function clearPendingRewind(entry) {
-  const entries = loadPendingRewinds().filter((candidate) =>
-    candidate.projectId !== entry.projectId ||
-    candidate.sessionId !== entry.sessionId ||
-    candidate.targetTurnId !== entry.targetTurnId
+function finishPendingRewind(entry, restoreDraft) {
+  const result = updateRecoveryState((recovery) =>
+    completeRewind(recovery, entry, restoreDraft)
   );
-  if (entries.length === 0) removeStored(REWIND_OUTBOX_KEY);
-  else stateSet(REWIND_OUTBOX_KEY, JSON.stringify(entries));
+  return !result ? "failed" : result.persisted ? "persisted" : "volatile";
 }
 
 function rewindNoticeKey(entry) {
@@ -2656,7 +2683,10 @@ function rewindNoticeKey(entry) {
 
 async function retryOutboxForCurrentSession() {
   if (!state.authenticated) return;
-  const matches = loadOutbox().filter((entry) =>
+  if (!ensureRecoveryPersisted()) return;
+  const entries = loadOutbox();
+  if (!entries) return;
+  const matches = entries.filter((entry) =>
     entry.projectId === state.projectId && entry.sessionId === state.sessionId
   );
   for (const outbox of matches) {
@@ -2668,13 +2698,19 @@ async function retryOutboxForCurrentSession() {
         clientMessageId: outbox.clientMessageId,
         attachmentIds: outbox.attachmentIds,
       });
-      clearOutbox(outbox.clientMessageId);
+      acceptStoredMessage(outbox.clientMessageId);
       clearNotice(deliveryNoticeKey(outbox.clientMessageId));
     } catch (error) {
       if (error?.code !== "request_timeout" && state.authenticated) {
-        clearOutbox(outbox.clientMessageId);
-        clearNotice(deliveryNoticeKey(outbox.clientMessageId));
-        showNotice(`保留消息重试失败：${errorMessage(error)}`, {
+        const recovered = recoverStoredMessage(outbox);
+        if (outbox.projectId === state.projectId && outbox.sessionId === state.sessionId) {
+          loadComposerDraftForCurrentSession();
+        }
+        showNotice(recovered === "persisted"
+          ? `保留消息重试失败：${errorMessage(error)}消息已放回原会话草稿。`
+          : recovered === "volatile"
+          ? `保留消息重试失败：${errorMessage(error)}消息仍由当前页面和待确认记录共同保留。`
+          : `保留消息重试失败：${errorMessage(error)}原待确认记录没有删除。`, {
           lifetime: "persistent",
           tone: "error",
           key: deliveryNoticeKey(outbox.clientMessageId),
@@ -2690,72 +2726,78 @@ function createClientMessageId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-function saveOutbox(entry) {
-  const entries = loadOutbox().filter((candidate) =>
-    candidate.clientMessageId !== entry.clientMessageId
+function storeMessageForDelivery(entry) {
+  const result = updateRecoveryState(
+    (recovery) => beginMessageDelivery(recovery, entry),
+    { retainOnFailure: false },
   );
-  entries.push(entry);
-  stateSet(OUTBOX_KEY, JSON.stringify(entries.slice(-20)));
+  if (result?.committed) {
+    volatileComposerDrafts.delete(composerOwnerKey(entry.projectId, entry.sessionId));
+  }
+  return result?.committed === true;
 }
 
 function loadOutbox() {
-  try {
-    const value = JSON.parse(stateGet(OUTBOX_KEY) || "[]");
-    if (!Array.isArray(value)) return [];
-    return value.filter((entry) => entry && typeof entry.clientMessageId === "string" &&
-        typeof entry.projectId === "string" && typeof entry.sessionId === "string" &&
-        typeof entry.text === "string" &&
-        (entry.attachmentIds === undefined ||
-          (Array.isArray(entry.attachmentIds) && entry.attachmentIds.every((id) => typeof id === "string")))
-    ).map((entry) => ({ ...entry, attachmentIds: entry.attachmentIds || [] }));
-  } catch {
-    return [];
-  }
+  return readRecoveryState()?.messages ?? null;
 }
 
-function clearOutbox(clientMessageId) {
-  const entries = loadOutbox().filter((entry) => entry.clientMessageId !== clientMessageId);
-  if (entries.length === 0) removeStored(OUTBOX_KEY);
-  else stateSet(OUTBOX_KEY, JSON.stringify(entries));
+function acceptStoredMessage(clientMessageId) {
+  return updateRecoveryState((recovery) =>
+    acceptMessageDelivery(recovery, clientMessageId)
+  );
 }
 
-function attachmentDraftKey() {
-  return state.projectId && state.sessionId ? `${state.projectId}\n${state.sessionId}` : null;
+function recoverStoredMessage(entry) {
+  const result = updateRecoveryState((recovery) => recoverMessageDelivery(recovery, entry));
+  return !result ? "failed" : result.persisted ? "persisted" : "volatile";
 }
 
-function loadAttachmentDraftForCurrentSession() {
-  const key = attachmentDraftKey();
-  const drafts = loadAttachmentDrafts();
-  state.pendingAttachments = key
-    ? publicAttachments(drafts[key]).map((attachment) => ({
+function loadComposerDraftForCurrentSession() {
+  state.composerProjectId = state.projectId;
+  state.composerSessionId = state.sessionId;
+  const key = composerOwnerKey(state.projectId, state.sessionId);
+  const recovery = readRecoveryState();
+  const draft = recovery && state.projectId && state.sessionId
+    ? composerDraft(recovery, state.projectId, state.sessionId)
+    : key && volatileComposerDrafts.get(key)
+    ? volatileComposerDrafts.get(key)
+    : { text: "", attachments: [] };
+  elements.messageInput.value = draft.text;
+  state.pendingAttachments = draft.attachments.map((attachment) => {
+    const expired = Number.isFinite(attachment.expiresAtMs) && attachment.expiresAtMs <= Date.now();
+    return {
       ...attachment,
       clientId: createClientMessageId(),
-      status: "ready",
-      statusText: "上传完成",
-    }))
-    : [];
+      status: expired ? "failed" : "ready",
+      statusText: expired ? "附件已过期，请重新添加" : "上传完成",
+    };
+  });
   renderAttachmentList();
+  resizeComposer();
+  updateControls();
 }
 
-function persistCurrentAttachmentDraft() {
-  const key = attachmentDraftKey();
-  if (!key) return;
-  const drafts = loadAttachmentDrafts();
-  const ready = publicAttachments(readyAttachments());
-  if (ready.length > 0) drafts[key] = ready;
-  else delete drafts[key];
-  const entries = Object.entries(drafts).slice(-50);
-  if (entries.length === 0) removeStored(ATTACHMENT_DRAFTS_KEY);
-  else stateSet(ATTACHMENT_DRAFTS_KEY, JSON.stringify(Object.fromEntries(entries)));
+function persistCurrentComposerDraft() {
+  if (!state.composerProjectId || !state.composerSessionId) return true;
+  const draft = {
+    text: elements.messageInput.value,
+    attachments: publicAttachments(state.pendingAttachments),
+  };
+  const key = composerOwnerKey(state.composerProjectId, state.composerSessionId);
+  if (draft.text || draft.attachments.length > 0) volatileComposerDrafts.set(key, draft);
+  else volatileComposerDrafts.delete(key);
+  const result = updateRecoveryState((recovery) => setComposerDraft(
+    recovery,
+    state.composerProjectId,
+    state.composerSessionId,
+    draft,
+  ));
+  if (result?.committed) volatileComposerDrafts.delete(key);
+  return result?.committed === true;
 }
 
-function loadAttachmentDrafts() {
-  try {
-    const value = JSON.parse(stateGet(ATTACHMENT_DRAFTS_KEY) || "{}");
-    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  } catch {
-    return {};
-  }
+function composerOwnerKey(projectId, sessionId) {
+  return projectId && sessionId ? `${projectId}\n${sessionId}` : null;
 }
 
 function publicAttachments(value) {
@@ -3187,6 +3229,7 @@ function splitAttachmentDisplayText(text, suppliedAttachments = []) {
 
 function restoreComposerText(text) {
   elements.messageInput.value = text;
+  persistCurrentComposerDraft();
   resizeComposer();
   updateControls();
   requestAnimationFrame(() => {
@@ -3371,6 +3414,75 @@ function refreshDisplayedTimes() {
 
 function errorMessage(error) {
   return error instanceof Error ? error.message : "请求失败。";
+}
+
+function readRecoveryState() {
+  try {
+    const recovery = recoveryStore.load();
+    if (recoveryStore.persisted && !recoveryStore.lastError) clearRecoveryProblem();
+    else reportRecoveryProblem(recoveryStore.lastError);
+    return recovery;
+  } catch (error) {
+    reportRecoveryProblem(error);
+    return null;
+  }
+}
+
+function updateRecoveryState(mutator, options = {}) {
+  try {
+    const result = recoveryStore.update(mutator, options);
+    if (result.committed && result.persisted) clearRecoveryProblem();
+    else reportRecoveryProblem(recoveryStore.lastError);
+    return result;
+  } catch (error) {
+    reportRecoveryProblem(error);
+    return null;
+  }
+}
+
+function ensureRecoveryPersisted() {
+  if (!readRecoveryState()) return false;
+  if (recoveryStore.ensurePersisted()) {
+    clearRecoveryProblem();
+    return true;
+  }
+  reportRecoveryProblem(recoveryStore.lastError);
+  return false;
+}
+
+function reportRecoveryProblem(error) {
+  const problem = error instanceof RecoveryStateError
+    ? error
+    : new RecoveryStateError("recovery_unavailable", "浏览器无法读写恢复记录。", {
+      cause: error,
+    });
+  const signature = `${problem.code}:${problem.key || "unknown"}`;
+  if (signature === recoveryProblemSignature) return;
+  recoveryProblemSignature = signature;
+  const options = {
+    lifetime: "persistent",
+    tone: "error",
+    key: RECOVERY_NOTICE_KEY,
+    force: true,
+  };
+  if (problem.code === "recovery_corrupt" && typeof problem.raw === "string") {
+    options.action = {
+      label: "复制原始记录",
+      run: async () => {
+        if (!navigator.clipboard?.writeText) throw new Error("当前浏览器不能复制恢复记录。");
+        await navigator.clipboard.writeText(`${problem.key || RECOVERY_KEY}\n${problem.raw}`);
+        showNotice("原始恢复记录已复制；应用没有覆盖它。", TEMPORARY_INFO);
+      },
+    };
+  }
+  showNotice(problem.code === "recovery_corrupt"
+    ? "本地恢复记录已损坏；应用没有覆盖原始内容，也不会自动重试其中的操作。"
+    : "本地恢复存储当前不可用；草稿只在此页面暂存，新的发送和回退不会开始。", options);
+}
+
+function clearRecoveryProblem() {
+  recoveryProblemSignature = null;
+  clearNotice(RECOVERY_NOTICE_KEY);
 }
 
 function stateGet(key) {

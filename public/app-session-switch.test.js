@@ -22,6 +22,8 @@ function resumeContext(overrides = {}) {
     state: {
       sessionId: "session-1",
       projectId: "project-1",
+      composerProjectId: "project-1",
+      composerSessionId: "session-1",
       navigationBusy: false,
       sessionLoading: false,
       sessionOpenState: null,
@@ -59,12 +61,13 @@ function resumeContext(overrides = {}) {
     }),
     showEmpty: (text) => timeline.push({ kind: "empty", text }),
     clearCurrentSessionNotice: () => {},
+    persistCurrentComposerDraft: () => true,
     abortAttachmentUploads: () => {},
     renderSessionMetrics: () => {},
     setCurrentSessionState: () => {},
     updateConversationTitle: () => {},
     closeMobileSidebar: () => {},
-    loadAttachmentDraftForCurrentSession: () => {},
+    loadComposerDraftForCurrentSession: () => {},
     clearTimeout: () => {},
     setTimeout: () => 1,
     resetCurrentSession: () => {

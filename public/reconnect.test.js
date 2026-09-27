@@ -4,6 +4,11 @@ import test from "node:test";
 import vm from "node:vm";
 
 import { projectDisplayLabel } from "./project-labels.js";
+import {
+  RecoveryStateStore,
+  composerDraft,
+  setComposerDraft,
+} from "./recovery-state.js";
 
 const source = await readFile(new URL("./app.js", import.meta.url), "utf8");
 function section(start, end) {
@@ -27,6 +32,11 @@ function harness() {
   let uploadGate;
   let nextId = 0;
   let resets = 0;
+  const recoveryStore = new RecoveryStateStore({
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, value),
+    removeItem: (key) => storage.delete(key),
+  }, { key: "recovery", legacy: { attachmentDrafts: "drafts" } });
   const element = () => ({ value: "", hidden: false, replaceChildren() {}, append() {} });
   const context = vm.createContext({
     URL, URLSearchParams, AbortController,
@@ -39,6 +49,7 @@ function harness() {
     state: {
       generation: 0, socket: null, reconnectAllowed: true, reconnectTimer: null,
       authenticated: false, connectionReady: false, projectId: "project-1", sessionId: "session-1",
+      composerProjectId: "project-1", composerSessionId: "session-1",
       sessionOpenState: null, sessionResumeTimer: null, sessionResumeInFlight: false,
       pendingRequests: new Map(), requestNumber: 0, pendingAttachments: [], attachmentUploads: new Map(),
     },
@@ -52,9 +63,15 @@ function harness() {
     stateGet: (key) => storage.get(key) || "",
     stateSet: (key, value) => storage.set(key, value),
     removeStored: (key) => storage.delete(key),
+    readRecoveryState: () => recoveryStore.load(),
+    updateRecoveryState: (mutator, options) => recoveryStore.update(mutator, options),
+    volatileComposerDrafts: new Map(),
+    composerDraft,
+    setComposerDraft,
     createClientMessageId: () => `file-${++nextId}`,
     showApp() {}, showLogin() {}, setConnectionStatus() {}, updateControls() {},
     renderSessionMetrics() {}, hideThinking() {}, showThinking() {},
+    resizeComposer() {},
     renderAttachmentList() {}, refreshPickerLabels() {}, refreshSessionMetrics() {},
     upsertSession() {}, renderSessionList() {}, updateConversationTitle() {}, closeMobileSidebar() {},
     renderHistory() {}, handleServerEvent() {}, clearNotice() {},
@@ -110,11 +127,11 @@ function harness() {
     section("function applyOpenedSession(", "function setSessionView("),
     section("async function uploadFiles(", "function renderAttachmentList("),
     section("function removeAttachment(", "function displayTextWithAttachments("),
-    section("function attachmentDraftKey(", "async function answerApproval("),
+    section("function loadComposerDraftForCurrentSession(", "async function answerApproval("),
   ].join("\n"), context);
   const first = { id: "existing-file", originalName: "first.png", status: "ready" };
   context.state.pendingAttachments.push(first);
-  context.persistCurrentAttachmentDraft();
+  context.persistCurrentComposerDraft();
   return {
     context, sockets, requests, uploads, storage, gates, notices, first,
     get resets() { return resets; },
@@ -162,7 +179,7 @@ for (const timing of ["disconnected", "loading projects", "restoring session"]) 
     assert.equal(context.elements.messageInput.value, "draft text");
     const types = h.requests.map((request) => request.type);
     assert.ok(types.indexOf("session.resume") < types.indexOf("attachment.ticket.create"));
-    const stored = JSON.parse(h.storage.get("drafts"))["project-1\nsession-1"];
+    const stored = JSON.parse(h.storage.get("recovery")).drafts["project-1\nsession-1"].attachments;
     assert.equal(stored.length, 2);
     assert.ok(stored.every((item) => !("file" in item) && !("projectId" in item) && !("sessionId" in item)));
   });
@@ -273,7 +290,7 @@ test("switching sessions cancels uploads and excludes late results from the new 
   gate.resolve({ ok: true, json: async () => ({ attachment: { id: "late-file" } }) });
   await uploading;
   assert.equal(h.context.state.pendingAttachments.length, 0);
-  assert.equal(JSON.parse(h.storage.get("drafts"))["project-1\nsession-2"], undefined);
+  assert.equal(JSON.parse(h.storage.get("recovery")).drafts["project-1\nsession-2"], undefined);
 });
 
 test("an HTTP failure reported after reconnection retries the retained file once", async () => {

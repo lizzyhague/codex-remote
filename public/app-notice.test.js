@@ -184,7 +184,9 @@ test("leaving a session clears only its current context notice", () => {
 function outboxHarness(request, entries = null) {
   const shown = [];
   const clearedNotices = [];
-  const removed = [];
+  const accepted = [];
+  const recovered = [];
+  let draftsLoaded = 0;
   const outbox = {
     projectId: "project-1",
     sessionId: "session-1",
@@ -194,9 +196,15 @@ function outboxHarness(request, entries = null) {
   };
   const context = vm.createContext({
     state: { authenticated: true, projectId: "project-1", sessionId: "session-1" },
+    ensureRecoveryPersisted: () => true,
     loadOutbox: () => entries ?? [outbox],
     request,
-    clearOutbox: (id) => removed.push(id),
+    acceptStoredMessage: (id) => accepted.push(id),
+    recoverStoredMessage: (entry) => {
+      recovered.push(entry);
+      return "persisted";
+    },
+    loadComposerDraftForCurrentSession: () => { draftsLoaded += 1; },
     clearNotice: (key) => clearedNotices.push(key),
     showNotice: (text, options) => shown.push({ text, options }),
     deliveryNoticeKey: (id) => `delivery:${id}`,
@@ -206,7 +214,10 @@ function outboxHarness(request, entries = null) {
     section("async function retryOutboxForCurrentSession()", "function createClientMessageId("),
     context,
   );
-  return { context, shown, clearedNotices, removed };
+  return {
+    context, shown, clearedNotices, accepted, recovered,
+    get draftsLoaded() { return draftsLoaded; },
+  };
 }
 
 test("a successful outbox retry clears its delivery state", async () => {
@@ -216,7 +227,7 @@ test("a successful outbox retry clears its delivery state", async () => {
     return { accepted: true };
   });
   await h.context.retryOutboxForCurrentSession();
-  assert.deepEqual(h.removed, ["message-1"]);
+  assert.deepEqual(h.accepted, ["message-1"]);
   assert.deepEqual(h.clearedNotices, ["delivery:message-1"]);
   assert.deepEqual(h.shown, []);
   assert.deepEqual(plain(requests), [{
@@ -261,15 +272,17 @@ test("every outbox retry keeps its stored target after navigation", async () => 
   ]);
 });
 
-test("a definitive outbox failure replaces delivery state with a persistent error", async () => {
+test("a definitive outbox failure restores the original-session draft", async () => {
   const h = outboxHarness(async () => {
     throw Object.assign(new Error("后端拒绝。"), { code: "rejected" });
   });
   await h.context.retryOutboxForCurrentSession();
-  assert.deepEqual(h.removed, ["message-1"]);
-  assert.deepEqual(h.clearedNotices, ["delivery:message-1"]);
+  assert.equal(h.recovered.length, 1);
+  assert.equal(h.recovered[0].text, "hello");
+  assert.equal(h.draftsLoaded, 1);
+  assert.deepEqual(h.clearedNotices, []);
   assert.deepEqual(plain(h.shown), [{
-    text: "保留消息重试失败：后端拒绝。",
+    text: "保留消息重试失败：后端拒绝。消息已放回原会话草稿。",
     options: {
       lifetime: "persistent",
       tone: "error",

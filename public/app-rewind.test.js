@@ -3,6 +3,13 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 
+import {
+  RecoveryStateStore,
+  beginRewind,
+  completeRewind,
+  composerDraft,
+} from "./recovery-state.js";
+
 const source = await readFile(new URL("./app.js", import.meta.url), "utf8");
 
 function section(start, end) {
@@ -15,8 +22,16 @@ function harness(storage = new Map()) {
   const notices = [];
   let requestHandler = async () => ({});
   let attachmentSerial = 0;
+  let storageError = null;
+  const recoveryStore = new RecoveryStateStore({
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => {
+      if (storageError) throw storageError;
+      storage.set(key, value);
+    },
+    removeItem: (key) => storage.delete(key),
+  }, { key: "recovery" });
   const context = vm.createContext({
-    REWIND_OUTBOX_KEY: "rewind-outbox",
     state: {
       authenticated: true,
       commandBusy: false,
@@ -38,11 +53,22 @@ function harness(storage = new Map()) {
         item && typeof item.id === "string" && typeof item.originalName === "string"
       ).map((item) => ({ ...item }))
       : [],
-    stateGet: (key) => storage.get(key) || "",
-    stateSet: (key, value) => storage.set(key, value),
-    removeStored: (key) => storage.delete(key),
+    readRecoveryState: () => recoveryStore.load(),
+    updateRecoveryState: (mutator, options) => recoveryStore.update(mutator, options),
+    ensureRecoveryPersisted: () => recoveryStore.ensurePersisted(),
+    beginRewind,
+    completeRewind,
     restoreComposerText: (text) => { context.elements.messageInput.value = text; },
     setPendingAttachments: (attachments) => { context.state.pendingAttachments = attachments; },
+    loadComposerDraftForCurrentSession: () => {
+      const draft = composerDraft(
+        recoveryStore.load(),
+        context.state.projectId,
+        context.state.sessionId,
+      );
+      context.elements.messageInput.value = draft.text;
+      context.state.pendingAttachments = draft.attachments;
+    },
     createClientMessageId: () => `attachment-client-${++attachmentSerial}`,
     clearNotice() {},
     addCommandResult: (result) => results.push(result),
@@ -62,6 +88,7 @@ function harness(storage = new Map()) {
     notices,
     storage,
     setRequestHandler(handler) { requestHandler = handler; },
+    setStorageError(error) { storageError = error; },
   };
 }
 
@@ -95,7 +122,7 @@ test("a rewind names the visible turn and restores its draft after reloading his
   assert.equal(h.requests[0].payload.targetTurnId, "turn-2");
   assert.equal(h.context.elements.messageInput.value, "原来的问题");
   assert.equal(h.context.state.pendingAttachments[0].id, "attachment-1");
-  assert.equal(h.storage.has("rewind-outbox"), false);
+  assert.equal(h.storage.has("recovery"), true);
   assert.deepEqual(h.results.map((result) => result.outcome), ["reverted"]);
 });
 
@@ -115,7 +142,7 @@ test("a PWA reopen retries the same turn instead of selecting the new latest tur
     }),
     /请求超时/u,
   );
-  assert.equal(storage.has("rewind-outbox"), true);
+  assert.equal(storage.has("recovery"), true);
 
   const reopened = harness(storage);
   reopened.context.state.rewindTargetTurnId = "turn-1";
@@ -130,7 +157,7 @@ test("a PWA reopen retries the same turn instead of selecting the new latest tur
   assert.equal(reopened.requests[0].payload.sessionId, "session-1");
   assert.equal(reopened.requests[0].payload.targetTurnId, "turn-2");
   assert.equal(reopened.context.elements.messageInput.value, "原来的问题");
-  assert.equal(storage.has("rewind-outbox"), false);
+  assert.deepEqual(JSON.parse(storage.get("recovery")).rewinds, []);
 });
 
 test("a stale rewind target never restores a draft for a turn that was not removed", async () => {
@@ -148,8 +175,24 @@ test("a stale rewind target never restores a draft for a turn that was not remov
 
   assert.equal(h.context.elements.messageInput.value, "");
   assert.deepEqual(h.context.state.pendingAttachments, []);
-  assert.equal(h.storage.has("rewind-outbox"), false);
+  assert.deepEqual(JSON.parse(h.storage.get("recovery")).rewinds, []);
   assert.deepEqual(h.results.map((result) => result.outcome), ["stale"]);
+});
+
+test("a rewind does not start when its recovery record cannot be persisted", async () => {
+  const h = harness();
+  h.setStorageError(Object.assign(new Error("quota full"), { name: "QuotaExceededError" }));
+
+  await assert.rejects(
+    h.context.requestSlashCommand("command.run", {
+      command: "rewind",
+      option: null,
+      argument: null,
+    }),
+    /无法安全保存回退记录/u,
+  );
+  assert.deepEqual(h.requests, []);
+  assert.equal(h.context.elements.messageInput.value, "");
 });
 
 test("the rewind draft records the turn id even when that turn has no restorable input", () => {
