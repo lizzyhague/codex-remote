@@ -8,6 +8,7 @@ function section(start, end) {
   return source.slice(source.indexOf(start), source.indexOf(end));
 }
 
+const OPEN_INTENT = section("function beginOpenIntent(", "async function startSession(");
 const RESUME = section("async function resumeSession(sessionId)", "function applyOpenedSession(");
 const LOAD_OLDER = section("async function loadOlderHistory()", "async function sendMessage()");
 const LOADING_LABEL = section("function showSessionLoading(", "function hideEmpty(");
@@ -25,6 +26,8 @@ function resumeContext(overrides = {}) {
       composerProjectId: "project-1",
       composerSessionId: "session-1",
       navigationBusy: false,
+      openGeneration: 0,
+      openIntent: null,
       sessionLoading: false,
       sessionOpenState: null,
       sessionResumeTimer: null,
@@ -78,7 +81,7 @@ function resumeContext(overrides = {}) {
     errorMessage: (error) => error.message,
     ...overrides,
   });
-  vm.runInContext(RESUME, context);
+  vm.runInContext(OPEN_INTENT + RESUME, context);
   return { context, timeline };
 }
 
@@ -159,6 +162,85 @@ test("a failed switch falls back to no session instead of an empty one", async (
     "empty",
   ]);
   assert.equal(context.state.sessionId, null);
+});
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+for (const outcome of ["success", "failure"]) {
+  test(`a late ${outcome} for a session removed by another device is not drawn`, async () => {
+    const reply = deferred();
+    const { context, timeline } = resumeContext({ request: () => reply.promise });
+    const opening = context.resumeSession("session-2");
+    assert.equal(context.state.navigationBusy, true);
+
+    // 另一台设备把正在打开的目标归档；页面此时仍显示“加载中”。
+    assert.equal(context.cancelRemovedOpenIntent({
+      type: "sessions.changed",
+      projectId: "project-1",
+      sessionIds: ["session-2"],
+      change: "archive",
+      closedSessionId: null,
+    }), true);
+    assert.equal(context.state.sessionId, null);
+    assert.equal(context.state.navigationBusy, false);
+
+    if (outcome === "success") reply.resolve({ session: { id: "session-2" } });
+    else reply.reject(new Error("会话在打开过程中已被关闭或移走，请重新选择。"));
+    await opening;
+
+    assert.deepEqual(timeline, [
+      { kind: "loading" },
+      { kind: "reset" },
+      { kind: "empty", text: "这个会话已经移出当前列表。请选择其他会话。" },
+    ], "迟到的结果既不重新打开会话，也不再弹错误");
+    assert.equal(context.state.sessionId, null);
+    assert.equal(context.state.navigationBusy, false);
+  });
+}
+
+test("only removals of the session being opened cancel the open", async () => {
+  const reply = deferred();
+  const { context, timeline } = resumeContext({ request: () => reply.promise });
+  const opening = context.resumeSession("session-2");
+  for (const event of [
+    { projectId: "project-1", sessionIds: ["session-9"], change: "archive" },
+    { projectId: "project-1", sessionIds: ["session-2"], change: "rename" },
+    { projectId: "project-1", sessionIds: ["session-2"], change: "mark" },
+    { projectId: "project-2", sessionIds: ["session-2"], change: "trash" },
+  ]) {
+    assert.equal(context.cancelRemovedOpenIntent({ type: "sessions.changed", ...event }), false);
+  }
+  reply.resolve({ session: { id: "session-2" } });
+  await opening;
+  assert.deepEqual(timeline, [
+    { kind: "loading" },
+    { kind: "session", id: "session-2" },
+  ]);
+});
+
+test("a superseded open neither draws its result nor releases the newer open's lock", async () => {
+  const replies = [deferred(), deferred()];
+  let call = 0;
+  const { context, timeline } = resumeContext({
+    findSessionSummary: (id) => ({ id, projectId: "project-1" }),
+    request: () => replies[call++].promise,
+  });
+  const first = context.resumeSession("session-2");
+  const second = context.resumeSession("session-3");
+  replies[0].resolve({ session: { id: "session-2" } });
+  await first;
+  assert.equal(context.state.navigationBusy, true, "更新的打开仍在途");
+  replies[1].resolve({ session: { id: "session-3" } });
+  await second;
+  assert.deepEqual(timeline.filter((entry) => entry.kind === "session"), [
+    { kind: "session", id: "session-3" },
+  ]);
+  assert.equal(context.state.navigationBusy, false);
 });
 
 function loadOlderContext(navigationBusy) {

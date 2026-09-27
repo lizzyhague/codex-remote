@@ -104,6 +104,14 @@ export class BrowserConnection {
   #projectId: string | null = null;
   #sessionId: string | null = null;
   #olderTurns: Turn[] = [];
+  /**
+   * 连接内打开会话的代次。每次新的打开意图都会领一个号；detach、切换项目、
+   * 断线或打开目标被归档/回收/删除都会让号作废。打开流程每次真实等待之后、
+   * 挂载和返回成功之前都要核对，作废了就明确失败。
+   */
+  #openGeneration = 0;
+  /** 正在打开的目标；新建会话在 Worker 返回之前还没有编号。 */
+  #pendingOpen: { generation: number; sessionId: string | null } | null = null;
   /** 打开会话期间扣住的事件；响应发出之后再按正常规则转发。 */
   #deferredEvents: WorkerManagerEvent[] | null = null;
 
@@ -214,17 +222,31 @@ export class BrowserConnection {
         const { sessionId: _engineSessionId, ...summary } = session;
         return { session: summary };
       }
-      case "session.start":
-        return await this.#openSession(
-          request.projectId,
-          await this.#services.workers.startSession(request.projectId),
-        );
-      case "session.resume":
-        return await this.#openSession(
-          request.projectId,
-          await this.#services.workers.resumeSession(request.projectId, request.sessionId),
-          request.acceptLoadingStates === true,
-        );
+      case "session.start": {
+        const generation = this.#beginOpen(null);
+        try {
+          return await this.#openSession(
+            generation,
+            request.projectId,
+            await this.#services.workers.startSession(request.projectId),
+          );
+        } finally {
+          this.#endOpen(generation);
+        }
+      }
+      case "session.resume": {
+        const generation = this.#beginOpen(request.sessionId);
+        try {
+          return await this.#openSession(
+            generation,
+            request.projectId,
+            await this.#services.workers.resumeSession(request.projectId, request.sessionId),
+            request.acceptLoadingStates === true,
+          );
+        } finally {
+          this.#endOpen(generation);
+        }
+      }
       case "settings.get":
         return this.#requireSettings().get();
       case "settings.update":
@@ -335,6 +357,7 @@ export class BrowserConnection {
         removesOpenSession && openSessionId &&
         result.succeeded.includes(openSessionId)
       ) {
+        this.#invalidateOpen();
         this.#detachSession();
       }
       return result;
@@ -349,6 +372,7 @@ export class BrowserConnection {
     if (this.#projectId && this.#projectId !== request.projectId) {
       // 前端切换项目时没有单独的 detach 请求；第一次加载新项目列表就是释放
       // 旧空会话临时 Worker 的明确边界。已经接受的后台任务不受 detach 影响。
+      this.#invalidateOpen();
       this.#detachSession();
     }
     const page = await this.#services.sessions.list(request.projectId, {
@@ -364,6 +388,7 @@ export class BrowserConnection {
   }
 
   async #openSession(
+    generation: number,
     projectId: string,
     managed: ManagedSessionOpen,
     acceptLoadingStates = true,
@@ -371,6 +396,8 @@ export class BrowserConnection {
     // Worker 的启动或恢复可能比 WebSocket 活得更久。断线后这个结果已经没有
     // 接收者，不能再让完成得较晚的请求把死连接挂回会话。
     if (this.#disconnected) return managed;
+    // 等 Worker 的这段时间里，目标可能已被另一台设备移走。
+    this.#requireOpenCurrent(generation);
     if (managed.loadState !== "ready") {
       if (managed.projectId !== projectId) {
         throw new WorkerManagerError("session_project_mismatch", "这个会话不属于所选项目。");
@@ -406,6 +433,13 @@ export class BrowserConnection {
       managed.opened.session.id,
       managed.opened.turns,
     ) ?? [];
+    // 附件同步期间另一台设备可能已经把它归档或移入回收站，连接随之 detach；
+    // 这时不能再回一个与后端状态矛盾的“已打开”。作废时若仍挂着这次打开的会话，
+    // 一并放开，保证失败响应之后连接确实没有当前会话。
+    if (generation !== this.#openGeneration && this.#sessionId === managed.opened.session.id) {
+      this.#detachSession();
+    }
+    this.#requireOpenCurrent(generation);
     const visibleStart = Math.max(0, managed.opened.turns.length - HISTORY_PAGE_SIZE);
     this.#olderTurns = managed.opened.turns.slice(0, visibleStart);
     const visibleTurns = managed.opened.turns.slice(visibleStart);
@@ -495,10 +529,18 @@ export class BrowserConnection {
   #handleSessionChange(event: SessionChangeEvent): void {
     if (!this.#authenticated) return;
     const currentSessionId = this.#sessionId;
-    const closesCurrent = currentSessionId !== null &&
-      event.sessionIds.includes(currentSessionId) &&
-      (event.change === "archive" || event.change === "trash" ||
-        event.change === "delete");
+    const removes = event.change === "archive" || event.change === "trash" ||
+      event.change === "delete";
+    const closesCurrent = removes && currentSessionId !== null &&
+      event.sessionIds.includes(currentSessionId);
+    const pendingSessionId = this.#pendingOpen?.sessionId ?? null;
+    // 还没挂载的打开目标也要作废：恢复请求可能还在等 Worker。
+    if (
+      closesCurrent ||
+      (removes && pendingSessionId !== null && event.sessionIds.includes(pendingSessionId))
+    ) {
+      this.#invalidateOpen();
+    }
     if (closesCurrent) this.#detachSession();
     this.#send({
       type: "event",
@@ -544,7 +586,31 @@ export class BrowserConnection {
     // 在线状态属于 WebSocket 生命周期，不能被某个没有返回的业务请求扣住。
     // 已经收到的请求仍可在队列里完成，但 #openSession 不会让它重新挂载。
     this.#services.workers.clientDisconnected(this.#id);
+    this.#invalidateOpen();
     this.#detachSession();
+  }
+
+  #beginOpen(sessionId: string | null): number {
+    const generation = ++this.#openGeneration;
+    this.#pendingOpen = { generation, sessionId };
+    return generation;
+  }
+
+  #endOpen(generation: number): void {
+    if (this.#pendingOpen?.generation === generation) this.#pendingOpen = null;
+  }
+
+  #invalidateOpen(): void {
+    this.#openGeneration += 1;
+    this.#pendingOpen = null;
+  }
+
+  #requireOpenCurrent(generation: number): void {
+    if (generation === this.#openGeneration) return;
+    throw new BrowserRequestError(
+      "session_open_cancelled",
+      "会话在打开过程中已被关闭或移走，请重新选择。",
+    );
   }
 
   #requireSession(): { projectId: string; sessionId: string } {

@@ -540,6 +540,104 @@ test("holds events raised while opening until the page has been told about the s
   assert.deepEqual(socket.events("message.delta").map((event) => event.delta), ["半"]);
 });
 
+for (const action of ["archive", "trash", "delete"] as const) {
+  test(`a session removed by another device (${action}) while its attachments sync is not reported open`, async (context) => {
+    const { workers, sessions, services } = setup();
+    const socket = new FakeSocket();
+    const connection = new BrowserConnection("phone", socket, services);
+    context.after(() => connection.disconnect());
+    await openSession(connection, "session-1");
+
+    workers.beforeAttachmentSync = async () => {
+      // 连接已经挂到 session-2，响应还在等附件同步；另一台设备此时移走它。
+      assert.equal(workers.attached.get("phone"), "session-2");
+      workers.emit(
+        { type: "message.delta", sessionId: "session-2", delta: "迟到" },
+        "session",
+        "session-2",
+      );
+      if (action === "archive") await sessions.archive("projects/demo", ["session-2"]);
+      else if (action === "trash") await sessions.moveToTrash("projects/demo", ["session-2"]);
+      else await sessions.deleteTrash("projects/demo", ["session-2"]);
+    };
+    await openSession(connection, "session-2");
+
+    const changedIndex = socket.messages.findIndex((message) =>
+      message.type === "event" && (message.event as JsonObject).type === "sessions.changed"
+    );
+    const responseIndex = socket.messages.findIndex((message) =>
+      message.requestId === "open-session-2"
+    );
+    assert.ok(changedIndex >= 0 && responseIndex > changedIndex);
+    assert.equal(socket.events("sessions.changed")[0]?.closedSessionId, "session-2");
+    const response = socket.messages[responseIndex]!;
+    assert.equal(response.ok, false, "后端已经 detach，不能再回“已打开”");
+    assert.equal((response.error as JsonObject).code, "session_open_cancelled");
+    assert.equal(workers.attached.has("phone"), false);
+    assert.deepEqual(socket.events("message.delta"), [], "被移走会话的扣留事件不能补发");
+
+    connection.receiveText(request("history.older", "older-after-removal", {
+      projectId: "projects/demo",
+      sessionId: "session-2",
+    }));
+    await connection.whenIdle();
+    const older = socket.last("response")!;
+    assert.equal(older.ok, false);
+    assert.equal((older.error as JsonObject).code, "session_not_open");
+  });
+}
+
+for (const loadState of ["ready", "queued"] as const) {
+  test(`a ${loadState} resume whose target is archived before it returns never attaches`, async (context) => {
+    const { workers, sessions, services } = setup();
+    if (loadState === "queued") {
+      workers.opens.set("session-2", managedLoading("session-2", "queued"));
+    }
+    const socket = new FakeSocket();
+    const connection = new BrowserConnection("phone", socket, services);
+    context.after(() => connection.disconnect());
+    await openSession(connection, "session-1");
+
+    workers.beforeResume = async () => {
+      await sessions.archive("projects/demo", ["session-2"]);
+    };
+    connection.receiveText(request("session.resume", "open-session-2", {
+      projectId: "projects/demo",
+      sessionId: "session-2",
+      acceptLoadingStates: true,
+    }));
+    await connection.whenIdle();
+
+    const response = socket.last("response")!;
+    assert.equal(response.ok, false);
+    assert.equal((response.error as JsonObject).code, "session_open_cancelled");
+    // 没有进入挂载步骤，原先打开的会话保持原样。
+    assert.equal(workers.attached.get("phone"), "session-1");
+    assert.equal(socket.events("sessions.changed")[0]?.closedSessionId, null);
+  });
+}
+
+test("changes to other sessions or non-removing changes do not cancel an open", async (context) => {
+  const { workers, sessions, services } = setup();
+  const socket = new FakeSocket();
+  const connection = new BrowserConnection("phone", socket, services);
+  context.after(() => connection.disconnect());
+
+  workers.beforeResume = async () => {
+    await sessions.archive("projects/demo", ["session-other"]);
+    await sessions.rename("projects/demo", "session-2", "新标题");
+  };
+  workers.beforeAttachmentSync = async () => {
+    await sessions.moveToTrash("projects/demo", ["session-other"]);
+    await sessions.setMarked("projects/demo", "session-2", true);
+  };
+  await openSession(connection, "session-2");
+
+  const response = data(socket.last("response"));
+  assert.equal((response.session as JsonObject).id, "session-2");
+  assert.equal(workers.attached.get("phone"), "session-2");
+});
+
 test("forwards worker events for the open session and hides other sessions", async (context) => {
   const { workers, services } = setup();
   const phoneSocket = new FakeSocket();

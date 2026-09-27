@@ -51,6 +51,7 @@ function harness() {
       authenticated: false, connectionReady: false, projectId: "project-1", sessionId: "session-1",
       composerProjectId: "project-1", composerSessionId: "session-1",
       sessionOpenState: null, sessionResumeTimer: null, sessionResumeInFlight: false,
+      openGeneration: 0, openIntent: null, navigationBusy: false,
       pendingRequests: new Map(), requestNumber: 0, pendingAttachments: [], attachmentUploads: new Map(),
     },
     elements: {
@@ -69,6 +70,7 @@ function harness() {
     composerDraft,
     setComposerDraft,
     createClientMessageId: () => `file-${++nextId}`,
+    setNavigationBusy(busy) { context.state.navigationBusy = busy; },
     showApp() {}, showLogin() {}, setConnectionStatus() {}, updateControls() {},
     renderSessionMetrics() {}, hideThinking() {}, showThinking() {},
     resizeComposer() {},
@@ -114,15 +116,16 @@ function harness() {
           : request.type === "session.resume" ? { session: { id: request.sessionId }, tasks: [] }
           : { ticket: "upload-ticket" };
         Promise.resolve(gates.get(request.type)?.promise ?? data).then((result) => {
-          this.listeners.message({ data: JSON.stringify({
-            type: "response", requestId: request.requestId, ok: true, data: result,
-          }) });
+          this.listeners.message({ data: JSON.stringify(result?.failure
+            ? { type: "response", requestId: request.requestId, ok: false, error: result.failure }
+            : { type: "response", requestId: request.requestId, ok: true, data: result }) });
         });
       }
     },
   });
   vm.runInContext([
     section("async function connect(", "async function loadSessions("),
+    section("function beginOpenIntent(", "async function startSession("),
     section("function applySessionResumeResult(", "function applyOpenedSession("),
     section("function applyOpenedSession(", "function setSessionView("),
     section("async function uploadFiles(", "function renderAttachmentList("),
@@ -311,6 +314,39 @@ test("an HTTP failure reported after reconnection retries the retained file once
   assert.equal(h.uploads.length, 2);
   assert.equal(h.uploads[0].body, h.uploads[1].body);
 });
+
+for (const outcome of ["success", "failure"]) {
+  test(`restoring a session removed by another device finishes reconnecting after a late ${outcome}`, async () => {
+    const h = harness();
+    const { context, gates, sockets } = h;
+    const gate = deferred();
+    gates.set("session.resume", gate);
+    await context.connect();
+    const opening = sockets[0].open();
+    await tick();
+    assert.ok(h.requests.some((request) => request.type === "session.resume"));
+
+    assert.equal(context.cancelRemovedOpenIntent({
+      type: "sessions.changed",
+      projectId: "project-1",
+      sessionIds: ["session-1"],
+      change: "trash",
+      closedSessionId: null,
+    }), true);
+    assert.equal(context.state.sessionId, null);
+    gate.resolve(outcome === "success"
+      ? { session: { id: "session-1" }, tasks: [] }
+      : { failure: { code: "session_open_cancelled", message: "会话在打开过程中已被关闭或移走，请重新选择。" } });
+    await opening;
+    await tick();
+
+    assert.equal(context.state.sessionId, null, "迟到结果不能把会话重新画出来");
+    assert.equal(context.state.connectionReady, true);
+    assert.equal(sockets.length, 1, "不能因此断开重连");
+    assert.equal(sockets[0].readyState, 1);
+    assert.deepEqual(h.notices, []);
+  });
+}
 
 test("initial connection without a selected session still opens the session list", async () => {
   const h = harness();

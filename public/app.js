@@ -157,6 +157,8 @@ const state = {
   sessionLoading: false,
   navigationBusy: false,
   sessionLoadGeneration: 0,
+  openGeneration: 0,
+  openIntent: null,
   pickerGeneration: 0,
   sessionSearchTimer: null,
   selectionMode: false,
@@ -229,6 +231,7 @@ elements.tokenForm.addEventListener("submit", (event) => {
 });
 
 elements.projectSelect.addEventListener("change", () => {
+  invalidateOpenIntent();
   persistCurrentComposerDraft();
   state.projectId = elements.projectSelect.value || null;
   resetCurrentSession();
@@ -452,22 +455,34 @@ async function connect(token) {
       if (state.sessionId) {
         const projectId = state.projectId;
         const sessionId = state.sessionId;
-        const opened = await request("session.resume", {
-          projectId,
-          sessionId,
-          acceptLoadingStates: true,
-        });
-        if (generation !== state.generation || socket.readyState !== WebSocket.OPEN ||
-            projectId !== state.projectId || sessionId !== state.sessionId) return;
-        applySessionResumeResult(opened, sessionId, {
-          preserveAttachments: true,
-          retryDeferred: false,
-        });
-        if (opened.notice) showNotice(opened.notice, {
-          lifetime: "persistent",
-          tone: "warning",
-          key: "host-memory-degraded",
-        });
+        const openGeneration = beginOpenIntent(projectId, sessionId);
+        let opened;
+        try {
+          opened = await request("session.resume", {
+            projectId,
+            sessionId,
+            acceptLoadingStates: true,
+          });
+        } catch (error) {
+          // 恢复期间会话被另一台设备移走：页面已经退回会话列表，连接本身没有问题。
+          if (openGeneration === state.openGeneration) throw error;
+        } finally {
+          finishOpenIntent(openGeneration);
+        }
+        if (generation !== state.generation || socket.readyState !== WebSocket.OPEN) return;
+        // 打开意图已作废时不应用迟到结果，但连接照常完成恢复。
+        if (openGeneration === state.openGeneration) {
+          if (projectId !== state.projectId || sessionId !== state.sessionId) return;
+          applySessionResumeResult(opened, sessionId, {
+            preserveAttachments: true,
+            retryDeferred: false,
+          });
+          if (opened.notice) showNotice(opened.notice, {
+            lifetime: "persistent",
+            tone: "warning",
+            key: "host-memory-degraded",
+          });
+        }
       }
       state.connectionReady = true;
       updateControls();
@@ -689,15 +704,54 @@ async function loadSessions({ append = false } = {}) {
   }
 }
 
+/** 页面发起一次新建或打开；更早的在途打开随之作废。 */
+function beginOpenIntent(projectId, sessionId) {
+  const generation = ++state.openGeneration;
+  state.openIntent = { generation, projectId, sessionId };
+  return generation;
+}
+
+function invalidateOpenIntent() {
+  state.openGeneration += 1;
+  state.openIntent = null;
+}
+
+/** 返回 true 表示没有更新的打开在途，调用方可以解除导航锁。 */
+function finishOpenIntent(generation) {
+  if (state.openIntent && state.openIntent.generation !== generation) return false;
+  state.openIntent = null;
+  return true;
+}
+
+/**
+ * 另一台设备归档、回收或删除了正在打开的目标：作废这次打开并退回“还没选会话”，
+ * 不再等迟到的结果。目标还没在后端挂上时事件不带 closedSessionId，只能由这里收口。
+ */
+function cancelRemovedOpenIntent(event) {
+  const intent = state.openIntent;
+  if (
+    !intent || intent.sessionId === null || intent.projectId !== event.projectId ||
+    !["archive", "trash", "delete"].includes(event.change) ||
+    !Array.isArray(event.sessionIds) || !event.sessionIds.includes(intent.sessionId)
+  ) return false;
+  invalidateOpenIntent();
+  setNavigationBusy(false);
+  resetCurrentSession();
+  showEmpty("这个会话已经移出当前列表。请选择其他会话。");
+  return true;
+}
+
 async function startSession() {
   if (!state.projectId) return;
   if (state.sessionView !== "active") setSessionView("active", false);
+  const generation = beginOpenIntent(state.projectId, null);
   setNavigationBusy(true);
   clearSessionResumeTimer();
   state.sessionOpenState = null;
   showSessionLoading();
   try {
     const opened = await request("session.start", { projectId: state.projectId });
+    if (generation !== state.openGeneration) return;
     applyOpenedSession(opened);
     upsertSession(opened.session);
     renderSessionList();
@@ -708,13 +762,14 @@ async function startSession() {
       key: "host-memory-degraded",
     });
   } catch (error) {
+    if (generation !== state.openGeneration) return;
     showNotice(errorMessage(error), TEMPORARY_ERROR);
     // 旧会话已经撤下来了，没法再把它放回去；与其让输入框对着一个看不见的
     // 会话，不如退回“还没选会话”。
     resetCurrentSession();
     showEmpty("选择以前的会话，或者新建一个会话。");
   } finally {
-    setNavigationBusy(false);
+    if (finishOpenIntent(generation)) setNavigationBusy(false);
     updateControls();
   }
 }
@@ -734,6 +789,7 @@ async function resumeSession(sessionId) {
   }
   if (!state.projectId) return;
   const switching = sessionId !== state.sessionId;
+  const generation = beginOpenIntent(state.projectId, sessionId);
   setNavigationBusy(true);
   clearSessionResumeTimer();
   state.sessionOpenState = null;
@@ -746,6 +802,9 @@ async function resumeSession(sessionId) {
       sessionId,
       acceptLoadingStates: true,
     });
+    // 等待期间目标可能已被另一台设备移走，或页面有了新的导航意图；
+    // 迟到的结果不能把页面重新画回这个会话。
+    if (generation !== state.openGeneration) return;
     applySessionResumeResult(opened, sessionId);
     if (opened.notice) showNotice(opened.notice, {
       lifetime: "persistent",
@@ -753,13 +812,14 @@ async function resumeSession(sessionId) {
       key: "host-memory-degraded",
     });
   } catch (error) {
+    if (generation !== state.openGeneration) return;
     showNotice(errorMessage(error), TEMPORARY_ERROR);
     if (switching) {
       resetCurrentSession();
       showEmpty("选择以前的会话，或者新建一个会话。");
     }
   } finally {
-    setNavigationBusy(false);
+    if (finishOpenIntent(generation)) setNavigationBusy(false);
     updateControls();
   }
 }
@@ -1818,6 +1878,7 @@ function handleServerEvent(event, replay = false) {
       applySettingsUpdated(event);
       break;
     case "sessions.changed":
+      cancelRemovedOpenIntent(event);
       if (event.closedSessionId === state.sessionId) {
         resetCurrentSession();
         showEmpty("这个会话已经移出当前列表。请选择其他会话。");
