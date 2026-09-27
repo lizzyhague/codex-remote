@@ -193,7 +193,8 @@ export class SessionWorkerManager {
   readonly #provisionalWorkers = new Map<string, ProvisionalWorker>();
   readonly #authenticatedClients = new Set<string>();
   readonly #clientSessions = new Map<string, string>();
-  readonly #sessionFullAccess = new Map<string, boolean>();
+  /** 用户最后确认的会话设置；任务自己的 effective 权限固化在 WorkerTask。 */
+  readonly #sessionDesiredFullAccess = new Map<string, boolean>();
   readonly #threadOperationTails = new Map<string, Promise<void>>();
   readonly #attachmentLeases = new Map<string, AttachmentLease>();
   readonly #workerStartControllers = new Set<AbortController>();
@@ -265,7 +266,7 @@ export class SessionWorkerManager {
       throw new Error(`会话仍有 ${keptActive} 个任务在进行，工作记录没有删除。`);
     }
     this.#clearPathRedactors(threadId);
-    this.#sessionFullAccess.delete(threadId);
+    this.#sessionDesiredFullAccess.delete(threadId);
     await this.#attachmentIndex?.remove(threadId);
   }
 
@@ -339,7 +340,13 @@ export class SessionWorkerManager {
     this.#assertProjectAccepts(projectId, threadId);
     const prepared = await this.prepareMessageAttachments(projectId, threadId, attachmentIds, text);
     try {
-      const queued = this.enqueueMessage(projectId, threadId, clientMessageId, text, prepared);
+      const queued = await this.enqueueMessage(
+        projectId,
+        threadId,
+        clientMessageId,
+        text,
+        prepared,
+      );
       if (!queued.duplicate) {
         await this.#registerPreparedAttachments(threadId, clientMessageId, prepared).catch(
           (error: unknown) => {
@@ -400,7 +407,7 @@ export class SessionWorkerManager {
       operation.worker = worker;
       operation.ownsWorker = true;
       this.#assertOpen();
-      this.#recordFullAccess(worker.threadId, worker.fullAccessEnabled);
+      this.#recordDesiredFullAccess(worker.threadId, worker.fullAccessEnabled);
       this.#provisionalWorkers.set(worker.threadId, { worker, closeTimer: null });
       operation.worker = null;
       operation.ownsWorker = false;
@@ -455,7 +462,12 @@ export class SessionWorkerManager {
     clientMessageId: string,
     text: string,
     preparedAttachments: PreparedTaskAttachments | null = null,
-  ): { accepted: true; taskId: string; status: WorkerTask["status"]; duplicate: boolean } {
+  ): Promise<{
+    accepted: true;
+    taskId: string;
+    status: WorkerTask["status"];
+    duplicate: boolean;
+  }> {
     return this.#enqueue(
       projectId,
       threadId,
@@ -471,7 +483,12 @@ export class SessionWorkerManager {
     threadId: string,
     clientMessageId: string,
     kind: Extract<WorkerTaskKind, "compact">,
-  ): { accepted: true; taskId: string; status: WorkerTask["status"]; duplicate: boolean } {
+  ): Promise<{
+    accepted: true;
+    taskId: string;
+    status: WorkerTask["status"];
+    duplicate: boolean;
+  }> {
     return this.#enqueue(projectId, threadId, clientMessageId, kind, "");
   }
 
@@ -565,7 +582,7 @@ export class SessionWorkerManager {
     targetTurnId: string | null,
   ): Promise<Record<string, unknown>> {
     if (command === "compact") {
-      const queued = this.enqueueCommandTask(
+      const queued = await this.enqueueCommandTask(
         projectId,
         threadId,
         clientMessageId,
@@ -634,7 +651,7 @@ export class SessionWorkerManager {
 
       this.#assertOpen();
       if (typeof result.fullAccessEnabled === "boolean") {
-        this.#recordFullAccess(threadId, result.fullAccessEnabled);
+        this.#recordDesiredFullAccess(threadId, result.fullAccessEnabled);
         const browserResult: Record<string, unknown> = { ...result };
         delete browserResult.fullAccessEnabled;
         return browserResult;
@@ -758,10 +775,34 @@ export class SessionWorkerManager {
     kind: WorkerTaskKind,
     payload: string,
     preparedAttachments: PreparedTaskAttachments | null = null,
+  ): Promise<{
+    accepted: true;
+    taskId: string;
+    status: WorkerTask["status"];
+    duplicate: boolean;
+  }> {
+    return this.#serializeThreadOperation(threadId, async () =>
+      this.#enqueueUnlocked(
+        projectId,
+        threadId,
+        clientMessageId,
+        kind,
+        payload,
+        preparedAttachments,
+      ));
+  }
+
+  #enqueueUnlocked(
+    projectId: string,
+    threadId: string,
+    clientMessageId: string,
+    kind: WorkerTaskKind,
+    payload: string,
+    preparedAttachments: PreparedTaskAttachments | null = null,
   ): { accepted: true; taskId: string; status: WorkerTask["status"]; duplicate: boolean } {
     if (this.#closed) throw new WorkerManagerError("worker_manager_closed", "后端正在停止。");
     const createdAtMs = this.#now();
-    const permissionMode: WorkerPermissionMode = this.#knownFullAccess(threadId)
+    const permissionMode: WorkerPermissionMode = this.#knownDesiredFullAccess(threadId)
       ? "full_access"
       : "manual";
     let result;
@@ -823,7 +864,7 @@ export class SessionWorkerManager {
   }
 
   #managedOpen(opened: OpenedSession, fullAccessEnabled: boolean): ManagedSessionReady {
-    this.#recordFullAccess(opened.session.id, fullAccessEnabled);
+    this.#initializeDesiredFullAccess(opened.session.id, fullAccessEnabled);
     const pending = this.#store.pendingForThread(opened.session.id);
     const replayTask = pending ?? terminalReplayTask(this.#store.latestForThread(opened.session.id));
     return {
@@ -885,7 +926,10 @@ export class SessionWorkerManager {
       scope.worker = worker;
       scope.ownsWorker = true;
       this.#assertOpen();
-      await this.#reconcileFullAccess(worker, threadId ? this.#knownFullAccess(threadId) : undefined);
+      await this.#reconcileFullAccess(
+        worker,
+        threadId ? this.#knownDesiredFullAccess(threadId) : undefined,
+      );
       const result = await operation(worker, gate.notice);
       this.#assertOpen();
       return result;
@@ -953,13 +997,15 @@ export class SessionWorkerManager {
     threadId: string,
     operation: (worker: SessionWorker) => Promise<Result> | Result,
   ): Promise<Result> {
-    if (this.#store.pendingForThread(threadId)) {
-      throw new WorkerManagerError(
-        "task_already_running",
-        "这个会话有已接受或正在执行的任务。",
-      );
-    }
-    return this.#withTransientWorker(projectId, threadId, operation);
+    return this.#serializeThreadOperation(threadId, () => {
+      if (this.#store.pendingForThread(threadId)) {
+        throw new WorkerManagerError(
+          "task_already_running",
+          "这个会话有已接受或正在执行的任务。",
+        );
+      }
+      return this.#withTransientWorkerUnlocked(projectId, threadId, operation);
+    });
   }
 
   #schedule(): void {
@@ -1630,29 +1676,34 @@ export class SessionWorkerManager {
     this.#queueRetryTimer.unref();
   }
 
-  #knownFullAccess(threadId: string): boolean | undefined {
-    if (this.#sessionFullAccess.has(threadId)) {
-      return this.#sessionFullAccess.get(threadId);
+  #knownDesiredFullAccess(threadId: string): boolean | undefined {
+    if (this.#sessionDesiredFullAccess.has(threadId)) {
+      return this.#sessionDesiredFullAccess.get(threadId);
     }
-    const persisted = this.#store.sessionFullAccess(threadId);
+    const persisted = this.#store.sessionDesiredFullAccess(threadId);
     if (persisted !== null) {
-      this.#sessionFullAccess.set(threadId, persisted);
+      this.#sessionDesiredFullAccess.set(threadId, persisted);
     }
     return persisted ?? undefined;
   }
 
-  #recordFullAccess(threadId: string, enabled: boolean): boolean {
-    this.#sessionFullAccess.set(threadId, enabled);
-    this.#store.setSessionFullAccess(threadId, enabled, this.#now());
+  #recordDesiredFullAccess(threadId: string, enabled: boolean): boolean {
+    this.#sessionDesiredFullAccess.set(threadId, enabled);
+    this.#store.setSessionDesiredFullAccess(threadId, enabled, this.#now());
     return enabled;
+  }
+
+  #initializeDesiredFullAccess(threadId: string, enabled: boolean): boolean {
+    const known = this.#knownDesiredFullAccess(threadId);
+    return known ?? this.#recordDesiredFullAccess(threadId, enabled);
   }
 
   async #reconcileFullAccess(
     worker: SessionWorker,
-    desired: boolean | undefined,
+    target: boolean | undefined,
   ): Promise<boolean> {
     let enabled = worker.fullAccessEnabled;
-    if (desired !== undefined && enabled !== desired) {
+    if (target !== undefined && enabled !== target) {
       const result = await worker.commands.toggleFullAccess().catch(() => {
         throw new WorkerManagerError(
           "permission_restore_failed",
@@ -1666,15 +1717,17 @@ export class SessionWorkerManager {
         );
       }
       enabled = result.fullAccessEnabled;
-      if (enabled !== desired) {
+      if (enabled !== target) {
         throw new WorkerManagerError(
           "permission_restore_failed",
-          `无法把会话权限恢复为${desired ? " Full access" : "普通权限"}，任务没有启动。`,
+          `无法把会话权限恢复为${target ? " Full access" : "普通权限"}，任务没有启动。`,
         );
       }
     }
     this.#assertOpen();
-    return this.#recordFullAccess(worker.threadId, enabled);
+    // 这里只恢复已经接受任务的 effective 权限。它可能是旧快照，不能反写并
+    // 覆盖用户后来确认的会话 desired setting。
+    return enabled;
   }
 
   #workerCount(): number {
@@ -1696,7 +1749,7 @@ export class SessionWorkerManager {
     await provisional.worker.close().catch((error: unknown) => {
       console.error(`关闭空会话 Worker 失败：${errorMessage(error)}`);
     });
-    this.#sessionFullAccess.delete(threadId);
+    this.#sessionDesiredFullAccess.delete(threadId);
     this.#schedule();
   }
 

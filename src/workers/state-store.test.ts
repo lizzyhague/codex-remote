@@ -86,22 +86,22 @@ test("keeps ordered browser events and marks live work interrupted after restart
   assert.equal(events[1]?.event.interruptionReason, "backend_restarted");
 });
 
-test("persists Full access selection across state-store reopen", async (context) => {
+test("persists desired Full access selection across state-store reopen", async (context) => {
   const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-worker-settings-"));
   context.after(() => rm(directory, { recursive: true, force: true }));
   const file = path.join(directory, "work.sqlite");
 
   let store = await WorkerStateStore.open(file);
-  assert.equal(store.sessionFullAccess("thread-1"), null);
-  store.setSessionFullAccess("thread-1", true, 100);
-  assert.equal(store.sessionFullAccess("thread-1"), true);
+  assert.equal(store.sessionDesiredFullAccess("thread-1"), null);
+  store.setSessionDesiredFullAccess("thread-1", true, 100);
+  assert.equal(store.sessionDesiredFullAccess("thread-1"), true);
   store.close();
 
   store = await WorkerStateStore.open(file);
   context.after(() => store.close());
-  assert.equal(store.sessionFullAccess("thread-1"), true);
-  store.setSessionFullAccess("thread-1", false, 200);
-  assert.equal(store.sessionFullAccess("thread-1"), false);
+  assert.equal(store.sessionDesiredFullAccess("thread-1"), true);
+  store.setSessionDesiredFullAccess("thread-1", false, 200);
+  assert.equal(store.sessionDesiredFullAccess("thread-1"), false);
 });
 
 test("persists only public attachment metadata with an accepted message", async (context) => {
@@ -428,7 +428,7 @@ test("forgets a deleted session but leaves work that is still running", async (c
     taskId: "task-1",
     status: "interrupted",
   }, 120, { interruptionReason: "user_requested" });
-  store.setSessionFullAccess("thread-1", true, 130);
+  store.setSessionDesiredFullAccess("thread-1", true, 130);
   assert.equal(store.eventsForTask("task-1").length, 1);
 
   store.admit({
@@ -463,7 +463,7 @@ test("forgets a deleted session but leaves work that is still running", async (c
   assert.deepEqual(forgotten, { deleted: 1, keptActive: 0 });
   assert.throws(() => store.require("task-1"), /找不到/u);
   assert.deepEqual(store.eventsForTask("task-1"), []);
-  assert.equal(store.sessionFullAccess("thread-1"), null);
+  assert.equal(store.sessionDesiredFullAccess("thread-1"), null);
   assert.equal(store.require("task-2").payload, "别动我");
 
   // 还在排队的任务不该被清理打断。

@@ -27,7 +27,7 @@ test("keeps an accepted turn running after the browser disconnects", async (cont
   const fixture = await managerFixture(context, { offlineGraceMs: 10 });
   fixture.manager.clientAuthenticated("phone");
   fixture.manager.start();
-  const accepted = fixture.manager.enqueueMessage(
+  const accepted = await fixture.manager.enqueueMessage(
     "project-1",
     "thread-1",
     "message-1",
@@ -52,7 +52,7 @@ test("publishes recognizable path-redacted approval scopes and resolves an answe
   }));
   fixture.manager.clientAuthenticated("phone");
   fixture.manager.start();
-  fixture.manager.enqueueMessage(
+  await fixture.manager.enqueueMessage(
     "project-1",
     "thread-1",
     "message-1",
@@ -133,7 +133,7 @@ test("refuses approval when a future permission shape cannot be displayed comple
   fixture.manager.onEvent((stored) => events.push(stored.event));
   fixture.manager.clientAuthenticated("phone");
   fixture.manager.start();
-  fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "需要审批");
+  await fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "需要审批");
   const worker = await fixture.waitForWorker();
   worker.requestPermissionsApproval({ futureCapability: { secret: true } });
   await waitFor(() => events.some((event) => event.type === "approval.requested"));
@@ -159,7 +159,7 @@ test("task completion globally resolves pending approval and interaction cards",
   }));
   fixture.manager.clientAuthenticated("phone");
   fixture.manager.start();
-  fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "等待回答");
+  await fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "等待回答");
   const worker = await fixture.waitForWorker();
   worker.requestApproval();
   worker.requestInteraction();
@@ -188,7 +188,7 @@ test("an unexpected Worker exit globally resolves every pending request", async 
   }));
   fixture.manager.clientAuthenticated("phone");
   fixture.manager.start();
-  const accepted = fixture.manager.enqueueMessage(
+  const accepted = await fixture.manager.enqueueMessage(
     "project-1",
     "thread-1",
     "message-1",
@@ -211,7 +211,7 @@ test("an unexpected Worker exit globally resolves every pending request", async 
 test("cancels the whole manual turn when an offline approval outlives grace", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 5 });
   fixture.manager.start();
-  const accepted = fixture.manager.enqueueMessage(
+  const accepted = await fixture.manager.enqueueMessage(
     "project-1",
     "thread-1",
     "message-1",
@@ -242,8 +242,18 @@ test("reconnecting mid-sweep spares the turns the sweep has not reached", async 
   // 两个审批要在宽限到点之前就挂着，才会走到逐路处理的那个循环。
   fixture.manager.clientAuthenticated("phone");
   fixture.manager.start();
-  const first = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "需要权限");
-  const second = fixture.manager.enqueueMessage("project-2", "thread-2", "message-2", "也需要权限");
+  const first = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "需要权限",
+  );
+  const second = await fixture.manager.enqueueMessage(
+    "project-2",
+    "thread-2",
+    "message-2",
+    "也需要权限",
+  );
   await waitFor(() => fixture.workers.length === 2);
   const [firstWorker, secondWorker] = fixture.workers;
   firstWorker!.requestApproval();
@@ -268,10 +278,10 @@ test("auto-approves an execution request for an offline Full access turn", async
   const fixture = await managerFixture(context, {
     offlineGraceMs: 1,
     fullAccess: true,
-    persistedFullAccess: true,
+    persistedDesiredFullAccess: true,
   });
   fixture.manager.start();
-  fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "继续执行");
+  await fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "继续执行");
   const worker = await fixture.waitForWorker();
   worker.requestApproval();
   await delay(5);
@@ -284,7 +294,7 @@ test("auto-approves an execution request for an offline Full access turn", async
 test("refuses a permission change while the session has an active task", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 10 });
   fixture.manager.start();
-  fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "还在执行");
+  await fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "还在执行");
   await fixture.waitForWorker("thread-1");
 
   await assert.rejects(
@@ -302,6 +312,158 @@ test("refuses a permission change while the session has an active task", async (
   );
 });
 
+test("serializes task admission after a concurrent permission change in both directions", async (context) => {
+  for (const scenario of [
+    {
+      name: "disable",
+      initial: true,
+      option: ":workspace",
+      expectedMode: "manual" as const,
+    },
+    {
+      name: "enable",
+      initial: false,
+      option: ":full-access",
+      expectedMode: "full_access" as const,
+    },
+  ]) {
+    let permissionStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      permissionStarted = resolve;
+    });
+    let releasePermission!: () => void;
+    const permissionGate = new Promise<void>((resolve) => {
+      releasePermission = resolve;
+    });
+    context.after(() => releasePermission());
+    const fixture = await managerFixture(context, {
+      offlineGraceMs: 10,
+      fullAccess: scenario.initial,
+      persistedDesiredFullAccess: scenario.initial,
+      beforeSetPermissions: async () => {
+        permissionStarted();
+        await permissionGate;
+      },
+    });
+    fixture.manager.start();
+
+    const command = fixture.manager.runCommand(
+      "project-1",
+      "thread-1",
+      `permission-${scenario.name}`,
+      "permissions",
+      scenario.option,
+      null,
+      null,
+    );
+    await started;
+    let admissionSettled = false;
+    const admission = fixture.manager.enqueueMessage(
+      "project-1",
+      "thread-1",
+      `message-${scenario.name}`,
+      `concurrent ${scenario.name}`,
+    ).finally(() => {
+      admissionSettled = true;
+    });
+    await delay(0);
+    assert.equal(admissionSettled, false, `${scenario.name}: admission must wait for settings`);
+
+    releasePermission();
+    await command;
+    const accepted = await admission;
+    assert.equal(
+      fixture.store.require(accepted.taskId).permissionMode,
+      scenario.expectedMode,
+    );
+    assert.equal(
+      fixture.store.sessionDesiredFullAccess("thread-1"),
+      scenario.expectedMode === "full_access",
+    );
+    const worker = await fixture.waitForWorker("thread-1");
+    assert.equal(worker.fullAccessEnabled, scenario.expectedMode === "full_access");
+    worker.complete("completed");
+  }
+});
+
+test("rejects a permission change that linearizes after task admission", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 10 });
+  fixture.manager.start();
+
+  const admission = fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-first",
+    "先准入",
+  );
+  const command = fixture.manager.runCommand(
+    "project-1",
+    "thread-1",
+    "permission-second",
+    "permissions",
+    ":full-access",
+    null,
+    null,
+  );
+
+  const accepted = await admission;
+  await assert.rejects(
+    command,
+    (error: unknown) => error instanceof WorkerManagerError &&
+      error.code === "task_already_running",
+  );
+  assert.equal(fixture.store.require(accepted.taskId).permissionMode, "manual");
+  const worker = await fixture.waitForWorker("thread-1");
+  worker.complete("completed");
+});
+
+test("restart preserves newer desired settings while old effective snapshots run", async (context) => {
+  for (const scenario of [
+    {
+      name: "old-full-new-manual",
+      effectiveMode: "full_access" as const,
+      desired: false,
+    },
+    {
+      name: "old-manual-new-full",
+      effectiveMode: "manual" as const,
+      desired: true,
+    },
+  ]) {
+    const fixture = await managerFixture(context, {
+      offlineGraceMs: 10,
+      fullAccess: scenario.desired,
+      persistedDesiredFullAccess: scenario.desired,
+      persistedTaskPermissionMode: scenario.effectiveMode,
+    });
+    fixture.manager.start();
+
+    const oldWorker = await fixture.waitForWorker("thread-1");
+    assert.equal(oldWorker.fullAccessEnabled, scenario.effectiveMode === "full_access");
+    assert.equal(
+      fixture.store.sessionDesiredFullAccess("thread-1"),
+      scenario.desired,
+      `${scenario.name}: old reconcile must not overwrite desired setting`,
+    );
+    oldWorker.complete("completed");
+    await waitFor(() => fixture.store.require("persisted-task").status === "completed");
+
+    const next = await fixture.manager.enqueueMessage(
+      "project-1",
+      "thread-1",
+      `next-${scenario.name}`,
+      "下一轮",
+    );
+    assert.equal(
+      fixture.store.require(next.taskId).permissionMode,
+      scenario.desired ? "full_access" : "manual",
+    );
+    await waitFor(() => fixture.workers[1]?.started === true);
+    assert.equal(fixture.workers[1]!.fullAccessEnabled, scenario.desired);
+    fixture.workers[1]!.complete("completed");
+  }
+});
+
 
 test("restores Full access after replacing a transient Worker", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 1 });
@@ -316,7 +478,7 @@ test("restores Full access after replacing a transient Worker", async (context) 
   );
   assert.equal(changed.fullAccessEnabled, undefined);
   fixture.manager.start();
-  const accepted = fixture.manager.enqueueMessage(
+  const accepted = await fixture.manager.enqueueMessage(
     "project-1",
     "thread-1",
     "message-1",
@@ -336,10 +498,10 @@ test("restores Full access after replacing a transient Worker", async (context) 
 test("restores persisted Full access in a new manager", async (context) => {
   const fixture = await managerFixture(context, {
     offlineGraceMs: 1,
-    persistedFullAccess: true,
+    persistedDesiredFullAccess: true,
   });
   fixture.manager.start();
-  const accepted = fixture.manager.enqueueMessage(
+  const accepted = await fixture.manager.enqueueMessage(
     "project-1",
     "thread-1",
     "message-1",
@@ -359,13 +521,13 @@ test("restores persisted Full access in a new manager", async (context) => {
 test("fails before starting a turn when Full access cannot be restored", async (context) => {
   const fixture = await managerFixture(context, {
     offlineGraceMs: 1,
-    persistedFullAccess: true,
+    persistedDesiredFullAccess: true,
     toggleFullAccessFails: true,
   });
   fixture.manager.start();
   const events: Array<Record<string, unknown>> = [];
   fixture.manager.onEvent((event) => events.push(event.event));
-  const accepted = fixture.manager.enqueueMessage(
+  const accepted = await fixture.manager.enqueueMessage(
     "project-1",
     "thread-1",
     "message-1",
@@ -481,7 +643,7 @@ test("promotes the empty-session Worker for the first accepted message", async (
   fixture.manager.start();
   const opened = await fixture.manager.startSession("project-1");
   fixture.manager.attachSession("phone", opened.opened.session.id);
-  fixture.manager.enqueueMessage(
+  await fixture.manager.enqueueMessage(
     "project-1",
     opened.opened.session.id,
     "message-1",
@@ -498,7 +660,7 @@ test("fails a promoted new-session task when its Worker exits", async (context) 
   fixture.manager.start();
   const opened = await fixture.manager.startSession("project-1");
   fixture.manager.attachSession("phone", opened.opened.session.id);
-  const accepted = fixture.manager.enqueueMessage(
+  const accepted = await fixture.manager.enqueueMessage(
     "project-1",
     opened.opened.session.id,
     "message-1",
@@ -649,7 +811,7 @@ test("times out a Worker startup and frees the project without user action", asy
     },
   });
   fixture.manager.start();
-  const first = fixture.manager.enqueueMessage(
+  const first = await fixture.manager.enqueueMessage(
     "project-1",
     "thread-1",
     "message-1",
@@ -676,7 +838,7 @@ test("times out a Worker startup and frees the project without user action", asy
     );
   }
 
-  const second = fixture.manager.enqueueMessage(
+  const second = await fixture.manager.enqueueMessage(
     "project-1",
     "thread-2",
     "message-2",
@@ -698,7 +860,7 @@ test("fails a message that never receives a native turn id", async (context) => 
     beforeStartTurn: () => startGate,
   });
   fixture.manager.start();
-  const accepted = fixture.manager.enqueueMessage(
+  const accepted = await fixture.manager.enqueueMessage(
     "project-1",
     "thread-1",
     "message-1",
@@ -734,7 +896,7 @@ test("keeps compact's no-turn timeout as a successful terminal task", async (con
     beforeCompact: () => compactGate,
   });
   fixture.manager.start();
-  const accepted = fixture.manager.enqueueCommandTask(
+  const accepted = await fixture.manager.enqueueCommandTask(
     "project-1",
     "thread-1",
     "compact-1",
@@ -860,7 +1022,7 @@ test("leases attachment paths only while the persisted task is pending", async (
     "thread-1",
     ["attachment-1"],
   );
-  const accepted = fixture.manager.enqueueMessage(
+  const accepted = await fixture.manager.enqueueMessage(
     "project-1",
     "thread-1",
     "message-attachment",
@@ -981,10 +1143,15 @@ test("accepts a PDF attachment and hides its storage path from browser events", 
 test("rejects another thread in the same project before the first task ends", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 10 });
   fixture.manager.start();
-  const first = fixture.manager.enqueueMessage("project-1", "thread-1", "message-b", "B 在跑");
+  const first = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-b",
+    "B 在跑",
+  );
   await fixture.waitForWorker("thread-1");
 
-  assert.throws(
+  await assert.rejects(
     () => fixture.manager.enqueueMessage("project-1", "thread-2", "message-a", "A 想发"),
     (error: unknown) => error instanceof WorkerManagerError && error.code === "project_busy",
   );
@@ -1001,9 +1168,9 @@ test("rejects another thread in the same project before the first task ends", as
 test("rejects a second message on the same thread", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 10 });
   fixture.manager.start();
-  fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "第一条");
+  await fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "第一条");
   await fixture.waitForWorker();
-  assert.throws(
+  await assert.rejects(
     () => fixture.manager.enqueueMessage("project-1", "thread-1", "message-2", "第二条"),
     (error: unknown) =>
       error instanceof WorkerManagerError && error.code === "task_already_running",
@@ -1014,8 +1181,18 @@ test("rejects a second message on the same thread", async (context) => {
 test("duplicate clientMessageId retries are not blocked by the busy check", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 10 });
   fixture.manager.start();
-  const first = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "同一条");
-  const retried = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "同一条");
+  const first = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "同一条",
+  );
+  const retried = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "同一条",
+  );
   assert.equal(retried.duplicate, true);
   assert.equal(retried.taskId, first.taskId);
   assert.equal(fixture.store.findByClientMessageId("message-1")?.id, first.taskId);
@@ -1024,9 +1201,19 @@ test("duplicate clientMessageId retries are not blocked by the busy check", asyn
 test("different projects stay independent and capacity still queues", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 10, maxWorkers: 1 });
   fixture.manager.start();
-  const first = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "项目一");
+  const first = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "项目一",
+  );
   await fixture.waitForWorker("thread-1");
-  const second = fixture.manager.enqueueMessage("project-2", "thread-2", "message-2", "项目二");
+  const second = await fixture.manager.enqueueMessage(
+    "project-2",
+    "thread-2",
+    "message-2",
+    "项目二",
+  );
   assert.equal(second.duplicate, false);
   assert.equal(fixture.store.require(second.taskId).status, "queued");
   fixture.workers[0]!.complete("completed");
@@ -1057,9 +1244,19 @@ test("reports queued and starting without returning stale session history", asyn
   context.after(() => releaseSecondCreate());
   fixture.manager.start();
 
-  const first = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "先占住");
+  const first = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "先占住",
+  );
   const firstWorker = await fixture.waitForWorker("thread-1");
-  const second = fixture.manager.enqueueMessage("project-2", "thread-2", "message-2", "等待中");
+  const second = await fixture.manager.enqueueMessage(
+    "project-2",
+    "thread-2",
+    "message-2",
+    "等待中",
+  );
   const queued = await fixture.manager.resumeSession("project-2", "thread-2");
   assert.deepEqual(queued, {
     loadState: "queued",
@@ -1088,7 +1285,12 @@ test("stopping a queued task never starts a Worker", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 10, maxWorkers: 1 });
   await fixture.manager.startSession("project-2");
   fixture.manager.start();
-  const accepted = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "排队");
+  const accepted = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "排队",
+  );
   await waitFor(() => fixture.store.require(accepted.taskId).status === "queued");
   const stopped = await fixture.manager.stopTask("thread-1");
   assert.equal(stopped.requested, true);
@@ -1123,7 +1325,12 @@ test("stopping a launching task never calls startTextTurn", async (context) => {
   });
   context.after(() => releaseCreate());
   fixture.manager.start();
-  const accepted = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "启动中");
+  const accepted = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "启动中",
+  );
   await createStarted;
   const stopped = await fixture.manager.stopTask("thread-1");
   assert.equal(stopped.requested, true);
@@ -1153,7 +1360,12 @@ test("stopping during turn/start interrupts once and keeps the project busy", as
   });
   context.after(() => releaseStart());
   fixture.manager.start();
-  const accepted = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "飞行中");
+  const accepted = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "飞行中",
+  );
   await startStarted;
   const firstStop = fixture.manager.stopTask("thread-1");
   const secondStop = fixture.manager.stopTask("thread-1");
@@ -1162,13 +1374,18 @@ test("stopping during turn/start interrupts once and keeps the project busy", as
   assert.equal((await secondStop).requested, true);
   await waitFor(() => fixture.workers[0]?.interruptCount === 1);
   assert.equal(fixture.workers[0]!.interruptCount, 1);
-  assert.throws(
+  await assert.rejects(
     () => fixture.manager.enqueueMessage("project-1", "thread-2", "message-2", "还不能发"),
     (error: unknown) => error instanceof WorkerManagerError && error.code === "project_busy",
   );
   fixture.workers[0]!.complete("interrupted");
   await waitFor(() => fixture.store.require(accepted.taskId).status === "interrupted");
-  const next = fixture.manager.enqueueMessage("project-1", "thread-2", "message-3", "现在可以");
+  const next = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-2",
+    "message-3",
+    "现在可以",
+  );
   assert.equal(next.duplicate, false);
 });
 
@@ -1190,7 +1407,7 @@ test("stopping compact before native start does not compact", async (context) =>
   });
   context.after(() => releaseCreate());
   fixture.manager.start();
-  const accepted = fixture.manager.enqueueCommandTask(
+  const accepted = await fixture.manager.enqueueCommandTask(
     "project-1",
     "thread-1",
     "compact-1",
@@ -1221,7 +1438,7 @@ test("stopping compact after the instruction is sent refuses instead of interrup
   });
   context.after(() => releaseCompact());
   fixture.manager.start();
-  fixture.manager.enqueueCommandTask("project-1", "thread-1", "compact-1", "compact");
+  await fixture.manager.enqueueCommandTask("project-1", "thread-1", "compact-1", "compact");
   await compactStarted;
 
   // 指令已经发给 Codex：不去打断，如实回绝。放掉闸门要先于断言，
@@ -1283,7 +1500,7 @@ test("busy attachment messages release the lease and leave no mapping", async (c
     ["attachment-2"],
     "看附件",
   );
-  assert.throws(
+  await assert.rejects(
     () => fixture.manager.enqueueMessage(
       "project-1",
       "thread-2",
@@ -1304,7 +1521,12 @@ test("repeated stop on a running task interrupts once", async (context) => {
     autoCompleteOnInterrupt: false,
   });
   fixture.manager.start();
-  const accepted = fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "重复停");
+  const accepted = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "重复停",
+  );
   const worker = await fixture.waitForWorker();
   const first = fixture.manager.stopTask("thread-1");
   const second = fixture.manager.stopTask("thread-1");
@@ -1323,7 +1545,7 @@ test("repeated stop on a running task interrupts once", async (context) => {
 
 test("permanent deletion clears worker state and the attachment display index", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 10 });
-  fixture.store.setSessionFullAccess("thread-1", true, 100);
+  fixture.store.setSessionDesiredFullAccess("thread-1", true, 100);
   await fixture.attachmentIndex.register("thread-1", "message-1", [{
     id: "attachment-1",
     originalName: "report.txt",
@@ -1332,7 +1554,7 @@ test("permanent deletion clears worker state and the attachment display index", 
 
   await fixture.manager.forgetSession("thread-1");
 
-  assert.equal(fixture.store.sessionFullAccess("thread-1"), null);
+  assert.equal(fixture.store.sessionDesiredFullAccess("thread-1"), null);
   assert.deepEqual(await fixture.attachmentIndex.mappingsFor("thread-1"), []);
 });
 
@@ -1348,7 +1570,7 @@ test("permanent deletion fails without changing artifacts while a task is active
     permissionMode: "manual",
     createdAtMs: 100,
   });
-  fixture.store.setSessionFullAccess("thread-1", true, 100);
+  fixture.store.setSessionDesiredFullAccess("thread-1", true, 100);
   const attachment = {
     id: "attachment-1",
     originalName: "report.txt",
@@ -1362,7 +1584,7 @@ test("permanent deletion fails without changing artifacts while a task is active
   );
 
   assert.equal(fixture.store.require("task-active").status, "queued");
-  assert.equal(fixture.store.sessionFullAccess("thread-1"), true);
+  assert.equal(fixture.store.sessionDesiredFullAccess("thread-1"), true);
   assert.deepEqual(await fixture.attachmentIndex.mappingsFor("thread-1"), [attachment]);
 });
 
@@ -1371,7 +1593,7 @@ async function managerFixture(
   options: {
     offlineGraceMs: number;
     fullAccess?: boolean;
-    persistedFullAccess?: boolean;
+    persistedDesiredFullAccess?: boolean;
     toggleFullAccessFails?: boolean;
     maxWorkers?: number;
     minAvailableMemoryBytes?: number;
@@ -1382,8 +1604,10 @@ async function managerFixture(
     beforeStartTurn?: () => Promise<void>;
     beforeCompact?: () => Promise<void>;
     beforeRewind?: () => Promise<void>;
+    beforeSetPermissions?: (profileId: string) => Promise<void>;
     beforeInterrupt?: () => Promise<void>;
     autoCompleteOnInterrupt?: boolean;
+    persistedTaskPermissionMode?: "manual" | "full_access";
     uploads?: SessionWorkerManagerOptions["uploads"];
     settings?: ApplicationSettingsStore;
   },
@@ -1391,8 +1615,20 @@ async function managerFixture(
   const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-manager-"));
   const store = await WorkerStateStore.open(path.join(directory, "work.sqlite"));
   const attachmentIndex = await AttachmentDisplayIndex.open(directory);
-  if (options.persistedFullAccess !== undefined) {
-    store.setSessionFullAccess("thread-1", options.persistedFullAccess, 1);
+  if (options.persistedDesiredFullAccess !== undefined) {
+    store.setSessionDesiredFullAccess("thread-1", options.persistedDesiredFullAccess, 1);
+  }
+  if (options.persistedTaskPermissionMode) {
+    store.admit({
+      id: "persisted-task",
+      clientMessageId: "persisted-message",
+      projectId: "project-1",
+      threadId: "thread-1",
+      kind: "message",
+      payload: "重启前已经接受",
+      permissionMode: options.persistedTaskPermissionMode,
+      createdAtMs: 2,
+    });
   }
   const workers: FakeWorker[] = [];
   const createdOptions: SessionWorkerOptions[] = [];
@@ -1432,6 +1668,9 @@ async function managerFixture(
           ...(options.beforeStartTurn ? { beforeStartTurn: options.beforeStartTurn } : {}),
           ...(options.beforeCompact ? { beforeCompact: options.beforeCompact } : {}),
           ...(options.beforeRewind ? { beforeRewind: options.beforeRewind } : {}),
+          ...(options.beforeSetPermissions
+            ? { beforeSetPermissions: options.beforeSetPermissions }
+            : {}),
           ...(options.beforeInterrupt ? { beforeInterrupt: options.beforeInterrupt } : {}),
           ...(options.autoCompleteOnInterrupt === undefined
             ? {}
@@ -1499,6 +1738,7 @@ class FakeWorker {
   readonly #beforeStartTurn?: (() => Promise<void>) | undefined;
   readonly #beforeCompact?: (() => Promise<void>) | undefined;
   readonly #beforeRewind?: (() => Promise<void>) | undefined;
+  readonly #beforeSetPermissions?: ((profileId: string) => Promise<void>) | undefined;
   readonly #beforeInterrupt?: (() => Promise<void>) | undefined;
 
   constructor(
@@ -1509,6 +1749,7 @@ class FakeWorker {
       beforeStartTurn?: (() => Promise<void>) | undefined;
       beforeCompact?: (() => Promise<void>) | undefined;
       beforeRewind?: (() => Promise<void>) | undefined;
+      beforeSetPermissions?: ((profileId: string) => Promise<void>) | undefined;
       beforeInterrupt?: (() => Promise<void>) | undefined;
       autoCompleteOnInterrupt?: boolean | undefined;
     } = {},
@@ -1520,6 +1761,7 @@ class FakeWorker {
     this.#beforeStartTurn = extras.beforeStartTurn;
     this.#beforeCompact = extras.beforeCompact;
     this.#beforeRewind = extras.beforeRewind;
+    this.#beforeSetPermissions = extras.beforeSetPermissions;
     this.#beforeInterrupt = extras.beforeInterrupt;
     this.autoCompleteOnInterrupt = extras.autoCompleteOnInterrupt !== false;
     this.opened = {
@@ -1558,6 +1800,7 @@ class FakeWorker {
         };
       },
       setPermissions: async (profileId: string) => {
+        await this.#beforeSetPermissions?.(profileId);
         this.#fullAccess = profileId === ":full-access";
         return {
           kind: "message" as const,

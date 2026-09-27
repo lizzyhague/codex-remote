@@ -145,7 +145,7 @@ export class WorkerStateStore {
     return new WorkerStateStore(database);
   }
 
-  sessionFullAccess(threadId: string): boolean | null {
+  sessionDesiredFullAccess(threadId: string): boolean | null {
     const row = this.#database.prepare(`
       SELECT full_access_enabled FROM worker_session_settings WHERE thread_id = ?
     `).get(threadId);
@@ -153,7 +153,7 @@ export class WorkerStateStore {
     return Number(asRow(row).full_access_enabled) === 1;
   }
 
-  setSessionFullAccess(threadId: string, enabled: boolean, nowMs: number): void {
+  setSessionDesiredFullAccess(threadId: string, enabled: boolean, nowMs: number): void {
     this.#database.prepare(`
       INSERT INTO worker_session_settings (
         thread_id, full_access_enabled, updated_at_ms
