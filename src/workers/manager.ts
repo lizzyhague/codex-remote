@@ -57,6 +57,8 @@ import { asObject } from "../shared/json.ts";
 const DEFAULT_MAX_WORKERS = 2;
 const DEFAULT_MIN_AVAILABLE_MEMORY_BYTES = 1_073_741_824;
 const DEFAULT_OFFLINE_GRACE_MS = 10_000;
+/** Node 计时器能表示的最长延迟（32 位有符号整数上限）。 */
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const DEFAULT_QUEUE_RETRY_MS = 5_000;
 const DEFAULT_WORKER_START_TIMEOUT_MS = 120_000;
 const DEFAULT_TASK_START_TIMEOUT_MS = 10_000;
@@ -235,17 +237,16 @@ export class SessionWorkerManager {
       options.minAvailableMemoryBytes,
       DEFAULT_MIN_AVAILABLE_MEMORY_BYTES,
     );
-    this.#offlineGraceMs = nonnegativeInteger(
-      options.offlineGraceMs,
-      DEFAULT_OFFLINE_GRACE_MS,
-    );
-    this.#queueRetryMs = positiveInteger(options.queueRetryMs, DEFAULT_QUEUE_RETRY_MS);
-    this.#workerStartTimeoutMs = positiveInteger(
+    this.#offlineGraceMs = timerDelay(options.offlineGraceMs, 0, DEFAULT_OFFLINE_GRACE_MS);
+    this.#queueRetryMs = timerDelay(options.queueRetryMs, 1, DEFAULT_QUEUE_RETRY_MS);
+    this.#workerStartTimeoutMs = timerDelay(
       options.workerStartTimeoutMs,
+      1,
       DEFAULT_WORKER_START_TIMEOUT_MS,
     );
-    this.#taskStartTimeoutMs = positiveInteger(
+    this.#taskStartTimeoutMs = timerDelay(
       options.taskStartTimeoutMs,
+      1,
       DEFAULT_TASK_START_TIMEOUT_MS,
     );
     this.#now = options.now ?? Date.now;
@@ -1086,7 +1087,8 @@ export class SessionWorkerManager {
       if (!this.#locks.acquire(task.projectId, ownerId, task.threadId)) continue;
       const launching = this.#beginLaunch(task, ownerId);
       try {
-        if (!provisional && (await this.#memoryGate()).blocked) {
+        const gate = provisional ? null : await this.#memoryGate();
+        if (gate?.blocked) {
           if (launching.cancelReason) {
             await this.#abandonLaunch(launching);
           } else {
@@ -1104,6 +1106,8 @@ export class SessionWorkerManager {
           sessionId: task.threadId,
           taskId: task.id,
           status: "queued",
+          // 后台启动没有请求响应可带这条提示；写进事件日志，重连回放时也能看到。
+          ...(gate?.notice ? { notice: gate.notice } : {}),
         }, this.#now());
         this.#emit(starting, "session");
         await this.#startQueuedTask(launching);
@@ -2301,6 +2305,16 @@ function positiveInteger(value: number | undefined, fallback: number): number {
 
 function nonnegativeInteger(value: number | undefined, fallback: number): number {
   return Number.isInteger(value) && value! >= 0 ? value! : fallback;
+}
+
+/**
+ * 交给 Node 计时器的毫秒数。超过 `MAX_TIMER_DELAY_MS` 的值 Node 会告警后改成 1 ms，
+ * 所以和其他无效值一样退回默认值，不让超长配置反过来变成立即到点。
+ */
+function timerDelay(value: number | undefined, minimum: number, fallback: number): number {
+  return Number.isSafeInteger(value) && value! >= minimum && value! <= MAX_TIMER_DELAY_MS
+    ? value!
+    : fallback;
 }
 
 /** 写日志用：非 Error 也保留原值，便于查清到底抛了什么。 */

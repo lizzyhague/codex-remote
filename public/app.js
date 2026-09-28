@@ -1838,6 +1838,17 @@ async function stopTask() {
 }
 
 function handleServerEvent(event, replay = false) {
+  // 后台排队任务在内存读数降级时放行，提示随 task.starting 持久保存；回放时也要再提示。
+  if (
+    event.type === "task.starting" && event.sessionId === state.sessionId &&
+    typeof event.notice === "string" && event.notice
+  ) {
+    showNotice(event.notice, {
+      lifetime: "persistent",
+      tone: "warning",
+      key: "host-memory-degraded",
+    });
+  }
   const loadingHandled = handleLoadingSessionEvent(event, replay);
   const pendingRequestEvent = event.type === "approval.requested" ||
     event.type === "approval.resolved" || event.type === "interaction.requested" ||

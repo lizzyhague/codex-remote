@@ -10,6 +10,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
 import { TrashStore } from "../sessions/trash-store.ts";
+import { MAX_TIMER_DELAY_MS } from "../workers/manager.ts";
+import { readOfflineGraceMs } from "./main.ts";
 
 const MAIN_URL = pathToFileURL(path.resolve(import.meta.dirname, "main.ts")).href;
 
@@ -275,4 +277,40 @@ test("an unexpected directory exit without a stop signal is still a failure", as
   process.kill(pid, "SIGKILL");
   assert.equal((await finish(service)).code, 1);
   assert.match(service.output().stderr, /codex app-server 已经结束/);
+});
+
+test("the offline grace accepts exactly the range a Node timer can hold", () => {
+  assert.equal(readOfflineGraceMs(undefined), undefined);
+  assert.equal(readOfflineGraceMs("  "), undefined);
+  assert.equal(readOfflineGraceMs("0"), 0);
+  assert.equal(readOfflineGraceMs("10000"), 10_000);
+  assert.equal(readOfflineGraceMs(String(MAX_TIMER_DELAY_MS)), MAX_TIMER_DELAY_MS);
+  for (const source of [
+    String(MAX_TIMER_DELAY_MS + 1),
+    "2592000000",
+    "9007199254740993",
+    "1e21",
+    "-1",
+    "1.5",
+    "Infinity",
+    "abc",
+  ]) {
+    assert.throws(
+      () => readOfflineGraceMs(source),
+      new RegExp(`CODEX_REMOTE_OFFLINE_GRACE_MS 必须是 0 到 ${MAX_TIMER_DELAY_MS}`),
+      source,
+    );
+  }
+});
+
+test("an offline grace beyond the timer limit fails startup with the allowed range", async () => {
+  const prepared = await prepare("ready");
+  prepared.env.CODEX_REMOTE_OFFLINE_GRACE_MS = "2592000000";
+  const service = startService(prepared, { startupTimeoutMs: 10_000, stopSignalGraceMs: 50 });
+  const { code, leftovers } = await finish(service);
+  assert.equal(code, 1);
+  assert.match(service.output().stderr, /CODEX_REMOTE_OFFLINE_GRACE_MS 必须是 0 到 2147483647/);
+  assert.doesNotMatch(service.output().stderr, /TimeoutOverflowWarning/);
+  assert.doesNotMatch(service.output().stdout, /正在监听/);
+  assert.deepEqual(leftovers, [], "目录子进程已被清理");
 });

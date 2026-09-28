@@ -151,7 +151,7 @@ Codex 运行在权限边界明确的非 root Unix 用户下。
 | `AI_REMOTE_UPLOAD_SOCKET` | 共享上传服务 Unix socket；默认 `~/.local/share/ai-remote/upload.sock` |
 | `CODEX_REMOTE_MAX_WORKERS` | 最大活动 Worker 数，默认 `2` |
 | `CODEX_REMOTE_MIN_AVAILABLE_MEMORY_MIB` | 启动 Worker 所需保守可用内存预算，默认 `1024` MiB；Linux 与 macOS 读数语义一致，可共用同一个值，设为 `0` 会关闭启动前保护 |
-| `CODEX_REMOTE_OFFLINE_GRACE_MS` | 最后一个客户端离线后的审批宽限期，默认 `10000` 毫秒 |
+| `CODEX_REMOTE_OFFLINE_GRACE_MS` | 最后一个客户端离线后的审批宽限期，默认 `10000` 毫秒；取值为 `0` 到 `2147483647`（约 24.8 天）的整数，超出范围时服务拒绝启动 |
 | `CODEX_BIN` | Codex 可执行文件；默认从 `PATH` 查找 |
 
 真实令牌和 `config/projects.json` 都已被 Git 忽略。仓库只保存示例文件。

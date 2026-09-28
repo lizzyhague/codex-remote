@@ -162,6 +162,41 @@ test("a replayed non-retry error does not recreate a temporary notice", () => {
   assert.deepEqual(h.shown, []);
 });
 
+test("a queued task's degraded-memory notice shows live, on replay and while loading", () => {
+  const degraded = {
+    lifetime: "persistent",
+    tone: "warning",
+    key: "host-memory-degraded",
+  };
+  const starting = (sessionId, notice) => ({
+    type: "task.starting",
+    taskId: "task-1",
+    sessionId,
+    status: "queued",
+    ...(notice ? { notice } : {}),
+  });
+
+  const live = eventHarness();
+  live.context.handleServerEvent(starting("session-1", "内存读数降级，已经放行。"));
+  assert.deepEqual(plain(live.shown), [{ text: "内存读数降级，已经放行。", options: degraded }]);
+
+  const replayed = eventHarness();
+  replayed.context.handleServerEvent(starting("session-1", "回放的降级提示。"), true);
+  assert.deepEqual(plain(replayed.shown), [{ text: "回放的降级提示。", options: degraded }]);
+
+  const loading = eventHarness();
+  loading.context.state.sessionOpenState = "queued";
+  loading.context.showSessionLoading = () => {};
+  loading.context.handleServerEvent(starting("session-1", "打开中的降级提示。"));
+  assert.equal(loading.context.state.sessionOpenState, "starting");
+  assert.deepEqual(plain(loading.shown), [{ text: "打开中的降级提示。", options: degraded }]);
+
+  const quiet = eventHarness();
+  quiet.context.handleServerEvent(starting("session-1"));
+  quiet.context.handleServerEvent(starting("session-2", "别的会话。"));
+  assert.deepEqual(quiet.shown, []);
+});
+
 test("leaving a session clears only its current context notice", () => {
   const cleared = [];
   const context = vm.createContext({

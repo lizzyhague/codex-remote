@@ -28,7 +28,7 @@ import {
   resolveWorkerStatePath,
   WorkerStateStore,
 } from "../workers/state-store.ts";
-import { SessionWorkerManager } from "../workers/manager.ts";
+import { MAX_TIMER_DELAY_MS, SessionWorkerManager } from "../workers/manager.ts";
 import { SharedUploadClient } from "../shared-upload/client.ts";
 import { resolveSharedUploadSocket } from "../shared-upload/paths.ts";
 
@@ -120,7 +120,7 @@ async function serve(
       ),
       ...optionalNumber(
         "offlineGraceMs",
-        readNonnegativeInteger(process.env.CODEX_REMOTE_OFFLINE_GRACE_MS),
+        readOfflineGraceMs(process.env.CODEX_REMOTE_OFFLINE_GRACE_MS),
       ),
     });
     const sessions = new CodexSessionService(appServer, projects, trash, {
@@ -222,6 +222,18 @@ function readNonnegativeInteger(source: string | undefined): number | undefined 
   const value = Number(source);
   if (!Number.isInteger(value) || value < 0) {
     throw new Error("离线宽限时间必须是非负整数毫秒。");
+  }
+  return value;
+}
+
+/** 离线宽限直接交给 Node 计时器，超过计时器上限会被 Node 改成 1 ms，启动时就拒绝。 */
+export function readOfflineGraceMs(source: string | undefined): number | undefined {
+  if (source === undefined || source.trim() === "") return undefined;
+  const value = Number(source);
+  if (!Number.isSafeInteger(value) || value < 0 || value > MAX_TIMER_DELAY_MS) {
+    throw new Error(
+      `CODEX_REMOTE_OFFLINE_GRACE_MS 必须是 0 到 ${MAX_TIMER_DELAY_MS} 之间的整数毫秒（上限约 24.8 天）。`,
+    );
   }
   return value;
 }

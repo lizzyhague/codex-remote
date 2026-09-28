@@ -15,6 +15,7 @@ import type { ProjectCatalog } from "../projects/catalog.ts";
 import type { TrashStore } from "../sessions/trash-store.ts";
 import { ProjectTaskLocks } from "../server/project-locks.ts";
 import {
+  MAX_TIMER_DELAY_MS,
   SessionWorkerManager,
   type SessionWorkerManagerOptions,
   WorkerManagerError,
@@ -578,6 +579,102 @@ test("opens the session with a notice when the memory reading degrades", async (
   assert.match(String(opened.notice), /已经放行/u);
   assert.match(String(opened.notice), /compressor/u);
 });
+
+test("a queued task started on a degraded memory reading carries a replayable notice", async (context) => {
+  let degraded = true;
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 50,
+    minAvailableMemoryBytes: 1_073_741_824,
+    availableMemory: async () => degraded
+      ? {
+        availableBytes: 216 * 1_048_576,
+        platform: "linux" as const,
+        source: "os-freemem" as const,
+        degradedReason: "/proc/meminfo 缺少 MemAvailable",
+      }
+      : {
+        availableBytes: Number.MAX_SAFE_INTEGER,
+        platform: "linux" as const,
+        source: "linux-meminfo" as const,
+      },
+  });
+  const events: Array<{ audience: string; event: Record<string, unknown> }> = [];
+  fixture.manager.onEvent((stored) => events.push({
+    audience: stored.audience,
+    event: stored.event,
+  }));
+  fixture.manager.clientAuthenticated("phone");
+  fixture.manager.start();
+  const accepted = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "后台启动",
+  );
+  const worker = await fixture.waitForWorker();
+
+  // 读数降级仍按原决定放行，同时 task.starting 带上与 direct 路径同源的提示。
+  const starting = events.find((entry) => entry.event.type === "task.starting");
+  assert.equal(starting?.audience, "session");
+  assert.match(String(starting?.event.notice), /已经放行/u);
+  assert.match(String(starting?.event.notice), /MemAvailable/u);
+
+  // 重连时从事件日志回放，提示仍在。
+  fixture.manager.clientDisconnected("phone");
+  fixture.manager.clientAuthenticated("tablet");
+  const resumed = await fixture.manager.resumeSession("project-1", "thread-1");
+  assert.equal(resumed.loadState, "ready");
+  if (resumed.loadState !== "ready") throw new Error("会话没有恢复完成");
+  assert.equal(resumed.activeTaskId, accepted.taskId);
+  const replayed = resumed.replayEvents.find((stored) => stored.event.type === "task.starting");
+  assert.equal(replayed?.event.notice, starting?.event.notice);
+  worker.complete("completed");
+  await waitFor(() => fixture.store.require(accepted.taskId).status === "completed");
+
+  // 可信读数下启动的任务不带提示。
+  degraded = false;
+  const next = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-2",
+    "正常启动",
+  );
+  await waitFor(() => fixture.store.eventsForTask(next.taskId)
+    .some((stored) => stored.event.type === "task.starting"));
+  const normal = fixture.store.eventsForTask(next.taskId)
+    .find((stored) => stored.event.type === "task.starting");
+  assert.equal("notice" in normal!.event, false);
+});
+
+for (const offlineGraceMs of [MAX_TIMER_DELAY_MS, MAX_TIMER_DELAY_MS + 1, 2_592_000_000]) {
+  test(`an offline grace of ${offlineGraceMs} ms never collapses to an immediate interrupt`, async (context) => {
+    const warnings: string[] = [];
+    const onWarning = (warning: Error) => warnings.push(warning.name);
+    process.on("warning", onWarning);
+    context.after(() => process.off("warning", onWarning));
+    const fixture = await managerFixture(context, { offlineGraceMs });
+    fixture.manager.clientAuthenticated("phone");
+    fixture.manager.start();
+    const accepted = await fixture.manager.enqueueMessage(
+      "project-1",
+      "thread-1",
+      "message-1",
+      "需要权限",
+    );
+    const worker = await fixture.waitForWorker();
+    worker.requestApproval();
+    await waitFor(() => fixture.store.require(accepted.taskId).status === "waiting_for_permission");
+    fixture.manager.clientDisconnected("phone");
+    await delay(50);
+
+    assert.equal(worker.interruptCount, 0);
+    assert.equal(worker.cancelledApprovals, 0);
+    assert.equal(fixture.store.require(accepted.taskId).status, "waiting_for_permission");
+    assert.deepEqual(warnings.filter((name) => name === "TimeoutOverflowWarning"), []);
+    worker.complete("completed");
+    await waitFor(() => fixture.store.require(accepted.taskId).status === "completed");
+  });
+}
 
 test("passes application settings into session workers without mutating an active one", async (context) => {
   const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-manager-settings-"));
