@@ -1518,6 +1518,8 @@ test("leases attachment paths only while the persisted task is pending", async (
           ...binding,
           originalName: "screen.png",
           path: "/private/uploads/screen.png",
+          // 未声明的私有别名：只能留在内存租约里，不能进 SQLite。
+          storagePath: "/private/uploads/screen.png",
           declaredMime: "image/png",
           detectedMime: "image/png",
           kind: "image" as const,
@@ -1551,6 +1553,7 @@ test("leases attachment paths only while the persisted task is pending", async (
   fixture.manager.start();
   const worker = await fixture.waitForWorker();
   assert.equal("path" in fixture.store.require(accepted.taskId).attachments[0]!, false);
+  assert.equal("storagePath" in fixture.store.require(accepted.taskId).attachments[0]!, false);
   assert.equal(worker.startedAttachments[0]?.path, "/private/uploads/screen.png");
   worker.complete("completed");
   await waitFor(() => released === 1);

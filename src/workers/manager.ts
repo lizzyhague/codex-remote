@@ -31,6 +31,7 @@ import {
   type MemoryReading,
 } from "../platform/system-resources.ts";
 import type { SharedUploadClient } from "../shared-upload/client.ts";
+import { publicAttachmentOf } from "../shared-upload/decode.ts";
 import type {
   AttachmentLease,
   PublicAttachment,
@@ -865,7 +866,7 @@ export class SessionWorkerManager {
         threadId,
         kind,
         payload,
-        attachments: preparedAttachments?.lease.attachments.map(publicAttachment) ?? [],
+        attachments: preparedAttachments?.lease.attachments.map(publicAttachmentOf) ?? [],
         permissionMode,
         createdAtMs,
       });
@@ -2279,10 +2280,6 @@ function publicInteraction(
   );
 }
 
-function publicAttachment(attachment: ResolvedAttachment): PublicAttachment {
-  const { path: _path, ...publicValue } = attachment;
-  return publicValue;
-}
 
 function uploadManagerError(error: unknown): WorkerManagerError {
   const code = error instanceof Error && "code" in error && typeof error.code === "string"

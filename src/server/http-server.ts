@@ -11,6 +11,7 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import type { SharedUploadClient } from "../shared-upload/client.ts";
+import { publicAttachmentOf } from "../shared-upload/decode.ts";
 import { MAX_UPLOAD_BYTES, SharedUploadError } from "../shared-upload/types.ts";
 
 import {
@@ -93,6 +94,8 @@ export class RemoteWebSocketServer {
   readonly #http: Server;
   readonly #webSockets: WebSocketServer;
   readonly #connections = new Map<WebSocket, BrowserConnection>();
+  /** 在途上传的取消源。关闭服务时逐个取消，不让下游等待扣住 HTTP close。 */
+  readonly #uploadsInFlight = new Set<AbortController>();
   #listening = false;
 
   constructor(options: RemoteWebSocketServerOptions) {
@@ -325,8 +328,26 @@ export class RemoteWebSocketServer {
       sendUploadError(response, new SharedUploadError("file_too_large", "单个文件不能超过 25 MiB。", 413));
       return;
     }
+    if (!this.#listening) {
+      this.#closeConnectionIfStopping(response);
+      sendUploadError(response, stoppingError());
+      return;
+    }
+    // 请求体中断由客户端自己监听；浏览器在正文传完后关掉响应、服务关闭这两种情况
+    // 由这里的取消源通知，二者都销毁同一个下游请求。
+    const controller = new AbortController();
+    const onResponseClose = () => {
+      if (!response.writableFinished) {
+        controller.abort(new SharedUploadError("upload_cancelled", "浏览器取消了上传。", 400));
+      }
+    };
+    response.once("close", onResponseClose);
+    this.#uploadsInFlight.add(controller);
     try {
-      const attachment = await this.#uploads.upload(ticket, contentLength, request);
+      const attachment = publicAttachmentOf(
+        await this.#uploads.upload(ticket, contentLength, request, controller.signal),
+      );
+      this.#closeConnectionIfStopping(response);
       const body = Buffer.from(`${JSON.stringify({ attachment })}\n`);
       response.writeHead(201, {
         "content-type": "application/json; charset=utf-8",
@@ -336,8 +357,23 @@ export class RemoteWebSocketServer {
       });
       response.end(body);
     } catch (error) {
-      sendUploadError(response, error);
+      // 浏览器已经离开时连接也已关闭，没有人读这个错误。
+      if (!response.destroyed) {
+        this.#closeConnectionIfStopping(response);
+        sendUploadError(response, error);
+      }
+    } finally {
+      response.off("close", onResponseClose);
+      this.#uploadsInFlight.delete(controller);
     }
+  }
+
+  /**
+   * `http.close()` 只在调用那一刻关闭空闲连接。关闭开始后才写完的上传响应要明确关掉
+   * keep-alive 连接，否则 close 会一直等它。
+   */
+  #closeConnectionIfStopping(response: ServerResponse): void {
+    if (!this.#listening) response.setHeader("connection", "close");
   }
 
   async #serveWebFile(
@@ -432,6 +468,7 @@ export class RemoteWebSocketServer {
     }
     this.#listening = false;
 
+    for (const upload of this.#uploadsInFlight) upload.abort(stoppingError());
     const httpClosed = new Promise<void>((resolve, reject) => {
       this.#http.close((error) => error ? reject(error) : resolve());
     });
@@ -541,6 +578,10 @@ function parseUploadLength(value: string | undefined): number | null {
   if (value === undefined || !/^\d+$/u.test(value)) return null;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function stoppingError(): SharedUploadError {
+  return new SharedUploadError("service_stopping", "服务正在停止，请稍后重试。", 503);
 }
 
 function sendUploadError(response: ServerResponse, error: unknown): void {

@@ -24,6 +24,10 @@ macOS：`sudo launchctl kickstart -k system/<你的 label>`，再做同样的健
 更新或停止本服务时，不要捎带更新、停止或重启 `ai-remote-upload`。附件存储的备份和
 恢复见独立上传服务的运维说明。
 
+上传服务卡住时，单次附件上传 30 秒没有任何进展或总共超过 10 分钟就会失败，页面显示
+“共享上传服务响应超时”。停止本服务时，在途上传会被取消并提示稍后重试，不会拖住停止。
+上传服务的原始错误文字只写进本服务日志，页面只显示本服务自己的说明。
+
 Node 直接跑 TypeScript，没有构建步骤。重启会断开浏览器连接：`running` 和
 `waiting_for_permission` 会被标成 `interrupted`，`queued` 的继续调度；关闭时仍在启动、
 尚未向 Codex 提交这一轮的任务也保持 `queued`。

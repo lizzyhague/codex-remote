@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { createServer as createHttpServer } from "node:http";
+import { connect, type Socket } from "node:net";
 import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -18,6 +20,8 @@ import { RemoteWebSocketServer } from "./http-server.ts";
 import { MAX_BROWSER_MESSAGE_BYTES } from "./protocol.ts";
 import { ProjectTaskLocks } from "./project-locks.ts";
 import type { SessionWorkerManager } from "../workers/manager.ts";
+import { SharedUploadClient } from "../shared-upload/client.ts";
+import type { PublicAttachment } from "../shared-upload/types.ts";
 
 class EmptyTransport implements AppServerTransport, ApprovalTransport {
   readonly #notifications = new Set<AppServerMessageListener>();
@@ -152,7 +156,10 @@ test("streams same-origin uploads through the local attachment adapter", async (
           sha256: "a".repeat(64),
           createdAtMs: 1,
           expiresAtMs: 2,
-        };
+          // 模拟跨仓库协议漂移：这些字段绝不能出现在浏览器响应里。
+          path: "/srv/private/blobs/attachment-1",
+          internalNote: "private",
+        } as PublicAttachment;
       },
     },
   });
@@ -167,8 +174,10 @@ test("streams same-origin uploads through the local attachment adapter", async (
     });
     assert.equal(uploaded.status, 201);
     const body = await uploaded.json() as { attachment: Record<string, unknown> };
-    assert.equal(body.attachment.id, "attachment-1");
-    assert.equal("path" in body.attachment, false);
+    assert.deepEqual(Object.keys(body.attachment).sort(), [
+      "caller", "createdAtMs", "declaredMime", "detectedMime", "expiresAtMs", "id", "kind",
+      "originalName", "projectId", "sessionId", "sha256", "size",
+    ]);
     assert.equal(Buffer.concat(received).toString("utf8"), "hello");
 
     const crossOrigin = await fetch(`${origin}/attachments/upload`, {
@@ -184,6 +193,95 @@ test("streams same-origin uploads through the local attachment adapter", async (
     await server.close();
   }
 });
+
+/** 读完请求体后永不响应的共享上传服务，记录下游连接何时被关闭。 */
+async function stalledUploadService(t: test.TestContext) {
+  const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-stalled-upload-"));
+  const socketPath = path.join(directory, "upload.sock");
+  const received: Array<{ bodyDone: Promise<void>; closed: Promise<void> }> = [];
+  const service = createHttpServer((request, response) => {
+    request.resume();
+    received.push({
+      bodyDone: new Promise((resolve) => request.once("end", () => resolve())),
+      closed: new Promise((resolve) => response.once("close", () => resolve())),
+    });
+  });
+  service.listen(socketPath);
+  await once(service, "listening");
+  t.after(async () => {
+    service.closeAllConnections();
+    await new Promise<void>((resolve) => service.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  });
+  const firstRequest = async () => {
+    while (received.length === 0) await delay(5);
+    await withTimeout(received[0]!.bodyDone, "下游读完请求体");
+    return received[0]!;
+  };
+  return { client: new SharedUploadClient(socketPath, { idleTimeoutMs: 60_000 }), firstRequest };
+}
+
+test("closing the server cancels an upload whose downstream never responds", async (t) => {
+  const downstream = await stalledUploadService(t);
+  const server = new RemoteWebSocketServer({
+    token: "test-secret",
+    services: emptyServices(new EmptyTransport()),
+    uploads: downstream.client,
+  });
+  t.after(() => server.close());
+  const address = await server.listen(0);
+  const origin = `http://${address.host}:${address.port}`;
+  const cookie = await loginCookie(address);
+  const uploaded = fetch(`${origin}/attachments/upload`, {
+    method: "POST",
+    headers: { cookie, origin, "x-upload-ticket": "ticket-secret" },
+    body: Buffer.from("hello"),
+  });
+  const request = await downstream.firstRequest();
+
+  await withTimeout(server.close(), "关闭服务器");
+  await withTimeout(request.closed, "下游上传连接关闭");
+  const response = await withTimeout(uploaded, "浏览器上传响应");
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    error: { code: "service_stopping", message: "服务正在停止，请稍后重试。" },
+  });
+});
+
+for (const [label, leave] of [
+  ["closes the connection", (socket: Socket) => socket.destroy()],
+  ["half-closes the connection", (socket: Socket) => socket.end()],
+] as const) {
+  test(`a browser that ${label} after sending the body cancels the downstream upload`, async (t) => {
+    const downstream = await stalledUploadService(t);
+    const server = new RemoteWebSocketServer({
+      token: "test-secret",
+      services: emptyServices(new EmptyTransport()),
+      uploads: downstream.client,
+    });
+    t.after(() => server.close());
+    const address = await server.listen(0);
+    const cookie = await loginCookie(address);
+    // 用原始 TCP 模拟浏览器，避免 fetch 连接池预先建立空连接干扰 close 的判断。
+    const browser = connect(address.port, address.host);
+    browser.on("error", () => {});
+    await once(browser, "connect");
+    browser.write([
+      "POST /attachments/upload HTTP/1.1",
+      `host: ${address.host}:${address.port}`,
+      `cookie: ${cookie}`,
+      "x-upload-ticket: ticket-secret",
+      "content-length: 5",
+      "",
+      "hello",
+    ].join("\r\n"));
+    const request = await downstream.firstRequest();
+
+    leave(browser);
+    await withTimeout(request.closed, "下游上传连接关闭");
+    await withTimeout(server.close(), "关闭服务器");
+  });
+}
 
 test("HTTP login survives restarts and token rotation revokes its cookie", async (t) => {
   const transport = new EmptyTransport();
