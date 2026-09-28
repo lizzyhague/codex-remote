@@ -1244,9 +1244,20 @@ button.app-settings-button svg {
   background: #1d2028;
 }
 
+.approval-list {
+  min-height: 0;
+  max-height: min(50dvh, 32rem);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  scroll-padding-block: 0.7rem 4rem;
+  display: grid;
+  gap: 0.9rem;
+}
+
 .approval-card {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.6rem;
   align-items: center;
 }
@@ -1283,6 +1294,23 @@ button.app-settings-button svg {
 
 .approval-card[data-interaction-id] select[multiple] {
   min-height: 7rem;
+}
+
+.approval-card-actions {
+  position: sticky;
+  z-index: 1;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  padding-block: 0.45rem;
+  border-top: 1px solid var(--border);
+  background: #1d2028;
+}
+
+.interaction-validation:not([hidden]) {
+  color: var(--danger);
 }
 
 .notice {
@@ -1561,11 +1589,11 @@ button:focus-visible {
   }
 
   .approval-card {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .approval-card p {
-    grid-column: 1 / -1;
+  .approval-card-actions > button {
+    flex: 1 1 8rem;
   }
 
   .composer-actions > .composer-hint {

@@ -1,5 +1,10 @@
 import type { JsonObject } from "../app-server/client.ts";
 import { asObject } from "../shared/json.ts";
+import { PublicError } from "../shared/public-error.ts";
+import {
+  normalizeMcpFormSchema,
+  validateMcpFormAnswers,
+} from "../../public/mcp-form.js";
 import {
   type BrokerBaseResolution,
   ServerRequestBroker,
@@ -186,68 +191,10 @@ function mcpFormContent(
   schema: JsonObject | null,
   answers: Record<string, string[]>,
 ): JsonObject {
-  const properties = asObject(schema?.properties);
-  if (!properties) throw new Error("这个 MCP 表单没有可识别的字段定义。");
-  const required = new Set(
-    Array.isArray(schema?.required)
-      ? schema.required.filter((value): value is string => typeof value === "string")
-      : [],
-  );
-  const content: JsonObject = {};
-  for (const [fieldId, rawSchema] of Object.entries(properties)) {
-    const fieldSchema = asObject(rawSchema);
-    if (!fieldSchema) continue;
-    const values = answers[fieldId] ?? [];
-    if (values.length === 0) {
-      if (required.has(fieldId)) throw new Error(`MCP 表单字段 ${fieldId} 不能为空。`);
-      continue;
-    }
-    const allowed = enumValues(fieldSchema);
-    if (allowed && values.some((value) => !allowed.has(value))) {
-      throw new Error(`MCP 表单字段 ${fieldId} 的选项无法识别。`);
-    }
-    if (fieldSchema.type === "array") {
-      content[fieldId] = values;
-    } else if (fieldSchema.type === "boolean") {
-      if (values[0] !== "true" && values[0] !== "false") {
-        throw new Error(`MCP 表单字段 ${fieldId} 不是有效的布尔值。`);
-      }
-      content[fieldId] = values[0] === "true";
-    } else if (fieldSchema.type === "number" || fieldSchema.type === "integer") {
-      const number = Number(values[0]);
-      if (!Number.isFinite(number) || (fieldSchema.type === "integer" && !Number.isInteger(number))) {
-        throw new Error(`MCP 表单字段 ${fieldId} 不是有效的数字。`);
-      }
-      content[fieldId] = number;
-    } else if (fieldSchema.type === "string") {
-      content[fieldId] = values[0]!;
-    } else {
-      throw new Error(`MCP 表单字段 ${fieldId} 的类型暂不支持。`);
-    }
+  const form = normalizeMcpFormSchema(schema);
+  const result = validateMcpFormAnswers(form, answers);
+  if (!result.ok) {
+    throw new PublicError(result.message);
   }
-  return content;
-}
-
-function enumValues(schema: JsonObject): Set<string> | null {
-  const direct = Array.isArray(schema.enum)
-    ? schema.enum.filter((value): value is string => typeof value === "string")
-    : [];
-  const oneOf = Array.isArray(schema.oneOf)
-    ? schema.oneOf.flatMap((value) => {
-      const option = asObject(value);
-      return option && typeof option.const === "string" ? [option.const] : [];
-    })
-    : [];
-  const items = asObject(schema.items);
-  const itemEnum = Array.isArray(items?.enum)
-    ? items.enum.filter((value): value is string => typeof value === "string")
-    : [];
-  const anyOf = Array.isArray(items?.anyOf)
-    ? items.anyOf.flatMap((value) => {
-      const option = asObject(value);
-      return option && typeof option.const === "string" ? [option.const] : [];
-    })
-    : [];
-  const values = [...direct, ...oneOf, ...itemEnum, ...anyOf];
-  return values.length > 0 ? new Set(values) : null;
+  return result.content;
 }

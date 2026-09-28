@@ -63,6 +63,7 @@ const STATIC_FILES: Record<string, { file: string; contentType: string }> = {
   "/boot.js": { file: "boot.js", contentType: "text/javascript; charset=utf-8" },
   "/app.js": { file: "app.js", contentType: "text/javascript; charset=utf-8" },
   "/markdown.js": { file: "markdown.js", contentType: "text/javascript; charset=utf-8" },
+  "/mcp-form.js": { file: "mcp-form.js", contentType: "text/javascript; charset=utf-8" },
   "/notice.js": { file: "notice.js", contentType: "text/javascript; charset=utf-8" },
   "/slash-menu.js": { file: "slash-menu.js", contentType: "text/javascript; charset=utf-8" },
   "/display-timezone.js": { file: "display-timezone.js", contentType: "text/javascript; charset=utf-8" },

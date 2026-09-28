@@ -6,7 +6,15 @@ import test from "node:test";
 
 import { WebAssets } from "./web-assets.ts";
 
-const FILES = ["boot.js", "app.js", "markdown.js", "styles.css", "viewer.js", "viewer.css"];
+const FILES = [
+  "boot.js",
+  "app.js",
+  "markdown.js",
+  "mcp-form.js",
+  "styles.css",
+  "viewer.js",
+  "viewer.css",
+];
 
 async function fixture(t: test.TestContext, files: Record<string, string> = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "codex-web-assets-"));
@@ -15,6 +23,7 @@ async function fixture(t: test.TestContext, files: Record<string, string> = {}) 
     "boot.js": "// boot",
     "app.js": 'import { render } from "./markdown.js";\nwindow.__PWA_MARK__ = "A";',
     "markdown.js": 'export const render = () => "mark-A";',
+    "mcp-form.js": "export const validate = () => true;",
     "styles.css": "body { color: red }",
     "viewer.js": 'import { render } from "./markdown.js";',
     "viewer.css": ".file-viewer { color: blue }",

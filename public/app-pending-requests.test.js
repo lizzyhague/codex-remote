@@ -188,7 +188,11 @@ test("an incomplete permission summary offers decline but not approval", () => {
   }, { id: "session-a", title: "后台会话" }, "session-a");
 
   const card = h.approvalList.children[0];
-  const buttons = card.children.filter((child) => child.tagName === "button");
+  const buttons = card.children.flatMap((child) =>
+    child.tagName === "button"
+      ? [child]
+      : child.children.filter((nested) => nested.tagName === "button")
+  );
   assert.deepEqual(buttons.map((button) => button.textContent), ["拒绝"]);
   assert.match(visibleText(card), /只能拒绝/u);
 });

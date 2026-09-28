@@ -10,6 +10,10 @@ import {
 } from "./display-timezone.js";
 import { projectDisplayLabel } from "./project-labels.js";
 import {
+  normalizeMcpFormSchema,
+  validateMcpFormAnswers,
+} from "./mcp-form.js";
+import {
   RecoveryStateError,
   RecoveryStateStore,
   acceptMessageDelivery,
@@ -2584,8 +2588,11 @@ function addApproval(approval, sourceSession = null, sessionId = null) {
   approve.textContent = "本次允许";
   decline.addEventListener("click", () => void answerApproval(card, approval.id, "decline"));
   approve.addEventListener("click", () => void answerApproval(card, approval.id, "approve_once"));
-  card.append(description, decline);
-  if (approval.canApprove !== false) card.append(approve);
+  const actions = document.createElement("div");
+  actions.className = "approval-card-actions";
+  actions.append(decline);
+  if (approval.canApprove !== false) actions.append(approve);
+  card.append(description, actions);
   elements.approvalList.append(card);
 }
 
@@ -2946,6 +2953,7 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
 
   const fields = new Map();
   let canSubmit = true;
+  let mcpForm = null;
   if (interaction.kind === "user_input") {
     for (const question of Array.isArray(interaction.questions) ? interaction.questions : []) {
       const label = document.createElement("label");
@@ -2996,7 +3004,8 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
       card.append(rejected);
       canSubmit = false;
     } else {
-      const count = addMcpFormFields(card, fields, interaction.schema);
+      mcpForm = normalizeMcpFormSchema(interaction.schema);
+      const count = addMcpFormFields(card, fields, mcpForm);
       if (count === 0) {
         const unsupported = document.createElement("small");
         unsupported.textContent = "这个 MCP 表单暂时无法在网页中安全呈现，只能取消本轮。";
@@ -3004,6 +3013,21 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
         canSubmit = false;
       }
     }
+  }
+
+  const validation = document.createElement("small");
+  validation.className = "interaction-validation";
+  validation.role = "alert";
+  validation.hidden = true;
+  card.append(validation);
+  for (const field of fields.values()) {
+    const clearValidation = () => {
+      for (const candidate of fields.values()) candidate.control.setCustomValidity?.("");
+      validation.hidden = true;
+      validation.textContent = "";
+    };
+    field.control.addEventListener("input", clearValidation);
+    field.control.addEventListener("change", clearValidation);
   }
 
   const cancel = document.createElement("button");
@@ -3019,21 +3043,28 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
   cancel.addEventListener("click", () =>
     void answerInteraction(card, interaction.id, "cancel", {}));
   submit.addEventListener("click", () => {
-    const answers = {};
-    for (const [questionId, field] of fields) {
-      if (field.multiple) {
-        answers[questionId] = [...field.control.selectedOptions]
-          .map((option) => option.value.trim())
-          .filter(Boolean);
-      } else {
+    let answers;
+    if (mcpForm) {
+      answers = collectMcpFormAnswers(fields);
+      const result = validateMcpFormAnswers(mcpForm, answers);
+      if (!result.ok) {
+        reportMcpFormError(fields, validation, result);
+        return;
+      }
+    } else {
+      answers = {};
+      for (const [questionId, field] of fields) {
         const value = field.other?.value.trim() || field.control.value.trim();
         answers[questionId] = value ? [value] : [];
       }
     }
     void answerInteraction(card, interaction.id, "submit", answers);
   });
-  card.append(cancel);
-  if (canSubmit) card.append(submit);
+  const actions = document.createElement("div");
+  actions.className = "approval-card-actions";
+  actions.append(cancel);
+  if (canSubmit) actions.append(submit);
+  card.append(actions);
   elements.approvalList.append(card);
 }
 
@@ -3048,59 +3079,62 @@ function externalLinkHref(value) {
   return href && /^https?:\/\//i.test(href) ? href : null;
 }
 
-function addMcpFormFields(card, fields, schema) {
-  const properties = schema?.properties;
-  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return 0;
-  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+function addMcpFormFields(card, fields, form) {
+  if (!form || !Array.isArray(form.fields)) return 0;
   let count = 0;
-  for (const [fieldId, fieldSchema] of Object.entries(properties).slice(0, 50)) {
-    if (!fieldSchema || typeof fieldSchema !== "object" || Array.isArray(fieldSchema)) continue;
+  for (const fieldSchema of form.fields) {
+    const fieldId = fieldSchema.id;
     const label = document.createElement("label");
-    label.textContent = fieldSchema.title || fieldId;
-    const choices = mcpSchemaChoices(fieldSchema);
+    label.textContent = fieldSchema.title;
+    const choices = fieldSchema.choices ?? [];
     let control;
     let multiple = false;
     if (choices.length > 0) {
       control = document.createElement("select");
       multiple = fieldSchema.type === "array";
       control.multiple = multiple;
-      if (!multiple && !required.has(fieldId)) {
+      if (!multiple) {
         const blank = document.createElement("option");
         blank.value = "";
-        blank.textContent = "不填写";
+        blank.textContent = fieldSchema.required ? "请选择" : "不填写";
+        blank.dataset.omit = "true";
         control.append(blank);
       }
       for (const choice of choices) {
         const option = document.createElement("option");
         option.value = choice.value;
-        option.textContent = choice.title || choice.value;
+        option.textContent = choice.title;
+        option.selected = multiple
+          ? Array.isArray(fieldSchema.default) && fieldSchema.default.includes(choice.value)
+          : fieldSchema.default === choice.value;
         control.append(option);
       }
     } else if (fieldSchema.type === "boolean") {
       control = document.createElement("select");
-      for (const [value, title] of required.has(fieldId)
-        ? [["true", "是"], ["false", "否"]]
-        : [["", "不填写"], ["true", "是"], ["false", "否"]]) {
+      for (const [value, title] of [
+        ["", fieldSchema.required ? "请选择" : "不填写"],
+        ["true", "是"],
+        ["false", "否"],
+      ]) {
         const option = document.createElement("option");
         option.value = value;
         option.textContent = title;
+        if (!value) option.dataset.omit = "true";
+        option.selected = fieldSchema.default === (value === "true") && value !== "";
         control.append(option);
       }
     } else if (fieldSchema.type === "string" || fieldSchema.type === "number" ||
       fieldSchema.type === "integer") {
       control = document.createElement("input");
-      control.type = fieldSchema.type === "string"
-        ? mcpStringInputType(fieldSchema.format)
-        : "number";
+      control.type = fieldSchema.type === "string" ? "text" : "number";
       if (fieldSchema.type === "integer") control.step = "1";
-      if (typeof fieldSchema.minimum === "number") control.min = String(fieldSchema.minimum);
-      if (typeof fieldSchema.maximum === "number") control.max = String(fieldSchema.maximum);
-      if (typeof fieldSchema.minLength === "number") control.minLength = fieldSchema.minLength;
-      if (typeof fieldSchema.maxLength === "number") control.maxLength = fieldSchema.maxLength;
+      if (Number.isFinite(fieldSchema.minimum)) control.min = String(fieldSchema.minimum);
+      if (Number.isFinite(fieldSchema.maximum)) control.max = String(fieldSchema.maximum);
+      if (fieldSchema.default !== undefined) control.value = String(fieldSchema.default);
     } else {
-      continue;
+      return 0;
     }
-    control.required = required.has(fieldId);
+    control.required = fieldSchema.required;
     label.append(control);
     if (typeof fieldSchema.description === "string" && fieldSchema.description) {
       const description = document.createElement("small");
@@ -3108,35 +3142,39 @@ function addMcpFormFields(card, fields, schema) {
       label.append(description);
     }
     card.append(label);
-    fields.set(fieldId, { control, other: null, multiple });
+    fields.set(fieldId, { control, other: null, multiple, select: control.tagName === "SELECT" });
     count += 1;
   }
   return count;
 }
 
-function mcpSchemaChoices(schema) {
-  const source = Array.isArray(schema.oneOf)
-    ? schema.oneOf
-    : Array.isArray(schema.enum)
-    ? schema.enum
-    : Array.isArray(schema.items?.anyOf)
-    ? schema.items.anyOf
-    : Array.isArray(schema.items?.enum)
-    ? schema.items.enum
-    : [];
-  return source.flatMap((choice) => {
-    if (typeof choice === "string") return [{ value: choice, title: choice }];
-    return choice && typeof choice.const === "string"
-      ? [{ value: choice.const, title: choice.title || choice.const }]
-      : [];
-  });
+function collectMcpFormAnswers(fields) {
+  const answers = {};
+  for (const [fieldId, field] of fields) {
+    if (field.multiple) {
+      answers[fieldId] = [...field.control.selectedOptions]
+        .filter((option) => option.dataset.omit !== "true")
+        .map((option) => option.value);
+    } else if (field.select) {
+      const selected = [...field.control.selectedOptions][0];
+      answers[fieldId] = !selected || selected.dataset.omit === "true"
+        ? []
+        : [selected.value];
+    } else {
+      answers[fieldId] = field.control.value === "" ? [] : [field.control.value];
+    }
+  }
+  return answers;
 }
 
-function mcpStringInputType(format) {
-  if (format === "email" || format === "url" || format === "date") return format;
-  if (format === "uri") return "url";
-  if (format === "date-time") return "datetime-local";
-  return "text";
+function reportMcpFormError(fields, message, result) {
+  for (const field of fields.values()) field.control.setCustomValidity?.("");
+  message.textContent = result.message;
+  message.hidden = false;
+  const control = fields.get(result.fieldId)?.control;
+  control?.setCustomValidity?.(result.message);
+  control?.focus?.();
+  control?.reportValidity?.();
 }
 
 async function answerInteraction(card, interactionId, action, answers) {

@@ -75,6 +75,7 @@ test("serves health and requires a cookie before the WebSocket upgrade", async (
     for (const asset of [
       "/boot.js",
       "/markdown.js",
+      "/mcp-form.js",
       "/notice.js",
       "/slash-menu.js",
       "/display-timezone.js",

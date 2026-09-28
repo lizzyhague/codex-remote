@@ -144,3 +144,110 @@ test("validates and types standard MCP form answers", () => {
     },
   }]);
 });
+
+test("keeps an MCP form pending when the server rejects constrained answers", () => {
+  const transport = new FakeTransport();
+  const broker = new InteractionBroker(transport);
+  const events: WorkerInteractionEvent[] = [];
+  broker.onEvent((event) => events.push(event));
+  transport.request({
+    id: "form-constrained",
+    method: "mcpServer/elicitation/request",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      serverName: "example",
+      mode: "form",
+      message: "填写参数",
+      requestedSchema: {
+        type: "object",
+        required: ["name", "count", "tags"],
+        properties: {
+          name: { type: "string", title: "名称", minLength: 2, maxLength: 4 },
+          count: { type: "integer", title: "数量", minimum: 1, maximum: 3 },
+          color: { type: "string", title: "颜色", enum: ["red", "blue"], default: "blue" },
+          tags: {
+            type: "array",
+            title: "标签",
+            minItems: 1,
+            maxItems: 2,
+            items: { type: "string", enum: ["A", "B", "C"] },
+          },
+        },
+      },
+    },
+  });
+  const requested = events[0];
+  assert.equal(requested?.type, "interaction_requested");
+  if (requested?.type !== "interaction_requested") return;
+
+  const valid = { name: ["测试"], count: ["2"], color: ["blue"], tags: ["A"] };
+  assert.throws(
+    () => broker.answer(requested.interaction.id, "submit", { ...valid, name: [] }),
+    /请填写“名称”/u,
+  );
+  assert.throws(
+    () => broker.answer(requested.interaction.id, "submit", { ...valid, name: ["太长的名字"] }),
+    /最多允许 4 个字符/u,
+  );
+  assert.throws(
+    () => broker.answer(requested.interaction.id, "submit", { ...valid, count: ["4"] }),
+    /不能大于 3/u,
+  );
+  assert.throws(
+    () => broker.answer(requested.interaction.id, "submit", { ...valid, color: ["green"] }),
+    /选项无法识别/u,
+  );
+  assert.throws(
+    () => broker.answer(requested.interaction.id, "submit", { ...valid, tags: ["A", "B", "C"] }),
+    /最多只能选择 2 项/u,
+  );
+  assert.equal(transport.responses.length, 0);
+  assert.equal(events.length, 1);
+
+  assert.equal(broker.answer(requested.interaction.id, "submit", valid), true);
+  assert.deepEqual(transport.responses[0], {
+    id: "form-constrained",
+    result: {
+      action: "accept",
+      content: { name: "测试", count: 2, color: "blue", tags: ["A"] },
+      _meta: null,
+    },
+  });
+  assert.equal(events[1]?.type, "interaction_resolved");
+});
+
+test("an unsupported MCP form can only be cancelled", () => {
+  const transport = new FakeTransport();
+  const broker = new InteractionBroker(transport);
+  const events: WorkerInteractionEvent[] = [];
+  broker.onEvent((event) => events.push(event));
+  transport.request({
+    id: "form-unsupported",
+    method: "mcpServer/elicitation/request",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      serverName: "example",
+      mode: "form",
+      message: "填写邮箱",
+      requestedSchema: {
+        type: "object",
+        properties: { email: { type: "string", format: "email" } },
+      },
+    },
+  });
+  const requested = events[0];
+  assert.equal(requested?.type, "interaction_requested");
+  if (requested?.type !== "interaction_requested") return;
+  assert.throws(
+    () => broker.answer(requested.interaction.id, "submit", { email: ["person@example.com"] }),
+    /暂时不受支持/u,
+  );
+  assert.equal(transport.responses.length, 0);
+  assert.equal(broker.answer(requested.interaction.id, "cancel", {}), true);
+  assert.deepEqual(transport.responses, [{
+    id: "form-unsupported",
+    result: { action: "cancel", content: null, _meta: null },
+  }]);
+});
