@@ -217,6 +217,8 @@ export class SessionWorkerManager {
   readonly #workerOperations = new Set<WorkerOperation>();
   /** 已离开可查 map、仍在异步收尾的 Worker 关闭与清理；总关闭必须等它们真正结束。 */
   readonly #closingWork = new Set<Promise<void>>();
+  /** 已进入的附件索引操作；关闭先等它们结束，再 drain 索引。 */
+  readonly #indexOperations = new Set<Promise<unknown>>();
   #workerReservations = 0;
   #offlineSinceMs: number | null = null;
   #offlineTimer: NodeJS.Timeout | null = null;
@@ -267,24 +269,27 @@ export class SessionWorkerManager {
     turns: Turn[] = [],
   ): Promise<AttachmentDisplayMapping[]> {
     if (!this.#attachmentIndex) return [];
-    await this.#attachmentIndex.mappingsFor(threadId);
-    for (const entry of collectHistoryAttachmentRecords(turns)) {
-      await this.#attachmentIndex.register(threadId, entry.messageId, entry.attachments);
-    }
-    const mappings = this.#attachmentIndex.peek(threadId);
+    if (this.#closed) throw new WorkerManagerError("worker_manager_closed", "后端正在停止。");
+    // 整轮重建在索引链上一次完成；永久删除要么排在它之后删掉结果，要么让它不再写。
+    const mappings = await this.#trackIndexOperation(
+      this.#attachmentIndex.rebuild(threadId, collectHistoryAttachmentRecords(turns)),
+    );
     this.#applyAttachmentMappings(threadId, mappings);
     return mappings;
   }
 
   /** 会话被永久删除后，清掉后端为它留的附件显示索引和工作状态记录。 */
   async forgetSession(threadId: string): Promise<void> {
+    if (this.#closed) throw new WorkerManagerError("worker_manager_closed", "后端正在停止。");
     const { keptActive } = this.#store.forgetThread(threadId);
     if (keptActive > 0) {
       throw new Error(`会话仍有 ${keptActive} 个任务在进行，工作记录没有删除。`);
     }
     this.#clearPathRedactors(threadId);
     this.#sessionDesiredFullAccess.delete(threadId);
-    await this.#attachmentIndex?.remove(threadId);
+    if (this.#attachmentIndex) {
+      await this.#trackIndexOperation(this.#attachmentIndex.remove(threadId));
+    }
   }
 
   onEvent(listener: (event: WorkerManagerEvent) => void): () => void {
@@ -797,6 +802,11 @@ export class SessionWorkerManager {
       this.#releaseAttachmentLease(taskId, lease)
     ));
     this.#pathRedactors.clear();
+    while (this.#indexOperations.size > 0) {
+      await Promise.all([...this.#indexOperations].map((operation) =>
+        operation.catch(() => undefined)
+      ));
+    }
     await this.#attachmentIndex?.drain();
     this.#listeners.clear();
   }
@@ -1959,7 +1969,7 @@ export class SessionWorkerManager {
     attachments: readonly ResolvedAttachment[],
   ): Promise<void> {
     if (!this.#attachmentIndex || attachments.length === 0) return;
-    await this.#attachmentIndex.register(
+    await this.#trackIndexOperation(this.#attachmentIndex.register(
       threadId,
       messageId,
       attachments.map((attachment) => ({
@@ -1967,8 +1977,17 @@ export class SessionWorkerManager {
         originalName: attachment.originalName,
         path: attachment.path,
       })),
-    );
+    ));
     this.#applyAttachmentMappings(threadId, this.#attachmentIndex.peek(threadId));
+  }
+
+  #trackIndexOperation<T>(operation: Promise<T>): Promise<T> {
+    this.#indexOperations.add(operation);
+    const settle = () => {
+      this.#indexOperations.delete(operation);
+    };
+    operation.then(settle, settle);
+    return operation;
   }
 
   #applyAttachmentMappings(threadId: string, mappings: readonly AttachmentDisplayMapping[]): void {

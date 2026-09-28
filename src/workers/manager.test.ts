@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import fs, { mkdtemp, rm, stat } from "node:fs/promises";
 import { AttachmentDisplayIndex } from "./attachment-index.ts";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,6 +11,8 @@ import {
   CodexTurnCancelledError,
   type CodexStreamEvent,
 } from "../app-server/turn-session.ts";
+import { formatPrivateAttachmentPathsBlock } from "../attachments/private-paths.ts";
+import type { Turn } from "../generated/v2/Turn.ts";
 import type { ProjectCatalog } from "../projects/catalog.ts";
 import type { TrashStore } from "../sessions/trash-store.ts";
 import { ProjectTaskLocks } from "../server/project-locks.ts";
@@ -2208,6 +2210,112 @@ test("permanent deletion fails without changing artifacts while a task is active
   assert.deepEqual(await fixture.attachmentIndex.mappingsFor("thread-1"), [attachment]);
 });
 
+test("permanent deletion during a history attachment sync leaves no index behind", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 10 });
+  const renames = pauseFirstRename(context);
+
+  const syncing = fixture.manager.syncAttachmentMappings("thread-1", historyWithAttachments());
+  await renames.reached;
+  // 设备一的打开还在写索引，设备二的永久删除已经走到清理本地记录。
+  const forgetting = fixture.manager.forgetSession("thread-1");
+  renames.release();
+
+  await syncing;
+  await forgetting;
+  await fixture.attachmentIndex.drain();
+  await assert.rejects(() => stat(fixture.attachmentIndexFile("thread-1")));
+  assert.deepEqual(fixture.manager.peekAttachmentMappings("thread-1"), []);
+  assert.deepEqual(await fixture.attachmentIndex.mappingsFor("thread-1"), []);
+});
+
+test("a history sync that starts after permanent deletion does not rebuild the index", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 10 });
+  await fixture.manager.syncAttachmentMappings("thread-1", historyWithAttachments());
+  await fixture.manager.forgetSession("thread-1");
+
+  assert.deepEqual(
+    await fixture.manager.syncAttachmentMappings("thread-1", historyWithAttachments()),
+    [],
+  );
+  await assert.rejects(() => stat(fixture.attachmentIndexFile("thread-1")));
+});
+
+test("manager close waits for attachment index work that already entered", async (context) => {
+  const fixture = await managerFixture(context, { offlineGraceMs: 10 });
+  const renames = pauseFirstRename(context);
+  const order: string[] = [];
+
+  const syncing = fixture.manager.syncAttachmentMappings("thread-1", historyWithAttachments())
+    .then((mappings) => {
+      order.push("sync");
+      return mappings;
+    });
+  await renames.reached;
+  const closing = fixture.manager.close().then(() => order.push("close"));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(order, []);
+  renames.release();
+  await closing;
+
+  assert.deepEqual(order, ["sync", "close"]);
+  assert.equal((await syncing).length, 2);
+  await stat(fixture.attachmentIndexFile("thread-1"));
+  await assert.rejects(
+    fixture.manager.syncAttachmentMappings("thread-1", historyWithAttachments()),
+    (error: unknown) => error instanceof WorkerManagerError &&
+      error.code === "worker_manager_closed",
+  );
+  await assert.rejects(
+    fixture.manager.forgetSession("thread-1"),
+    (error: unknown) => error instanceof WorkerManagerError &&
+      error.code === "worker_manager_closed",
+  );
+});
+
+function historyWithAttachments(): Turn[] {
+  const message = (id: string, name: string) => ({
+    type: "userMessage",
+    id,
+    content: [{
+      type: "text",
+      text: `看附件\n\n${formatPrivateAttachmentPathsBlock([{
+        id: `attachment-${name}`,
+        originalName: `${name}.txt`,
+        path: `/private/uploads/${name}.txt`,
+        mimeType: "text/plain",
+        size: 1,
+      }])}`,
+    }],
+  });
+  return [
+    { id: "turn-1", items: [message("message-1", "one")] },
+    { id: "turn-2", items: [message("message-2", "two")] },
+  ] as unknown as Turn[];
+}
+
+/** 让第一次 rename 停住，模拟索引写入正在进行时插进来的其他调用。 */
+function pauseFirstRename(context: test.TestContext) {
+  const realRename = fs.rename.bind(fs);
+  let calls = 0;
+  let markReached!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>((resolve) => {
+    markReached = resolve;
+  });
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  context.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) => {
+    calls += 1;
+    if (calls === 1) {
+      markReached();
+      await released;
+    }
+    return realRename(...args);
+  });
+  return { reached, release };
+}
+
 async function managerFixture(
   context: test.TestContext,
   options: {
@@ -2326,6 +2434,8 @@ async function managerFixture(
     createdOptions,
     locks,
     attachmentIndex,
+    attachmentIndexFile: (threadId: string) =>
+      path.join(directory, "attachment-index", `${threadId}.json`),
     /** 模拟服务重启：旧 Manager 已关闭，新 Manager 读同一个 SQLite。 */
     restartManager: () => {
       const next = createManager();
