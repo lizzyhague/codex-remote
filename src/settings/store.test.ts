@@ -10,6 +10,7 @@ import {
   MAX_DEVELOPER_INSTRUCTIONS_LENGTH,
   resolveSettingsStatePath,
 } from "./store.ts";
+import { injectFsFaults, temporaryFiles } from "../workers/fs-fault-injection.ts";
 
 async function fixture(context: TestContext) {
   const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-settings-"));
@@ -108,4 +109,25 @@ test("keeps settings beside the trash file unless an explicit settings path is s
   assert.equal(resolveSettingsStatePath({
     XDG_STATE_HOME: "/var/state",
   }), "/var/state/codex-remote/settings.json");
+});
+
+test("a failed save keeps the previous value, notifies nobody, and leaves no temporary file", async (context) => {
+  const filePath = await fixture(context);
+  const store = await ApplicationSettingsStore.open(filePath);
+  await store.update("旧指令");
+  const notified: string[] = [];
+  store.onChange((settings) => notified.push(settings.developerInstructions));
+
+  for (const stage of ["file-write", "directory-sync"] as const) {
+    const faults = injectFsFaults(context, { fail: { [stage]: 1 } });
+    await assert.rejects(store.update("新指令"), new RegExp(`injected ${stage} failure`, "u"));
+    faults.heal();
+    context.mock.restoreAll();
+    assert.deepEqual(store.get(), { developerInstructions: "旧指令" });
+    assert.deepEqual(await temporaryFiles(path.dirname(filePath)), []);
+  }
+  assert.deepEqual(notified, []);
+
+  await store.update("新指令");
+  assert.deepEqual(notified, ["新指令"]);
 });

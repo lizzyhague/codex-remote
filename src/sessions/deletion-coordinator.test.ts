@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { AppServerRpcError } from "../app-server/client.ts";
+import { injectFsFaults } from "../workers/fs-fault-injection.ts";
 import {
   type DeletedSessionArtifacts,
   SessionDeletionCoordinator,
@@ -125,6 +126,30 @@ test("retries idempotent local cleanup before removing the durable deletion reco
   await coordinator.delete(pending!);
   assert.equal(requests, 2);
   assert.equal(cleanups, 2);
+  assert.equal(trash.has(entry.threadId), false);
+  assert.equal(marks.has(entry.threadId), false);
+});
+
+test("does not delete the Codex thread until the deleting record is durable", async (context) => {
+  const { trash, marks, entry } = await fixture(context);
+  let requests = 0;
+  const transport: ThreadDeleteRequester = {
+    async request<Result>() {
+      requests += 1;
+      return {} as Result;
+    },
+  };
+  const coordinator = new SessionDeletionCoordinator(transport, trash, { marks });
+  const faults = injectFsFaults(context, { fail: { "directory-sync": 1 } });
+
+  await assert.rejects(coordinator.delete(entry), /injected directory-sync failure/u);
+  assert.equal(requests, 0);
+  assert.equal(trash.get(entry.threadId)?.state, "trashed");
+  assert.equal(marks.has(entry.threadId), true);
+
+  faults.heal();
+  await coordinator.delete(trash.get(entry.threadId)!);
+  assert.equal(requests, 1);
   assert.equal(trash.has(entry.threadId), false);
   assert.equal(marks.has(entry.threadId), false);
 });

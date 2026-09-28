@@ -9,6 +9,7 @@ import {
   TrashStore,
   type TrashEntry,
 } from "./trash-store.ts";
+import { injectFsFaults, temporaryFiles } from "../workers/fs-fault-injection.ts";
 
 async function fixture(context: TestContext) {
   const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-trash-"));
@@ -77,4 +78,28 @@ test("uses an explicit state file before the platform state directory", () => {
   assert.equal(resolveTrashStatePath({
     XDG_STATE_HOME: "/var/state",
   }), "/var/state/codex-remote/trash.json");
+});
+
+test("rolls back an entry whose directory entry could not be made durable", async (context) => {
+  const filePath = await fixture(context);
+  const store = await TrashStore.open(filePath);
+  await store.put(entry());
+  const faults = injectFsFaults(context, { fail: { "directory-sync": 1, "file-sync": 2 } });
+
+  await assert.rejects(
+    store.put({ ...entry(), state: "deleting" }),
+    /injected directory-sync failure/u,
+  );
+  assert.equal(store.get("thread-1")?.state, "trashed");
+
+  await assert.rejects(store.put(entry("thread-2")), /injected file-sync failure/u);
+  assert.equal(store.has("thread-2"), false);
+  assert.deepEqual(await temporaryFiles(path.dirname(filePath)), []);
+
+  faults.heal();
+  await store.put(entry("thread-2"));
+  assert.deepEqual(
+    (await TrashStore.open(filePath)).list().map((item) => [item.threadId, item.state]),
+    [["thread-1", "trashed"], ["thread-2", "trashed"]],
+  );
 });

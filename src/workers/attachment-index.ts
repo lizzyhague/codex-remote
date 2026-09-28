@@ -1,9 +1,9 @@
 import path from "node:path";
-import { rm } from "node:fs/promises";
 
 import {
   ensurePrivateDirectory,
   readJsonIfPresent,
+  removeFileDurably,
   writeJsonAtomically,
 } from "./atomic-json.ts";
 import { isObject } from "../shared/json.ts";
@@ -61,7 +61,7 @@ export class AttachmentDisplayIndex {
   async remove(sessionId: string): Promise<void> {
     await this.#enqueue(sessionId, async () => {
       this.#loaded.delete(sessionId);
-      await rm(this.#filePath(sessionId), { force: true });
+      await removeFileDurably(this.#filePath(sessionId));
     });
   }
 

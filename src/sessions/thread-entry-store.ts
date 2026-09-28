@@ -21,8 +21,8 @@ export type ThreadEntryStoreShape<Entry extends ThreadScopedEntry> = {
 /**
  * Codex 仍保存真实会话；这里只持久化名单本身，不复制标题或对话内容。
  *
- * 落盘走共享的 `writeJsonAtomically`（临时文件 → fsync → rename），写入排队串行。
- * 内存先改、落盘失败再回滚，所以外部读到的始终是已经落盘的那一份。
+ * 落盘走共享的 `writeJsonAtomically`（临时文件 → fsync → rename → 目录 fsync），
+ * 写入排队串行。内存先改、落盘失败再回滚，所以外部读到的始终是已经落盘的那一份。
  */
 export abstract class ThreadEntryStore<Entry extends ThreadScopedEntry> {
   readonly #filePath: string;
