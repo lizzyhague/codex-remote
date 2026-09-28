@@ -6,6 +6,7 @@ import {
 } from "../workers/atomic-json.ts";
 import { resolveTrashStatePath } from "../sessions/trash-store.ts";
 import { isObject } from "../shared/json.ts";
+import { PublicError } from "../shared/public-error.ts";
 
 export const MAX_DEVELOPER_INSTRUCTIONS_LENGTH = 131_072;
 
@@ -18,7 +19,7 @@ type SettingsFile = {
   developerInstructions: string;
 };
 
-export class ApplicationSettingsError extends Error {
+export class ApplicationSettingsError extends PublicError {
   readonly code: string;
 
   constructor(code: string, message: string) {
@@ -127,4 +128,3 @@ function parseSettings(raw: unknown, filePath: string): ApplicationSettings {
     developerInstructions: normalizeDeveloperInstructions(raw.developerInstructions),
   };
 }
-

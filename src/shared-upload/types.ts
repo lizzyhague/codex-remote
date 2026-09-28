@@ -1,3 +1,5 @@
+import { PublicError } from "../shared/public-error.ts";
+
 export const SHARED_UPLOAD_CALLERS = ["codex", "grok", "claude"] as const;
 
 export type SharedUploadCaller = typeof SHARED_UPLOAD_CALLERS[number];
@@ -46,7 +48,7 @@ export type AttachmentLease = {
   attachments: ResolvedAttachment[];
 };
 
-export class SharedUploadError extends Error {
+export class SharedUploadError extends PublicError {
   readonly code: string;
   readonly status: number;
 

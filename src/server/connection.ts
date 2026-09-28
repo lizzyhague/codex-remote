@@ -34,6 +34,8 @@ import {
   type ApplicationSettings,
   type ApplicationSettingsStore,
 } from "../settings/store.ts";
+import { isPublicError, PublicError } from "../shared/public-error.ts";
+import { redactHostPaths } from "../attachments/path-redaction.ts";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -79,7 +81,7 @@ export type BrowserConnectionServices = {
   settings?: ApplicationSettingsStore;
 };
 
-export class BrowserRequestError extends Error {
+export class BrowserRequestError extends PublicError {
   readonly code: string;
 
   constructor(code: string, message: string) {
@@ -349,6 +351,17 @@ export class BrowserConnection {
         ? await this.#services.sessions.deleteTrash(request.projectId, request.sessionIds)
         : await this.#services.sessions.restoreTrash(request.projectId, request.sessionIds);
 
+      const publicResult = {
+        succeeded: result.succeeded,
+        failed: result.failed.map((failure) => {
+          if (redactHostPaths(failure.message) === failure.message) return failure;
+          console.error(`未向浏览器透传的会话整理失败文字：${failure.message}`);
+          return {
+            sessionId: failure.sessionId,
+            message: "会话整理失败，请查看服务日志。",
+          };
+        }),
+      };
       const openSessionId = this.#sessionId;
       const removesOpenSession = request.action === "archive" ||
         request.action === "trash-active" || request.action === "trash-archived" ||
@@ -360,7 +373,7 @@ export class BrowserConnection {
         this.#invalidateOpen();
         this.#detachSession();
       }
-      return result;
+      return publicResult;
     } finally {
       this.#services.locks.release(request.projectId, this.#id);
     }
@@ -660,27 +673,27 @@ export class BrowserConnection {
   }
 }
 
-/**
- * 发给浏览器的错误文字。本仓库自己写的提示会原样保留，但操作系统和
- * app-server 抛出的错误常常带着主机上的绝对路径，那些只应该留在服务端日志里。
- */
+/** 只有明确标成 PublicError 的业务提示才能原样发给浏览器。 */
 export function publicErrorMessage(error: unknown): string {
-  if (!(error instanceof Error)) {
-    return "请求失败。";
+  if (isPublicError(error)) {
+    if (redactHostPaths(error.message) === error.message) return error.message;
+    console.error(`公开业务错误意外含有宿主路径：${error.message}`);
+    return "请求失败，请查看服务日志。";
   }
   if (isSystemError(error)) {
     console.error(`未向浏览器透传的系统错误：${error.message}`);
     return "服务器无法访问本地文件，请查看服务日志。";
   }
-  return redactPaths(error.message);
+  console.error(`未向浏览器透传的请求错误：${privateErrorMessage(error)}`);
+  return "请求失败，请查看服务日志。";
 }
 
-function isSystemError(error: Error): boolean {
+function isSystemError(error: unknown): error is Error {
+  if (!(error instanceof Error)) return false;
   const candidate = error as NodeJS.ErrnoException;
   return typeof candidate.code === "string" && typeof candidate.syscall === "string";
 }
 
-/** 兜底遮盖仍然可能出现在错误文字里的绝对路径。 */
-function redactPaths(message: string): string {
-  return message.replace(/(?:\/[\w.@+-]+){2,}\/?/g, "<路径>");
+function privateErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

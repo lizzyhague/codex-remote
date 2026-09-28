@@ -33,6 +33,7 @@ import {
 } from "./deletion-coordinator.ts";
 import type { ApplicationSettingsStore } from "../settings/store.ts";
 import { isObject } from "../shared/json.ts";
+import { isPublicError, PublicError } from "../shared/public-error.ts";
 
 const PAGE_SIZE = 50;
 const REPLY_LOOKUP_PAGE_SIZE = 20;
@@ -46,6 +47,13 @@ const MAX_LIST_PAGES_PER_REQUEST = 10;
 const MAX_TRASH_READS_PER_REQUEST = 200;
 const VISIBLE_SOURCE_KINDS = ["cli", "vscode", "appServer"] as const;
 export const TRASH_RETENTION_SECONDS = 30 * 24 * 60 * 60;
+
+class SessionOperationError extends PublicError {
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionOperationError";
+  }
+}
 
 export const CODEX_REMOTE_DEVELOPER_INSTRUCTIONS = [
   "Codex Remote 是一个由浏览器 PWA 和本机后端组成的远程使用平台；它通过 Codex App Server 将 Codex 接到网页，让用户从手机或电脑使用。你正在通过 Codex Remote 与用户对话。用户通过网页发送消息，看到的是 Codex Remote 的浏览器界面，不是 Codex CLI 的终端界面。",
@@ -279,10 +287,10 @@ export class CodexSessionService {
 
   async resume(projectId: string, threadId: string): Promise<OpenedSession> {
     if (!threadId.trim()) {
-      throw new Error("Codex 会话 ID 不能为空。");
+      throw new SessionOperationError("Codex 会话 ID 不能为空。");
     }
     if (this.#trash.has(threadId)) {
-      throw new Error("这个会话在回收站中，请先恢复后再打开。");
+      throw new SessionOperationError("这个会话在回收站中，请先恢复后再打开。");
     }
 
     const project = await this.#projects.resolve(projectId);
@@ -317,10 +325,10 @@ export class CodexSessionService {
   setMarked(projectId: string, threadId: string, marked: boolean): Promise<SessionSummary> {
     return this.#serializeMutation(async () => {
       if (!this.#marks) {
-        throw new Error("当前后端没有启用会话钉住。");
+        throw new SessionOperationError("当前后端没有启用会话钉住。");
       }
       if (!threadId.trim()) {
-        throw new Error("Codex 会话 ID 不能为空。");
+        throw new SessionOperationError("Codex 会话 ID 不能为空。");
       }
       if (!marked) {
         await this.#marks.remove(threadId);
@@ -330,7 +338,7 @@ export class CodexSessionService {
       const project = await this.#projects.resolve(projectId);
       const thread = await this.#readOwnedThread(project.path, threadId);
       if (this.#trash.has(threadId)) {
-        throw new Error("回收站里的会话不能钉住，请先恢复。");
+        throw new SessionOperationError("回收站里的会话不能钉住，请先恢复。");
       }
       await this.#marks.put({ threadId, projectId });
       this.#emitChange({ projectId, sessionIds: [threadId], change: "mark" });
@@ -342,10 +350,10 @@ export class CodexSessionService {
     return this.#serializeMutation(async () => {
       const trimmed = title.trim();
       if (!trimmed) {
-        throw new Error("会话名称不能为空。");
+        throw new SessionOperationError("会话名称不能为空。");
       }
       if (trimmed.length > 160 || trimmed.includes("\n")) {
-        throw new Error("会话名称请控制在 160 个字以内，并且不要换行。");
+        throw new SessionOperationError("会话名称请控制在 160 个字以内，并且不要换行。");
       }
       const project = await this.#projects.resolve(projectId);
       const thread = await this.#readOwnedThread(project.path, threadId);
@@ -363,7 +371,7 @@ export class CodexSessionService {
   archive(projectId: string, threadIds: string[]): Promise<SessionMutationResult> {
     return this.#mutateMany(projectId, threadIds, "archive", async (projectPath, threadId) => {
       if (this.#trash.has(threadId)) {
-        throw new Error("这个会话已经在回收站中。");
+        throw new SessionOperationError("这个会话已经在回收站中。");
       }
       const thread = await this.#readOwnedThread(projectPath, threadId);
       assertThreadCanBeManaged(thread);
@@ -375,7 +383,7 @@ export class CodexSessionService {
   unarchive(projectId: string, threadIds: string[]): Promise<SessionMutationResult> {
     return this.#mutateMany(projectId, threadIds, "unarchive", async (projectPath, threadId) => {
       if (this.#trash.has(threadId)) {
-        throw new Error("这个会话在回收站中，请从回收站恢复。");
+        throw new SessionOperationError("这个会话在回收站中，请从回收站恢复。");
       }
       const thread = await this.#readOwnedThread(projectPath, threadId);
       assertThreadCanBeManaged(thread);
@@ -418,10 +426,10 @@ export class CodexSessionService {
     return this.#mutateMany(projectId, threadIds, "restore", async (projectPath, threadId) => {
       const entry = this.#trash.get(threadId);
       if (!entry || entry.projectId !== projectId) {
-        throw new Error("这个会话不在当前项目的回收站中。");
+        throw new SessionOperationError("这个会话不在当前项目的回收站中。");
       }
       if (entry.state === "deleting") {
-        throw new Error("这个会话正在永久删除，不能恢复。");
+        throw new SessionOperationError("这个会话正在永久删除，不能恢复。");
       }
       const thread = await this.#readOwnedThread(projectPath, threadId);
       assertThreadCanBeManaged(thread);
@@ -441,7 +449,7 @@ export class CodexSessionService {
     return this.#mutateMany(projectId, threadIds, "delete", async (_projectPath, threadId) => {
       const entry = this.#trash.get(threadId);
       if (!entry || entry.projectId !== projectId) {
-        throw new Error("只能永久删除回收站里的会话。");
+        throw new SessionOperationError("只能永久删除回收站里的会话。");
       }
       await this.#deletions.delete(entry);
     });
@@ -832,7 +840,7 @@ export class CodexSessionService {
   }
 
   async #readOwnedThread(projectPath: string, threadId: string): Promise<Thread> {
-    if (!threadId.trim()) throw new Error("Codex 会话 ID 不能为空。");
+    if (!threadId.trim()) throw new SessionOperationError("Codex 会话 ID 不能为空。");
     const params: ThreadReadParams = { threadId, includeTurns: false };
     const response = await this.#transport.request<ThreadReadResponse>("thread/read", params);
     assertOpenedThreadResponse(response);
@@ -908,7 +916,7 @@ function replyTimeFromTurns(turns: Turn[]): number | null {
 
 function assertThreadCanBeManaged(thread: Thread): void {
   if (thread.status.type === "active") {
-    throw new Error("这个会话仍有任务正在运行，暂时不能整理。");
+    throw new SessionOperationError("这个会话仍有任务正在运行，暂时不能整理。");
   }
 }
 
@@ -917,17 +925,23 @@ function parseTrashCursor(cursor: string | null): number {
   const match = /^trash:(\d+)$/u.exec(cursor);
   const offset = match?.[1] === undefined ? NaN : Number(match[1]);
   if (!Number.isSafeInteger(offset) || offset < 0) {
-    throw new Error("回收站分页标记无法识别。");
+    throw new SessionOperationError("回收站分页标记无法识别。");
   }
   return offset;
 }
 
 /**
- * 会话操作失败时给用户看的一句话。非 Error 一律换成固定文案，不把内部值透给界面；
- * 要保留原值看日志的是 `manager.ts` 里的 `errorMessage`。
+ * 会话整理的成功 DTO 也属于浏览器公开边界。只有明确的业务错误保留文案，
+ * App Server、文件系统和未知异常的原文只写服务日志。
  */
 function describeFailure(error: unknown): string {
-  return error instanceof Error ? error.message : "操作失败。";
+  if (isPublicError(error)) return error.message;
+  console.error(`未向浏览器透传的会话整理错误：${privateErrorMessage(error)}`);
+  return "会话整理失败，请查看服务日志。";
+}
+
+function privateErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isInvalidRequest(error: unknown, message: string): boolean {
@@ -951,7 +965,7 @@ async function assertThreadBelongsToProject(
   projectPath: string,
 ): Promise<void> {
   if (!await threadBelongsToProject(thread, projectPath)) {
-    throw new Error("这个会话不属于所选项目。");
+    throw new SessionOperationError("这个会话不属于所选项目。");
   }
 }
 

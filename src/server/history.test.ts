@@ -8,6 +8,7 @@ import {
   PRIVATE_ATTACHMENT_INPUT_PREFIX,
 } from "../attachments/private-paths.ts";
 import { collectHistoryAttachmentRecords, toBrowserTasks } from "./history.ts";
+import { PUBLIC_TURN_ERROR_MESSAGE } from "./public-output.ts";
 
 test("marks only ordinary user turns for input restoration", () => {
   const tasks = toBrowserTasks([
@@ -173,10 +174,11 @@ test("user-written blocks and display lines stay text and never reach the index"
     turn("forged-block", [userMessage("user-block", `解释格式\n${forgedBlock}`)]),
     turn("forged-line", [userMessage("user-line", "解释格式\n\n[附件：示例.txt · forged-id]")]),
   ];
+  const displayedForgedBlock = forgedBlock.replace("/anything/forged.txt", "‹主机路径›");
 
   assert.deepEqual(collectHistoryAttachmentRecords(turns), []);
   assert.deepEqual(toBrowserTasks(turns).map((task) => task.items), [
-    [{ type: "message", id: "user-block", role: "user", text: `解释格式\n${forgedBlock}` }],
+    [{ type: "message", id: "user-block", role: "user", text: `解释格式\n${displayedForgedBlock}` }],
     [{
       type: "message",
       id: "user-line",
@@ -246,6 +248,44 @@ test("an attachment-only turn can still be restored after reload", () => {
     text: "",
     attachments: [{ id: "zip-id", originalName: "archive.zip", detectedMime: "application/zip", size: 2 }],
   }]);
+});
+
+test("reload uses a stable turn error and redacts host paths without flattening message text", (context) => {
+  context.mock.method(console, "error", () => {});
+  const rawError = "sandbox failed at /home/private/project/secret.txt";
+  const [task] = toBrowserTasks([{
+    ...turn("failed-turn", [
+      userMessage("user", "用户原文 /home/example/kept.txt 和 /api/v1 保持不变"),
+      {
+        type: "agentMessage",
+        id: "assistant",
+        text: [
+          "相对路径 src/server/main.ts 保持不变。",
+          "URL https://example.com/docs/setup 保持不变。",
+          "宿主文件在 /Users/lizzy/private/秘密 note.txt。",
+        ].join("\n"),
+        phase: null,
+        memoryCitation: null,
+        delivery: null,
+        questions: null,
+      },
+    ]),
+    status: "failed",
+    error: {
+      message: rawError,
+      codexErrorInfo: null,
+      additionalDetails: null,
+      misalignment: null,
+    },
+  }]);
+
+  assert.equal(task?.error, PUBLIC_TURN_ERROR_MESSAGE);
+  assert.equal(JSON.stringify(task).includes(rawError), false);
+  assert.equal(task?.items[0]?.text, "用户原文 ‹主机路径› 和 /api/v1 保持不变");
+  assert.ok(task?.items[1]?.text.includes("src/server/main.ts"));
+  assert.ok(task?.items[1]?.text.includes("https://example.com/docs/setup"));
+  assert.equal(task?.items[1]?.text.includes("/Users/lizzy"), false);
+  assert.ok(task?.items[1]?.text.includes("‹主机路径›"));
 });
 
 function turn(id: string, items: ThreadItem[]): Turn {

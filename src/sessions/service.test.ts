@@ -501,7 +501,7 @@ test("keeps a durable trashing record when the trash write fails after archive",
   const result = await service.moveToTrash("workspace/alpha", ["thread-old"], "active");
   assert.deepEqual(result, {
     succeeded: [],
-    failed: [{ sessionId: "thread-old", message: "injected file-write failure" }],
+    failed: [{ sessionId: "thread-old", message: "会话整理失败，请查看服务日志。" }],
   });
   // 不再尽力 unarchive：Codex 已归档，本地凭据负责把这次请求做完。
   assert.deepEqual(transport.requests.map((request) => request.method), [
@@ -584,7 +584,7 @@ test("a failed restore stays restorable and a retry tolerates an earlier unarchi
 
   assert.deepEqual(await service.restoreTrash("workspace/alpha", ["thread-old"]), {
     succeeded: [],
-    failed: [{ sessionId: "thread-old", message: "app-server 连接已断开" }],
+    failed: [{ sessionId: "thread-old", message: "会话整理失败，请查看服务日志。" }],
   });
   assert.deepEqual(
     (await TrashStore.open(trashPath)).get("thread-old"),
@@ -631,7 +631,7 @@ test("startup cleanup finishes an interrupted restore instead of purging it", as
   assert.deepEqual(await service.purgeExpired(), {
     settled: 1,
     deleted: 0,
-    failed: [{ sessionId: "thread-stuck", message: "app-server 连接已断开" }],
+    failed: [{ sessionId: "thread-stuck", message: "会话整理失败，请查看服务日志。" }],
   });
   assert.deepEqual(transport.requests.map((request) => request.method), [
     "thread/unarchive",
@@ -663,7 +663,7 @@ test("only the exact already-done response counts as a finished archive", async 
     assert.deepEqual(await service.purgeExpired(), {
       settled: 0,
       deleted: 0,
-      failed: [{ sessionId: "thread-old", message }],
+      failed: [{ sessionId: "thread-old", message: "会话整理失败，请查看服务日志。" }],
     });
     assert.equal(trash.get("thread-old")?.state, "trashing");
   }

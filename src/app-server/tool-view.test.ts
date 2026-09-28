@@ -101,7 +101,7 @@ test("hides thinking items and renders stable inline item types", () => {
   assert.equal(publicToolView({ type: "reasoning" })?.kind, "think");
   assert.equal(publicToolView({ type: "plan" })?.kind, "think");
   assert.deepEqual(publicToolView({ type: "imageView", path: "/tmp/image.png" })?.entries, [
-    { kind: "read", title: "/tmp/image.png" },
+    { kind: "read", title: "‹主机路径›" },
   ]);
   assert.deepEqual(publicToolView({ type: "enteredReviewMode" })?.entries, [
     { kind: "switch_mode", title: "Enter review mode" },
@@ -165,4 +165,20 @@ test("replaces known attachment paths before clipping tool titles", () => {
   assert.equal(view?.input?.includes(mapping.path), false);
   assert.equal(view?.output?.includes(mapping.path), false);
   assert.ok(view?.title.includes("附件：notes.txt"));
+});
+
+test("hides unknown host paths in tool copies without changing URLs or relative paths", () => {
+  const view = publicToolView({
+    type: "commandExecution",
+    command: "node src/server/main.ts https://example.com/docs/setup /home/private/project/file.ts",
+    status: "completed",
+    aggregatedOutput: "read /Users/lizzy/中文项目/秘密.txt\nGET https://example.com/api/v1",
+  }, "completed");
+
+  assert.equal(JSON.stringify(view).includes("/home/private"), false);
+  assert.equal(JSON.stringify(view).includes("/Users/lizzy"), false);
+  assert.ok(view?.input?.includes("src/server/main.ts"));
+  assert.ok(view?.input?.includes("https://example.com/docs/setup"));
+  assert.ok(view?.output?.includes("https://example.com/api/v1"));
+  assert.ok(view?.input?.includes("‹主机路径›"));
 });

@@ -15,6 +15,7 @@ import type {
 } from "../sessions/service.ts";
 import {
   BrowserConnection,
+  BrowserRequestError,
   publicErrorMessage,
   type BrowserConnectionServices,
   type BrowserSocket,
@@ -232,6 +233,7 @@ class FakeProjects implements ProjectsApi {
 class FakeSessions implements SessionsApi {
   readonly marks = new Set<string>();
   sessions: SessionPage["sessions"] = [];
+  archiveFailure: string | null = null;
   readonly #listeners = new Set<(event: SessionChangeEvent) => void>();
 
   isMarked(sessionId: string): boolean {
@@ -260,6 +262,15 @@ class FakeSessions implements SessionsApi {
   }
 
   async archive(projectId: string, sessionIds: string[]) {
+    if (this.archiveFailure !== null) {
+      return {
+        succeeded: [],
+        failed: sessionIds.map((sessionId) => ({
+          sessionId,
+          message: this.archiveFailure!,
+        })),
+      };
+    }
     this.#emit({ projectId, sessionIds, change: "archive" });
     return { succeeded: sessionIds, failed: [] };
   }
@@ -787,6 +798,32 @@ test("archiving the open session closes it and tells every device", async (conte
   assert.equal(phoneSocket.last("response")?.ok, false);
 });
 
+test("a successful mutation response cannot carry a private failure path", async (context) => {
+  context.mock.method(console, "error", () => {});
+  const { sessions, services } = setup();
+  sessions.archiveFailure = "archive failed at /home/lizzy/My Projects/秘密.md";
+  const socket = new FakeSocket();
+  const connection = new BrowserConnection("phone", socket, services);
+  context.after(() => connection.disconnect());
+
+  connection.receiveText(request("sessions.mutate", "archive-private", {
+    projectId: "projects/demo",
+    sessionIds: ["session-1"],
+    action: "archive",
+  }));
+  await connection.whenIdle();
+
+  const result = data(socket.last("response"));
+  assert.deepEqual(result, {
+    succeeded: [],
+    failed: [{
+      sessionId: "session-1",
+      message: "会话整理失败，请查看服务日志。",
+    }],
+  });
+  assert.equal(JSON.stringify(result).includes("/home/lizzy"), false);
+});
+
 test("refuses session housekeeping while the project has a task", async (context) => {
   const { workers, services } = setup();
   workers.busyProjects.add("projects/demo");
@@ -1068,15 +1105,24 @@ test("rejects settings requests when the backend has no settings store", async (
   assert.equal((response.error as JsonObject).code, "settings_unavailable");
 });
 
-test("keeps host paths out of the errors sent to the browser", () => {
+test("only explicit business errors keep their message at the request boundary", (context) => {
+  context.mock.method(console, "error", () => {});
   const systemError = Object.assign(new Error("ENOENT: /home/someone/projects/demo"), {
     code: "ENOENT",
     syscall: "open",
   });
   assert.equal(publicErrorMessage(systemError), "服务器无法访问本地文件，请查看服务日志。");
   assert.equal(
-    publicErrorMessage(new Error("无法读取 /home/someone/projects/demo/notes.md")),
-    "无法读取 <路径>",
+    publicErrorMessage(new Error("无法读取 /home/someone/My Projects/中文/秘密.md")),
+    "请求失败，请查看服务日志。",
   );
-  assert.equal(publicErrorMessage("字符串不是错误"), "请求失败。");
+  assert.equal(
+    publicErrorMessage(new BrowserRequestError("known", "这个项目正在执行任务。")),
+    "这个项目正在执行任务。",
+  );
+  assert.equal(
+    publicErrorMessage(new BrowserRequestError("unsafe", "读取 /home/private/project/file.ts 失败")),
+    "请求失败，请查看服务日志。",
+  );
+  assert.equal(publicErrorMessage("字符串不是错误"), "请求失败，请查看服务日志。");
 });

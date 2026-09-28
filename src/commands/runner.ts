@@ -7,6 +7,7 @@ import type { ThreadTurnsListResponse } from "../generated/v2/ThreadTurnsListRes
 import type { SessionRuntime } from "../sessions/service.ts";
 import type { CommandName } from "./catalog.ts";
 import { asObject } from "../shared/json.ts";
+import { PublicError } from "../shared/public-error.ts";
 
 export type CommandOption = {
   id: string;
@@ -112,19 +113,19 @@ export class CommandRunner {
       };
     }
 
-    throw new Error(`/${command} 没有二级菜单。`);
+    throw new PublicError(`/${command} 没有二级菜单。`);
   }
 
   async setModel(modelId: string, effort?: string | null): Promise<CommandMessage> {
     const model = (await this.#listModels()).find((candidate) => candidate.id === modelId);
     if (!model) {
-      throw new Error("这个模型不在当前 Codex 返回的可用列表中。");
+      throw new PublicError("这个模型不在当前 Codex 返回的可用列表中。");
     }
     if (
       effort &&
       !model.supportedReasoningEfforts.some((option) => option.reasoningEffort === effort)
     ) {
-      throw new Error("这个模型不支持所选思考强度。");
+      throw new PublicError("这个模型不支持所选思考强度。");
     }
     const selectedEffort = effort || model.defaultReasoningEffort || null;
     await this.#updateSettings({
@@ -147,7 +148,7 @@ export class CommandRunner {
     const profile = (await this.#listPermissionProfiles())
       .find((candidate) => candidate.id === profileId);
     if (!profile || !profile.allowed) {
-      throw new Error("这个权限选项当前不可用。");
+      throw new PublicError("这个权限选项当前不可用。");
     }
     const settingsRevision = this.#settingsRevision;
     await this.#updateSettings({ permissions: profile.id });
@@ -172,7 +173,7 @@ export class CommandRunner {
     if (this.#fullAccessEnabled) {
       const profile = pickRestrictedProfile(await this.#listPermissionProfiles());
       if (!profile) {
-        throw new Error("当前 Codex 没有提供可用的受限权限，无法关闭 Full access。");
+        throw new PublicError("当前 Codex 没有提供可用的受限权限，无法关闭 Full access。");
       }
       const settingsRevision = this.#settingsRevision;
       await this.#updateSettings({ permissions: profile.id });
@@ -203,7 +204,7 @@ export class CommandRunner {
       candidate.allowed && isFullAccessProfile(candidate.id)
     );
     if (!profile) {
-      throw new Error("当前 Codex 没有提供可用的 Full access 权限。");
+      throw new PublicError("当前 Codex 没有提供可用的 Full access 权限。");
     }
     const settingsRevision = this.#settingsRevision;
     await this.#updateSettings({ permissions: profile.id });
@@ -222,10 +223,10 @@ export class CommandRunner {
   async rename(name: string): Promise<CommandMessage> {
     const trimmed = name.trim();
     if (!trimmed) {
-      throw new Error("请在 /rename 后面写一个会话名称。");
+      throw new PublicError("请在 /rename 后面写一个会话名称。");
     }
     if (trimmed.length > 160 || trimmed.includes("\n")) {
-      throw new Error("会话名称请控制在 160 个字以内，并且不要换行。");
+      throw new PublicError("会话名称请控制在 160 个字以内，并且不要换行。");
     }
     await this.#transport.request("thread/name/set", {
       threadId: this.#threadId,

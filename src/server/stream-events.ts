@@ -1,6 +1,7 @@
 import type { CodexStreamEvent } from "../app-server/turn-session.ts";
 import type { AttachmentDisplayMapping } from "../attachments/path-redaction.ts";
-import { redactKnownAttachmentPathsDeep } from "../attachments/path-redaction.ts";
+import { redactPublicTextDeep } from "../attachments/path-redaction.ts";
+import { publicTurnErrorMessage } from "./public-output.ts";
 
 export function toBrowserStreamEvent(
   event: CodexStreamEvent,
@@ -24,14 +25,30 @@ export function toBrowserStreamEvent(
     ? "task.completed"
     : "task.error";
   const { type: _internalType, ...payload } = rest;
-  return { type, sessionId, taskId: nativeTurnId, nativeTurnId, ...payload };
+  const projectedPayload = event.type === "turn_completed"
+    ? {
+      ...payload,
+      error: publicTurnErrorMessage(
+        event.error,
+        `未向浏览器透传的实时 turn ${event.turnId} 完成错误`,
+      ),
+    }
+    : event.type === "turn_error"
+    ? {
+      ...payload,
+      message: publicTurnErrorMessage(
+        event.message,
+        `未向浏览器透传的实时 turn ${event.turnId} 错误通知`,
+      ),
+    }
+    : payload;
+  return { type, sessionId, taskId: nativeTurnId, nativeTurnId, ...projectedPayload };
 }
 
-/** 把已知附件路径从即将发给浏览器的事件副本里换掉。 */
+/** 所有浏览器事件使用同一份显示副本，隐藏宿主绝对路径但保留其他文字。 */
 export function redactBrowserStreamEvent<T extends Record<string, unknown>>(
   event: T,
   mappings: readonly AttachmentDisplayMapping[],
 ): T {
-  if (mappings.length === 0) return event;
-  return redactKnownAttachmentPathsDeep(event, mappings);
+  return redactPublicTextDeep(event, mappings);
 }

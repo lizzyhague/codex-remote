@@ -2,13 +2,14 @@ import type { ThreadItem } from "../generated/v2/ThreadItem.ts";
 import type { Turn } from "../generated/v2/Turn.ts";
 import type { OpenedSession, SessionPage, SessionSummary } from "../sessions/service.ts";
 import type { AttachmentDisplayMapping } from "../attachments/path-redaction.ts";
-import { redactKnownAttachmentPaths } from "../attachments/path-redaction.ts";
+import { redactPublicText } from "../attachments/path-redaction.ts";
 import {
   messageAttachmentOf,
   splitUserMessageContent,
   type MessageAttachment,
   type UserMessageContent,
 } from "../attachments/private-paths.ts";
+import { publicTurnErrorMessage } from "./public-output.ts";
 
 export type BrowserSessionSummary = Omit<SessionSummary, "sessionId">;
 
@@ -105,9 +106,10 @@ function toBrowserTask(
   return {
     id: turn.id,
     status: turn.status,
-    error: turn.error?.message
-      ? redactKnownAttachmentPaths(turn.error.message, mappings)
-      : null,
+    error: publicTurnErrorMessage(
+      turn.error?.message,
+      `未向浏览器透传的历史 turn ${turn.id} 错误`,
+    ),
     restoresInput: restoresInput(turn),
     items: turn.items.flatMap((item) => toBrowserTimelineItem(item, mappings)),
   };
@@ -136,7 +138,7 @@ function toBrowserTimelineItem(
       type: "message",
       id: item.id,
       role: "user",
-      text: redactKnownAttachmentPaths(content.text, mappings),
+      text: redactPublicText(content.text, mappings),
       ...(content.attachments.length > 0
         ? { attachments: content.attachments.map(messageAttachmentOf) }
         : {}),
@@ -147,7 +149,7 @@ function toBrowserTimelineItem(
       type: "message",
       id: item.id,
       role: "assistant",
-      text: redactKnownAttachmentPaths(item.text, mappings),
+      text: redactPublicText(item.text, mappings),
     }];
   }
   if (item.type === "exitedReviewMode") {
@@ -155,7 +157,7 @@ function toBrowserTimelineItem(
       type: "message",
       id: item.id,
       role: "assistant",
-      text: redactKnownAttachmentPaths(item.review, mappings),
+      text: redactPublicText(item.review, mappings),
     }];
   }
   // 重新加载只恢复对话。工具、思考和模式切换仍作为独立 ThreadItem

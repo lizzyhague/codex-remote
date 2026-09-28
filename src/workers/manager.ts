@@ -10,9 +10,9 @@ import {
 } from "../app-server/turn-session.ts";
 import type { AttachmentDisplayMapping } from "../attachments/path-redaction.ts";
 import {
-  AttachmentPathStreamRedactor,
+  BrowserPathStreamRedactor,
   redactKnownAttachmentPaths,
-  redactKnownAttachmentPathsDeep,
+  redactPublicTextDeep,
 } from "../attachments/path-redaction.ts";
 import { collectHistoryAttachmentRecords } from "../server/history.ts";
 import type { Turn } from "../generated/v2/Turn.ts";
@@ -31,10 +31,11 @@ import {
 } from "../platform/system-resources.ts";
 import type { SharedUploadClient } from "../shared-upload/client.ts";
 import { publicAttachmentOf } from "../shared-upload/decode.ts";
-import type {
-  AttachmentLease,
-  PublicAttachment,
-  ResolvedAttachment,
+import {
+  SharedUploadError,
+  type AttachmentLease,
+  type PublicAttachment,
+  type ResolvedAttachment,
 } from "../shared-upload/types.ts";
 import { ProjectTaskLocks } from "../server/project-locks.ts";
 import { redactBrowserStreamEvent, toBrowserStreamEvent } from "../server/stream-events.ts";
@@ -52,6 +53,7 @@ import {
   type WorkerTaskKind,
 } from "./state-store.ts";
 import { asObject } from "../shared/json.ts";
+import { PublicError } from "../shared/public-error.ts";
 
 const DEFAULT_MAX_WORKERS = 2;
 const DEFAULT_MIN_AVAILABLE_MEMORY_BYTES = 1_073_741_824;
@@ -65,7 +67,7 @@ const ATTACHMENT_LEASE_RENEW_INTERVAL_MS = 5 * 60 * 1_000;
 const ATTACHMENT_LEASE_RENEW_MARGIN_MS = 60_000;
 const SESSION_PROJECT_MISMATCH_MESSAGE = "这个会话不属于所选项目。";
 
-export class WorkerManagerError extends Error {
+export class WorkerManagerError extends PublicError {
   readonly code: string;
 
   constructor(code: string, message: string) {
@@ -201,7 +203,7 @@ export class SessionWorkerManager {
   readonly #uploads: SessionWorkerManagerOptions["uploads"];
   readonly #attachmentIndex: AttachmentDisplayIndex | null;
   readonly #settings: ApplicationSettingsStore | undefined;
-  readonly #pathRedactors = new Map<string, AttachmentPathStreamRedactor>();
+  readonly #pathRedactors = new Map<string, BrowserPathStreamRedactor>();
   readonly #listeners = new Set<(event: WorkerManagerEvent) => void>();
   readonly #workers = new Map<string, ActiveWorker>();
   readonly #launching = new Map<string, LaunchingTask>();
@@ -2035,11 +2037,11 @@ export class SessionWorkerManager {
     itemId: string,
     kind: "assistant" | "tool",
     mappings: readonly AttachmentDisplayMapping[],
-  ): AttachmentPathStreamRedactor {
+  ): BrowserPathStreamRedactor {
     const key = `${threadId}:${kind}:${itemId}`;
     const existing = this.#pathRedactors.get(key);
     if (existing) return existing;
-    const created = new AttachmentPathStreamRedactor(mappings);
+    const created = new BrowserPathStreamRedactor(mappings);
     this.#pathRedactors.set(key, created);
     return created;
   }
@@ -2293,7 +2295,7 @@ function publicInteraction(
   interaction: WorkerInteractionRequest,
   mappings: readonly AttachmentDisplayMapping[] = [],
 ): Record<string, unknown> {
-  return redactKnownAttachmentPathsDeep(
+  return redactPublicTextDeep(
     structuredClone(interaction) as unknown as Record<string, unknown>,
     mappings,
   );
@@ -2301,10 +2303,11 @@ function publicInteraction(
 
 
 function uploadManagerError(error: unknown): WorkerManagerError {
-  const code = error instanceof Error && "code" in error && typeof error.code === "string"
-    ? error.code
-    : "attachment_failed";
-  return new WorkerManagerError(code, errorMessage(error));
+  if (error instanceof SharedUploadError) {
+    return new WorkerManagerError(error.code, error.message);
+  }
+  console.error(`附件准入失败：${errorMessage(error)}`);
+  return new WorkerManagerError("attachment_failed", "附件处理失败，请查看服务日志。");
 }
 
 function terminalReplayTask(task: WorkerTask | null): WorkerTask | null {

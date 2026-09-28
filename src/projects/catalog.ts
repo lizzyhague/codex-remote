@@ -1,6 +1,7 @@
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { isObject } from "../shared/json.ts";
+import { PublicError } from "../shared/public-error.ts";
 
 export type ProjectRootConfig = {
   id: string;
@@ -24,6 +25,13 @@ type ProjectConfigFile = {
 type ResolvedRoot = ProjectRootConfig & {
   realPath: string;
 };
+
+class ProjectCatalogError extends PublicError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProjectCatalogError";
+  }
+}
 
 /** 目录扫描结果的缓存时长。短到用户察觉不到，长到能挡住一次操作里的重复扫描。 */
 const SCAN_CACHE_TTL_MS = 1_000;
@@ -112,7 +120,7 @@ export class ProjectCatalog {
     const project = projects.find((candidate) => candidate.id === projectId);
 
     if (!project) {
-      throw new Error("项目不存在，或不在允许的根目录中。");
+      throw new ProjectCatalogError("项目不存在，或不在允许的根目录中。");
     }
 
     return project;
