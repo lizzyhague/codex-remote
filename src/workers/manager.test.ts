@@ -7,6 +7,7 @@ import test from "node:test";
 
 import type { ApprovalEvent, ApprovalRequest } from "../approvals/broker.ts";
 import {
+  CodexInterruptTimeoutError,
   CodexTurnCancelledError,
   type CodexStreamEvent,
 } from "../app-server/turn-session.ts";
@@ -1043,6 +1044,272 @@ test("shutdown closes and waits for an in-flight transient Worker", async (conte
   assert.equal(fixture.workers[0]!.closeCount, 1);
 });
 
+for (const phase of ["memory gate", "worker creation", "permission restore"] as const) {
+  test(`shutdown during ${phase} keeps the accepted task queued for restart`, async (context) => {
+    let reportEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      reportEntered = resolve;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    context.after(() => release());
+    let memoryCalls = 0;
+    let createCalls = 0;
+    let toggleCalls = 0;
+    const fixture = await managerFixture(context, {
+      offlineGraceMs: 10,
+      ...(phase === "permission restore" ? { persistedDesiredFullAccess: true } : {}),
+      availableMemory: async () => {
+        if (phase === "memory gate" && ++memoryCalls === 1) {
+          reportEntered();
+          await gate;
+        }
+        return {
+          availableBytes: Number.MAX_SAFE_INTEGER,
+          platform: "linux" as const,
+          source: "linux-meminfo" as const,
+        };
+      },
+      beforeWorkerCreate: async (signal) => {
+        if (phase !== "worker creation" || ++createCalls > 1) return;
+        reportEntered();
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            reject(new Error("测试 Worker 启动被后端终止"));
+          }, { once: true });
+        });
+      },
+      beforeToggleFullAccess: async () => {
+        if (phase !== "permission restore" || ++toggleCalls > 1) return;
+        reportEntered();
+        await gate;
+      },
+    });
+    fixture.manager.start();
+    const accepted = await fixture.manager.enqueueMessage(
+      "project-1",
+      "thread-1",
+      "message-1",
+      "重启后继续",
+    );
+    await entered;
+    const closing = fixture.manager.close();
+    release();
+    await closing;
+
+    const kept = fixture.store.require(accepted.taskId);
+    assert.equal(kept.status, "queued");
+    assert.equal(kept.interruptionReason, null);
+    assert.equal(
+      fixture.store.eventsForTask(accepted.taskId).some((item) =>
+        item.event.type === "task.completed"
+      ),
+      false,
+    );
+    assert.equal(fixture.workers.some((worker) => worker.startTurnCalls > 0), false);
+    assert.equal(fixture.workers.every((worker) => worker.closeCount === 1), true);
+    assert.equal(fixture.locks.acquire("project-1", "probe", "thread-x"), true);
+    fixture.locks.release("project-1", "probe");
+
+    const restarted = fixture.restartManager();
+    restarted.start();
+    await waitFor(() => fixture.workers.some((worker) => worker.started));
+    const worker = fixture.workers.find((each) => each.started)!;
+    assert.equal(worker.startTurnCalls, 1);
+    assert.equal(fixture.store.require(accepted.taskId).status, "running");
+    worker.complete("completed");
+    await waitFor(() => fixture.store.require(accepted.taskId).status === "completed");
+  });
+}
+
+test("shutdown after turn/start records a backend interruption, not a user stop", async (context) => {
+  let reportStartStarted!: () => void;
+  const startStarted = new Promise<void>((resolve) => {
+    reportStartStarted = resolve;
+  });
+  let releaseStart!: () => void;
+  const startGate = new Promise<void>((resolve) => {
+    releaseStart = resolve;
+  });
+  context.after(() => releaseStart());
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    beforeStartTurn: async () => {
+      reportStartStarted();
+      await startGate;
+    },
+  });
+  fixture.manager.start();
+  const accepted = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "turn 已经发出",
+  );
+  await startStarted;
+  const closing = fixture.manager.close();
+  releaseStart();
+  await closing;
+
+  const task = fixture.store.require(accepted.taskId);
+  assert.equal(task.status, "interrupted");
+  assert.equal(task.interruptionReason, "backend_stopping");
+  assert.equal(fixture.workers[0]!.interruptCount, 1);
+  assert.equal(fixture.workers[0]!.closeCount, 1);
+
+  const restarted = fixture.restartManager();
+  restarted.start();
+  await delay(20);
+  assert.equal(fixture.workers.length, 1);
+  assert.equal(fixture.store.require(accepted.taskId).interruptionReason, "backend_stopping");
+});
+
+test("shutdown force-closes a launch whose turn/start and interrupt never answer", async (context) => {
+  let reportStartStarted!: () => void;
+  const startStarted = new Promise<void>((resolve) => {
+    reportStartStarted = resolve;
+  });
+  let failStart: ((error: Error) => void) | null = null;
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    beforeStartTurn: async () => {
+      reportStartStarted();
+      await new Promise<void>((_resolve, reject) => {
+        failStart = reject;
+      });
+    },
+    // 真实 CodexTurnSession 的截止时间到点后就是这个错误。
+    beforeInterrupt: async () => {
+      throw new CodexInterruptTimeoutError(10);
+    },
+    // 关闭 Worker 会让仍在等待的 turn/start 随连接关闭而失败。
+    beforeWorkerClose: async () => {
+      failStart?.(new Error("codex app-server 连接已经关闭。"));
+    },
+  });
+  fixture.manager.start();
+  const accepted = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "turn/start 一直不返回",
+  );
+  await startStarted;
+  await fixture.manager.close();
+
+  const task = fixture.store.require(accepted.taskId);
+  assert.equal(task.status, "interrupted");
+  assert.equal(task.interruptionReason, "backend_stopping");
+  assert.equal(fixture.workers[0]!.closeCount, 1);
+});
+
+test("shutdown still closes an active Worker whose interrupt times out", async (context) => {
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    autoCompleteOnInterrupt: false,
+    beforeInterrupt: async () => {
+      throw new CodexInterruptTimeoutError(10);
+    },
+  });
+  fixture.manager.start();
+  const accepted = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "运行中",
+  );
+  const worker = await fixture.waitForWorker();
+  await fixture.manager.close();
+  assert.equal(worker.closeCount, 1);
+  // 没有收到 turn 终态，留给重启按后端重启中断，而不是用户停止。
+  assert.equal(fixture.store.require(accepted.taskId).status, "running");
+  fixture.restartManager();
+  const recovered = fixture.store.require(accepted.taskId);
+  assert.equal(recovered.status, "interrupted");
+  assert.equal(recovered.interruptionReason, "backend_restarted");
+});
+
+test("a browser stop whose interrupt times out ends the task and frees the project", async (context) => {
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    autoCompleteOnInterrupt: false,
+    beforeInterrupt: async () => {
+      throw new CodexInterruptTimeoutError(10);
+    },
+  });
+  fixture.manager.start();
+  const accepted = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "停不下来",
+  );
+  const worker = await fixture.waitForWorker();
+
+  assert.deepEqual(await fixture.manager.stopTask("thread-1"), { requested: true });
+  const task = fixture.store.require(accepted.taskId);
+  assert.equal(task.status, "interrupted");
+  assert.equal(task.interruptionReason, "user_requested");
+  assert.equal(
+    fixture.store.eventsForTask(accepted.taskId).filter((item) =>
+      item.event.type === "task.completed"
+    ).length,
+    1,
+  );
+  await waitFor(() => worker.closeCount === 1);
+  await waitFor(() => {
+    const free = fixture.locks.acquire("project-1", "probe", "thread-x");
+    if (free) fixture.locks.release("project-1", "probe");
+    return free;
+  });
+});
+
+test("one Worker whose interrupt times out does not hold the offline sweep", async (context) => {
+  let interrupts = 0;
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 5,
+    beforeInterrupt: async () => {
+      interrupts += 1;
+      if (interrupts === 1) throw new CodexInterruptTimeoutError(10);
+    },
+  });
+  fixture.manager.clientAuthenticated("phone");
+  fixture.manager.start();
+  const first = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "需要权限",
+  );
+  const second = await fixture.manager.enqueueMessage(
+    "project-2",
+    "thread-2",
+    "message-2",
+    "也需要权限",
+  );
+  await waitFor(() => fixture.workers.length === 2);
+  for (const worker of fixture.workers) worker.requestApproval();
+  await waitFor(() =>
+    fixture.store.require(second.taskId).status === "waiting_for_permission"
+  );
+
+  fixture.manager.clientDisconnected("phone");
+  await waitFor(() =>
+    fixture.store.require(first.taskId).status === "interrupted" &&
+    fixture.store.require(second.taskId).status === "interrupted"
+  );
+  for (const taskId of [first.taskId, second.taskId]) {
+    assert.equal(fixture.store.require(taskId).interruptionReason, "no_client_for_permission");
+  }
+  assert.deepEqual(
+    fixture.workers.map((worker) => worker.interruptCount).sort(),
+    [0, 1],
+  );
+  await waitFor(() => fixture.workers.every((worker) => worker.closeCount === 1));
+});
+
 test("times out a Worker startup and frees the project without user action", async (context) => {
   let createCalls = 0;
   let aborts = 0;
@@ -1860,6 +2127,7 @@ async function managerFixture(
     beforeCompact?: () => Promise<void>;
     beforeRewind?: () => Promise<void>;
     beforeSetPermissions?: (profileId: string) => Promise<void>;
+    beforeToggleFullAccess?: () => Promise<void>;
     beforeInterrupt?: () => Promise<void>;
     autoCompleteOnInterrupt?: boolean;
     persistedTaskPermissionMode?: "manual" | "full_access";
@@ -1888,7 +2156,8 @@ async function managerFixture(
   const workers: FakeWorker[] = [];
   const createdOptions: SessionWorkerOptions[] = [];
   const locks = new ProjectTaskLocks();
-  const manager = new SessionWorkerManager({
+  const managers: SessionWorkerManager[] = [];
+  const createManager = () => new SessionWorkerManager({
     store,
     projects: {} as ProjectCatalog,
     trash: {} as TrashStore,
@@ -1926,6 +2195,9 @@ async function managerFixture(
           ...(options.beforeSetPermissions
             ? { beforeSetPermissions: options.beforeSetPermissions }
             : {}),
+          ...(options.beforeToggleFullAccess
+            ? { beforeToggleFullAccess: options.beforeToggleFullAccess }
+            : {}),
           ...(options.beforeInterrupt ? { beforeInterrupt: options.beforeInterrupt } : {}),
           ...(options.beforeWorkerClose ? { beforeClose: options.beforeWorkerClose } : {}),
           ...(options.autoCompleteOnInterrupt === undefined
@@ -1940,8 +2212,10 @@ async function managerFixture(
     ...(options.uploads ? { uploads: options.uploads } : {}),
     attachmentIndex,
   });
+  const manager = createManager();
+  managers.push(manager);
   context.after(async () => {
-    await manager.close();
+    for (const each of managers) await each.close();
     store.close();
     await rm(directory, { recursive: true, force: true });
   });
@@ -1952,6 +2226,12 @@ async function managerFixture(
     createdOptions,
     locks,
     attachmentIndex,
+    /** 模拟服务重启：旧 Manager 已关闭，新 Manager 读同一个 SQLite。 */
+    restartManager: () => {
+      const next = createManager();
+      managers.push(next);
+      return next;
+    },
     waitForWorker: async (threadId?: string) => {
       await waitFor(() =>
         workers.some((worker) => worker.started && (!threadId || worker.threadId === threadId))
@@ -1997,6 +2277,7 @@ class FakeWorker {
   readonly #beforeCompact?: (() => Promise<void>) | undefined;
   readonly #beforeRewind?: (() => Promise<void>) | undefined;
   readonly #beforeSetPermissions?: ((profileId: string) => Promise<void>) | undefined;
+  readonly #beforeToggleFullAccess?: (() => Promise<void>) | undefined;
   readonly #beforeInterrupt?: (() => Promise<void>) | undefined;
   readonly #beforeClose?: ((worker: FakeWorker) => Promise<void>) | undefined;
   #closing: Promise<void> | null = null;
@@ -2010,6 +2291,7 @@ class FakeWorker {
       beforeCompact?: (() => Promise<void>) | undefined;
       beforeRewind?: (() => Promise<void>) | undefined;
       beforeSetPermissions?: ((profileId: string) => Promise<void>) | undefined;
+      beforeToggleFullAccess?: (() => Promise<void>) | undefined;
       beforeInterrupt?: (() => Promise<void>) | undefined;
       beforeClose?: ((worker: FakeWorker) => Promise<void>) | undefined;
       autoCompleteOnInterrupt?: boolean | undefined;
@@ -2023,6 +2305,7 @@ class FakeWorker {
     this.#beforeCompact = extras.beforeCompact;
     this.#beforeRewind = extras.beforeRewind;
     this.#beforeSetPermissions = extras.beforeSetPermissions;
+    this.#beforeToggleFullAccess = extras.beforeToggleFullAccess;
     this.#beforeInterrupt = extras.beforeInterrupt;
     this.#beforeClose = extras.beforeClose;
     this.autoCompleteOnInterrupt = extras.autoCompleteOnInterrupt !== false;
@@ -2055,6 +2338,7 @@ class FakeWorker {
     this.commands = {
       fullAccessEnabled: () => this.#fullAccess,
       toggleFullAccess: async () => {
+        await this.#beforeToggleFullAccess?.();
         if (this.#toggleFullAccessFails) throw new Error("测试权限恢复失败");
         this.#fullAccess = !this.#fullAccess;
         return {

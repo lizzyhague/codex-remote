@@ -114,6 +114,16 @@ export class CodexTurnCancelledError extends Error {
   }
 }
 
+/** `turn/interrupt` 在截止时间内没有得到确认；调用方应改走强制关闭 Worker。 */
+export class CodexInterruptTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Codex 在 ${timeoutMs} ms 内没有确认停止请求。`);
+    this.name = "CodexInterruptTimeoutError";
+  }
+}
+
+const DEFAULT_INTERRUPT_TIMEOUT_MS = 10_000;
+
 /**
  * 管理一个 Codex 会话中的当前任务，并把 app-server 通知缩成前端需要的事件。
  * 它不负责 WebSocket，也不会把 app-server 的原始协议暴露给浏览器。
@@ -137,17 +147,20 @@ export class CodexTurnSession {
   } | null = null;
   #submittedUserText: string | null = null;
   #attachmentMappings: AttachmentDisplayMapping[] = [];
+  readonly #interruptTimeoutMs: number;
 
   constructor(
     transport: AppServerTransport,
     threadId: string,
     activeTurnId: string | null = null,
+    options: { interruptTimeoutMs?: number } = {},
   ) {
     if (!threadId) {
       throw new Error("Codex 会话 ID 不能为空。");
     }
 
     this.#transport = transport;
+    this.#interruptTimeoutMs = options.interruptTimeoutMs ?? DEFAULT_INTERRUPT_TIMEOUT_MS;
     this.#threadId = threadId;
     this.#activeTurnId = activeTurnId;
     this.#unsubscribe = transport.onNotification((message) => {
@@ -244,7 +257,24 @@ export class CodexTurnSession {
     }
   }
 
+  /**
+   * 请求停止当前 turn，最多等待 interruptTimeoutMs。返回值只表示 Codex 确认收到停止
+   * 请求，不表示 turn 已经结束；超时以 CodexInterruptTimeoutError 拒绝。启动中的等待
+   * 也计入同一个截止时间。重复调用共用同一个请求，各自计时。
+   */
   interruptActiveTurn(): Promise<boolean> {
+    const request = this.#requestInterrupt();
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new CodexInterruptTimeoutError(this.#interruptTimeoutMs)),
+        this.#interruptTimeoutMs,
+      );
+    });
+    return Promise.race([request, deadline]).finally(() => clearTimeout(timer));
+  }
+
+  #requestInterrupt(): Promise<boolean> {
     if (this.#interruptPromise) {
       return this.#interruptPromise;
     }

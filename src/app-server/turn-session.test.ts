@@ -7,6 +7,7 @@ import type {
 } from "./client.ts";
 import { formatPrivateAttachmentPathsBlock } from "../attachments/private-paths.ts";
 import {
+  CodexInterruptTimeoutError,
   CodexTurnSession,
   PRIVATE_ATTACHMENT_INPUT_PREFIX,
   type CodexStreamEvent,
@@ -378,6 +379,50 @@ test("sends only one interrupt request for repeated stop clicks", async () => {
   assert.equal(transport.requests.length, 1);
   assert.equal(await session.interruptActiveTurn(), true);
   assert.equal(transport.requests.length, 1);
+});
+
+test("gives up on a turn/interrupt that never settles after the deadline", async () => {
+  const transport = new FakeTransport();
+  transport.requestHandler = () => new Promise(() => {});
+  const session = new CodexTurnSession(transport, "thread-1", "turn-1", {
+    interruptTimeoutMs: 20,
+  });
+
+  const startedAt = Date.now();
+  const first = session.interruptActiveTurn();
+  const second = session.interruptActiveTurn();
+  await assert.rejects(first, CodexInterruptTimeoutError);
+  await assert.rejects(second, CodexInterruptTimeoutError);
+  assert.ok(Date.now() - startedAt < 1_000);
+  assert.equal(
+    transport.requests.filter((item) => item.method === "turn/interrupt").length,
+    1,
+  );
+});
+
+test("bounds a stop issued while turn/start never answers", async () => {
+  const transport = new FakeTransport();
+  transport.requestHandler = () => new Promise(() => {});
+  const session = new CodexTurnSession(transport, "thread-1", null, {
+    interruptTimeoutMs: 20,
+  });
+
+  void session.startTextTurn("启动一直不返回").catch(() => {});
+  await assert.rejects(session.interruptActiveTurn(), CodexInterruptTimeoutError);
+  assert.equal(
+    transport.requests.filter((item) => item.method === "turn/interrupt").length,
+    0,
+  );
+});
+
+test("an interrupt acknowledged before the deadline still resolves true", async () => {
+  const transport = new FakeTransport();
+  transport.requestHandler = () => new Promise((resolve) => setTimeout(() => resolve({}), 5));
+  const session = new CodexTurnSession(transport, "thread-1", "turn-1", {
+    interruptTimeoutMs: 1_000,
+  });
+
+  assert.equal(await session.interruptActiveTurn(), true);
 });
 
 test("emits authoritative completed message, command, and file summaries", () => {

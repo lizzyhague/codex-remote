@@ -25,7 +25,8 @@ macOS：`sudo launchctl kickstart -k system/<你的 label>`，再做同样的健
 恢复见独立上传服务的运维说明。
 
 Node 直接跑 TypeScript，没有构建步骤。重启会断开浏览器连接：`running` 和
-`waiting_for_permission` 会被标成 `interrupted`，`queued` 的继续调度。
+`waiting_for_permission` 会被标成 `interrupted`，`queued` 的继续调度；关闭时仍在启动、
+尚未向 Codex 提交这一轮的任务也保持 `queued`。
 
 升级 Codex CLI 后也要跑一遍上面的检查。`src/generated/` 的类型跟生成它的 Codex 版本
 绑定，协议变了要重新生成并审查差异，不要直接关掉类型检查。

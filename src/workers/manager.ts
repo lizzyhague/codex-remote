@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   CodexAttachmentError,
+  CodexInterruptTimeoutError,
   CodexTurnCancelledError,
   stripPrivateAttachmentInputs,
   type CodexStreamEvent,
@@ -143,11 +144,20 @@ type ActiveWorker = {
   compactIssued: boolean;
 };
 
+/** 启动中任务被取消的来源；先到的来源生效，后来的不覆盖。 */
+type LaunchCancelReason = "user_requested" | "backend_stopping";
+
 type LaunchingTask = {
   task: WorkerTask;
   ownerId: string;
   worker: SessionWorker | null;
-  cancelRequested: boolean;
+  cancelReason: LaunchCancelReason | null;
+  /**
+   * 任务已在 SQLite 标记为 running，并紧接着（中间没有 await）发出 turn/start 或
+   * compact。越过这条边界后，重启不能安全重放，只能记为中断；之前的阶段只做了可重做
+   * 的准备（附件租约、索引登记、Worker 创建、权限恢复）。
+   */
+  turnSubmitted: boolean;
   settled: boolean;
 };
 
@@ -509,15 +519,17 @@ export class SessionWorkerManager {
 
     const launching = this.#launching.get(threadId);
     if (launching) {
-      launching.cancelRequested = true;
+      launching.cancelReason ??= "user_requested";
       const active = this.#workers.get(threadId);
-      if (active) active.interruptionReason = "user_requested";
-      const worker = active?.worker ?? launching.worker;
-      if (worker) {
-        worker.approvals.cancelThread(threadId);
-        worker.interactions.cancelThread(threadId);
-        const requested = await worker.turns.interruptActiveTurn();
-        if (requested) return { requested: true };
+      if (active) {
+        active.interruptionReason = "user_requested";
+        active.worker.approvals.cancelThread(threadId);
+        active.worker.interactions.cancelThread(threadId);
+        await this.#interruptOrForceStop(active);
+      } else if (launching.worker) {
+        launching.worker.approvals.cancelThread(threadId);
+        launching.worker.interactions.cancelThread(threadId);
+        await launching.worker.turns.interruptActiveTurn();
       }
       return { requested: true };
     }
@@ -527,7 +539,7 @@ export class SessionWorkerManager {
       active.interruptionReason = "user_requested";
       active.worker.approvals.cancelThread(threadId);
       active.worker.interactions.cancelThread(threadId);
-      return { requested: await active.worker.turns.interruptActiveTurn() };
+      return { requested: await this.#interruptOrForceStop(active) };
     }
 
     const pending = this.#store.pendingForThread(threadId);
@@ -536,7 +548,7 @@ export class SessionWorkerManager {
         pending.id,
         ["queued"],
         "interrupted",
-        this.#interruptedEvent(pending),
+        this.#interruptedEvent(pending, "user_requested"),
         this.#now(),
         { interruptionReason: "user_requested" },
       );
@@ -563,7 +575,7 @@ export class SessionWorkerManager {
       if (action === "cancel") {
         active.interruptionReason = "user_input_cancelled";
         active.worker.approvals.cancelThread(active.task.threadId);
-        await active.worker.turns.interruptActiveTurn().catch(() => false);
+        await this.#interruptOrForceStop(active).catch(() => false);
       }
       return { answered: true };
     }
@@ -740,9 +752,9 @@ export class SessionWorkerManager {
     if (this.#queueRetryTimer) clearTimeout(this.#queueRetryTimer);
     if (this.#attachmentLeaseTimer) clearInterval(this.#attachmentLeaseTimer);
     for (const controller of this.#workerStartControllers) controller.abort();
-    for (const launching of this.#launching.values()) {
-      launching.cancelRequested = true;
-    }
+    const launchStops = [...this.#launching.values()].map((launching) =>
+      this.#stopLaunchForShutdown(launching)
+    );
     const operations = [...this.#workerOperations];
     const operationWorkers = new Set(
       operations.flatMap((operation) => operation.worker ? [operation.worker] : []),
@@ -752,6 +764,7 @@ export class SessionWorkerManager {
     ));
     await Promise.all([
       this.#scheduleTail.catch(() => {}),
+      ...launchStops,
       ...operations.map((operation) => operation.done),
       ...this.#threadOperationTails.values(),
     ]);
@@ -760,6 +773,7 @@ export class SessionWorkerManager {
       active.interruptionReason = "backend_stopping";
       active.worker.approvals.cancelThread(active.worker.threadId);
       active.worker.interactions.cancelThread(active.worker.threadId);
+      // interrupt 有截止时间；超时或失败都继续关闭 Worker，由进程组信号兜底。
       await active.worker.turns.interruptActiveTurn().catch(() => false);
       await this.#closeWorker(active.worker).catch(() => {});
       this.#locks.release(active.task.projectId, active.ownerId);
@@ -783,6 +797,25 @@ export class SessionWorkerManager {
     this.#pathRedactors.clear();
     await this.#attachmentIndex?.drain();
     this.#listeners.clear();
+  }
+
+  /**
+   * 关闭时的启动中任务：未越过 turn 边界的，由启动流程在下一个检查点保留 queued 并
+   * 退出；已经提交 turn 的，按 backend_stopping 中断，interrupt 超时就直接关闭 Worker，
+   * 让仍在等待的 turn/start 以连接关闭结束，启动流程才能收尾。
+   */
+  async #stopLaunchForShutdown(launching: LaunchingTask): Promise<void> {
+    launching.cancelReason ??= "backend_stopping";
+    if (!launching.turnSubmitted) return;
+    const active = this.#workers.get(launching.task.threadId);
+    if (!active || active.ownerId !== launching.ownerId || active.finishing) return;
+    active.interruptionReason ??= "backend_stopping";
+    this.#cancelPendingRequests(active);
+    const acknowledged = await active.worker.turns.interruptActiveTurn().then(
+      () => true,
+      () => false,
+    );
+    if (!acknowledged) await this.#closeWorker(active.worker).catch(() => {});
   }
 
   #enqueue(
@@ -1053,7 +1086,7 @@ export class SessionWorkerManager {
       const launching = this.#beginLaunch(task, ownerId);
       try {
         if (!provisional && (await this.#memoryGate()).blocked) {
-          if (launching.cancelRequested) {
+          if (launching.cancelReason) {
             await this.#abandonLaunch(launching);
           } else {
             this.#locks.release(task.projectId, ownerId);
@@ -1061,7 +1094,7 @@ export class SessionWorkerManager {
           capacityBlocked = true;
           break;
         }
-        if (launching.cancelRequested) {
+        if (launching.cancelReason) {
           await this.#abandonLaunch(launching);
           continue;
         }
@@ -1092,17 +1125,17 @@ export class SessionWorkerManager {
           "任务的项目锁身份不一致，Worker 没有启动。",
         );
       }
-      if (launching.cancelRequested) {
+      if (launching.cancelReason) {
         await this.#abandonLaunch(launching);
         return;
       }
       const attachments = await this.#ensureTaskAttachments(task);
-      if (launching.cancelRequested) {
+      if (launching.cancelReason) {
         await this.#abandonLaunch(launching);
         return;
       }
       await this.#registerTaskAttachments(task.threadId, task.clientMessageId, attachments);
-      if (launching.cancelRequested) {
+      if (launching.cancelReason) {
         await this.#abandonLaunch(launching);
         return;
       }
@@ -1124,13 +1157,13 @@ export class SessionWorkerManager {
         this.#workerReservations -= 1;
         workerReserved = false;
       }
-      if (launching.cancelRequested) {
+      if (launching.cancelReason) {
         await this.#abandonLaunch(launching);
         return;
       }
       const permissionMode = task.permissionMode;
       await this.#reconcileFullAccess(worker, permissionMode === "full_access");
-      if (launching.cancelRequested) {
+      if (launching.cancelReason) {
         await this.#abandonLaunch(launching);
         return;
       }
@@ -1140,13 +1173,15 @@ export class SessionWorkerManager {
         await this.#abandonLaunch(launching);
         return;
       }
+      // 从这里到发出 turn/start 或 compact 没有 await。
+      launching.turnSubmitted = true;
       const active: ActiveWorker = {
         task: marked,
         worker,
         ownerId,
         finishing: false,
         cleaned: false,
-        interruptionReason: launching.cancelRequested ? "user_requested" : null,
+        interruptionReason: launching.cancelReason,
         startTimer: null,
         compactIssued: false,
       };
@@ -1159,7 +1194,7 @@ export class SessionWorkerManager {
       }, this.#taskStartTimeoutMs);
       active.startTimer.unref();
 
-      if (launching.cancelRequested) {
+      if (launching.cancelReason) {
         await this.#abandonLaunch(launching);
         return;
       }
@@ -1174,14 +1209,14 @@ export class SessionWorkerManager {
         active.compactIssued = true;
         startPromise = worker.commands.compact();
       }
-      if (task.kind === "message" && launching.cancelRequested) {
-        active.interruptionReason = "user_requested";
+      if (task.kind === "message" && launching.cancelReason) {
+        active.interruptionReason = launching.cancelReason;
         active.worker.approvals.cancelThread(task.threadId);
         active.worker.interactions.cancelThread(task.threadId);
         await worker.turns.interruptActiveTurn().catch(() => false);
       }
       const nativeTurnId = await startPromise;
-      if (launching.cancelRequested && !worker.turns.activeTurnId) {
+      if (launching.cancelReason && !worker.turns.activeTurnId) {
         await this.#abandonLaunch(launching);
         return;
       }
@@ -1190,7 +1225,7 @@ export class SessionWorkerManager {
       }
     } catch (error) {
       if (workerReserved) this.#workerReservations -= 1;
-      if (error instanceof CodexTurnCancelledError || launching.cancelRequested) {
+      if (error instanceof CodexTurnCancelledError || launching.cancelReason) {
         await this.#abandonLaunch(launching);
         return;
       }
@@ -1430,7 +1465,7 @@ export class SessionWorkerManager {
     if (active.finishing) return;
     active.interruptionReason = "no_client_for_permission";
     active.worker.approvals.cancelThread(active.task.threadId);
-    await active.worker.turns.interruptActiveTurn().catch(() => false);
+    await this.#interruptOrForceStop(active).catch(() => false);
   }
 
   async #interruptForOfflineInteraction(active: ActiveWorker): Promise<void> {
@@ -1438,7 +1473,39 @@ export class SessionWorkerManager {
     active.interruptionReason = "no_client_for_user_input";
     active.worker.interactions.cancelThread(active.task.threadId);
     active.worker.approvals.cancelThread(active.task.threadId);
-    await active.worker.turns.interruptActiveTurn().catch(() => false);
+    await this.#interruptOrForceStop(active).catch(() => false);
+  }
+
+  /**
+   * 请求 Codex 停止当前 turn。interrupt 在截止时间内没有确认时，不再等这个 Worker：
+   * 任务按 active.interruptionReason 记为中断，Worker 进入带信号兜底的关闭。
+   * 关闭在后台由 closing 集合持有，调用方（停止请求、离线处理）不必等进程退出。
+   */
+  async #interruptOrForceStop(active: ActiveWorker): Promise<boolean> {
+    try {
+      return await active.worker.turns.interruptActiveTurn();
+    } catch (error) {
+      if (!(error instanceof CodexInterruptTimeoutError)) throw error;
+      console.error(`会话 ${active.task.threadId} 的 turn/interrupt 超时，强制关闭 Worker。`);
+      this.#forceFinishInterrupted(active);
+      return true;
+    }
+  }
+
+  #forceFinishInterrupted(active: ActiveWorker): void {
+    if (active.finishing || this.#workers.get(active.task.threadId) !== active) return;
+    active.finishing = true;
+    this.#cancelPendingRequests(active);
+    const stored = this.#store.tryFinish(
+      active.task.id,
+      ["queued", "running", "waiting_for_permission"],
+      "interrupted",
+      this.#interruptedEvent(active.task, active.interruptionReason ?? "user_requested"),
+      this.#now(),
+      { interruptionReason: active.interruptionReason ?? "user_requested" },
+    );
+    if (stored) this.#emit(stored, "session");
+    void this.#cleanupActive(active);
   }
 
   #offlineGraceExpired(): boolean {
@@ -1473,7 +1540,8 @@ export class SessionWorkerManager {
     if (active.finishing || this.#workers.get(active.task.threadId) !== active) return;
     active.finishing = true;
     this.#cancelPendingRequests(active);
-    const status = active.interruptionReason === "user_requested"
+    const status = active.interruptionReason === "user_requested" ||
+        active.interruptionReason === "backend_stopping"
       ? "interrupted"
       : active.task.kind === "message"
       ? "failed"
@@ -1601,7 +1669,8 @@ export class SessionWorkerManager {
       task,
       ownerId,
       worker: null,
-      cancelRequested: false,
+      cancelReason: null,
+      turnSubmitted: false,
       settled: false,
     };
     this.#launching.set(task.threadId, launching);
@@ -1618,34 +1687,39 @@ export class SessionWorkerManager {
     if (launching.settled) return;
     launching.settled = true;
     const task = launching.task;
+    const reason = launching.cancelReason ?? "user_requested";
     const active = this.#workers.get(task.threadId);
     if (active && active.ownerId === launching.ownerId) {
       if (!active.finishing) {
-        active.interruptionReason = "user_requested";
+        active.interruptionReason ??= reason;
         active.finishing = true;
         this.#cancelPendingRequests(active);
         const stored = this.#store.tryFinish(
           task.id,
           ["queued", "running", "waiting_for_permission"],
           "interrupted",
-          this.#interruptedEvent(task),
+          this.#interruptedEvent(task, active.interruptionReason),
           this.#now(),
-          { interruptionReason: "user_requested" },
+          { interruptionReason: active.interruptionReason },
         );
         if (stored) this.#emit(stored, "session");
         await this.#cleanupActive(active);
       }
       return;
     }
-    const stored = this.#store.tryFinish(
-      task.id,
-      ["queued", "running", "waiting_for_permission"],
-      "interrupted",
-      this.#interruptedEvent(task),
-      this.#now(),
-      { interruptionReason: "user_requested" },
-    );
-    if (stored) this.#emit(stored, "session");
+    // 服务关闭发生在 turn 副作用边界之前：任务仍是 queued，原样留给重启后续做。
+    const keepQueued = reason === "backend_stopping" && !launching.turnSubmitted;
+    if (!keepQueued) {
+      const stored = this.#store.tryFinish(
+        task.id,
+        ["queued", "running", "waiting_for_permission"],
+        "interrupted",
+        this.#interruptedEvent(task, reason),
+        this.#now(),
+        { interruptionReason: reason },
+      );
+      if (stored) this.#emit(stored, "session");
+    }
     if (launching.worker) {
       await this.#closeWorker(launching.worker).catch((error: unknown) => {
         console.error(`关闭启动中的会话 Worker 失败：${errorMessage(error)}`);
@@ -1656,14 +1730,17 @@ export class SessionWorkerManager {
     this.#schedule();
   }
 
-  #interruptedEvent(task: WorkerTask): Record<string, unknown> & { type: string } {
+  #interruptedEvent(
+    task: WorkerTask,
+    interruptionReason: string,
+  ): Record<string, unknown> & { type: string } {
     return {
       type: "task.completed",
       sessionId: task.threadId,
       taskId: task.id,
       status: "interrupted",
       error: null,
-      interruptionReason: "user_requested",
+      interruptionReason,
     };
   }
 
