@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import {
   createServer,
   type IncomingMessage,
@@ -7,7 +6,6 @@ import {
   type ServerResponse,
 } from "node:http";
 import type { AddressInfo } from "node:net";
-import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import type { SharedUploadClient } from "../shared-upload/client.ts";
@@ -90,7 +88,8 @@ export class RemoteWebSocketServer {
   readonly #heartbeatIntervalMs: number;
   readonly #allowedOrigins: ReadonlySet<string>;
   readonly #webRoot: string;
-  readonly #webAssets: WebAssets;
+  /** listen() 时读入并固定；之后工作树的前端改动要重启才生效。 */
+  #webAssets: WebAssets | null = null;
   readonly #uploads: RemoteWebSocketServerOptions["uploads"];
   readonly #http: Server;
   readonly #webSockets: WebSocketServer;
@@ -110,12 +109,6 @@ export class RemoteWebSocketServer {
     this.#heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     this.#allowedOrigins = new Set(options.allowedOrigins ?? []);
     this.#webRoot = options.webRoot ?? DEFAULT_WEB_ROOT;
-    this.#webAssets = new WebAssets(
-      this.#webRoot,
-      Object.values(STATIC_FILES)
-        .map((asset) => asset.file)
-        .filter((file) => /\.(js|css)$/u.test(file) && file !== "sw.js"),
-    );
     this.#uploads = options.uploads;
     this.#http = createServer((request, response) => {
       void this.#serveHttp(request, response).catch((error: unknown) => {
@@ -391,9 +384,10 @@ export class RemoteWebSocketServer {
     }
 
     const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    const webAssets = this.#webAssets!;
     let versioned: { body: Buffer; file: string } | null = null;
     if (pathname.startsWith("/assets/")) {
-      versioned = await this.#webAssets.read(pathname);
+      versioned = await webAssets.read(pathname);
       if (!versioned) {
         response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
         response.end("Not found\n");
@@ -407,46 +401,49 @@ export class RemoteWebSocketServer {
       return;
     }
 
-    try {
-      let body = versioned?.body ?? await readFile(path.join(this.#webRoot, asset.file));
-      if (asset.contentType.startsWith("text/html")) body = await this.#webAssets.page(body);
-      response.writeHead(200, {
-        "content-type": asset.contentType,
-        "content-length": body.byteLength,
-        "cache-control": versioned
-          ? "public, max-age=31536000, immutable"
-          : pathname === "/sw.js"
-            ? "no-cache"
-            : "no-cache, must-revalidate",
-        "content-security-policy": [
-          "default-src 'self'",
-          "connect-src 'self' ws: wss:",
-          "img-src 'self' data:",
-          "style-src 'self'",
-          "script-src 'self'",
-          "object-src 'none'",
-          "base-uri 'none'",
-          "frame-ancestors 'none'",
-        ].join("; "),
-        "x-content-type-options": "nosniff",
-        ...(pathname === "/sw.js" ? { "service-worker-allowed": "/" } : {}),
-      });
-      response.end(request.method === "HEAD" ? undefined : body);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-        response.end("Not found\n");
-        return;
-      }
-      throw error;
+    const body = versioned?.body ?? webAssets.file(asset.file);
+    if (!body) {
+      response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      response.end("Not found\n");
+      return;
     }
+    response.writeHead(200, {
+      "content-type": asset.contentType,
+      "content-length": body.byteLength,
+      "cache-control": versioned
+        ? "public, max-age=31536000, immutable"
+        : pathname === "/sw.js"
+          ? "no-cache"
+          : "no-cache, must-revalidate",
+      "content-security-policy": [
+        "default-src 'self'",
+        "connect-src 'self' ws: wss:",
+        "img-src 'self' data:",
+        "style-src 'self'",
+        "script-src 'self'",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "frame-ancestors 'none'",
+      ].join("; "),
+      "x-content-type-options": "nosniff",
+      ...(pathname === "/sw.js" ? { "service-worker-allowed": "/" } : {}),
+    });
+    response.end(request.method === "HEAD" ? undefined : body);
   }
 
-  listen(port: number): Promise<RemoteServerAddress> {
+  async listen(port: number): Promise<RemoteServerAddress> {
     if (this.#listening) {
-      return Promise.reject(new Error("WebSocket 服务已经启动。"));
+      throw new Error("WebSocket 服务已经启动。");
     }
-    return new Promise((resolve, reject) => {
+    // 前端在开始监听前一次读定：不完整的一套会让启动失败，而不是对外提供。
+    this.#webAssets ??= await WebAssets.load(
+      this.#webRoot,
+      new Set(Object.values(STATIC_FILES).map((asset) => asset.file)),
+      Object.values(STATIC_FILES)
+        .map((asset) => asset.file)
+        .filter((file) => /\.(js|css)$/u.test(file) && file !== "sw.js"),
+    );
+    return await new Promise((resolve, reject) => {
       const onError = (error: Error) => {
         this.#http.off("listening", onListening);
         reject(error);

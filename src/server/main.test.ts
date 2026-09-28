@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
@@ -13,7 +13,19 @@ import { TrashStore } from "../sessions/trash-store.ts";
 import { MAX_TIMER_DELAY_MS } from "../workers/manager.ts";
 import { readOfflineGraceMs } from "./main.ts";
 
-const MAIN_URL = pathToFileURL(path.resolve(import.meta.dirname, "main.ts")).href;
+// 子进程从源码副本启动：服务开始监听时会发布并回收 public/.web-assets，不能动仓库里
+// 那份（部署时它就是运行中服务的目录）。
+const REPO = path.resolve(import.meta.dirname, "../..");
+const APP_COPY = await mkdtemp(path.join(tmpdir(), "codex-remote-main-app-"));
+after(() => rm(APP_COPY, { recursive: true, force: true }));
+for (const entry of ["package.json", "src", "public"]) {
+  await cp(path.join(REPO, entry), path.join(APP_COPY, entry), {
+    recursive: true,
+    filter: (source) => path.basename(source) !== ".web-assets",
+  });
+}
+await symlink(path.join(REPO, "node_modules"), path.join(APP_COPY, "node_modules"), "dir");
+const MAIN_URL = pathToFileURL(path.join(APP_COPY, "src/server/main.ts")).href;
 
 /**
  * 假的 `codex app-server --stdio`：`hang` 从不回 initialize，`ready` 只回 initialize、

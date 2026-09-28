@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer as createHttpServer } from "node:http";
 import { connect, type Socket } from "node:net";
-import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, readdir, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
 import WebSocket from "ws";
 
@@ -22,6 +23,14 @@ import { ProjectTaskLocks } from "./project-locks.ts";
 import type { SessionWorkerManager } from "../workers/manager.ts";
 import { SharedUploadClient } from "../shared-upload/client.ts";
 import type { PublicAttachment } from "../shared-upload/types.ts";
+
+// 服务启动时会发布并回收前端快照；测试用 public/ 的临时副本，不动部署目录里的 .web-assets。
+const WEB_ROOT = await mkdtemp(path.join(tmpdir(), "codex-http-public-"));
+after(() => rm(WEB_ROOT, { recursive: true, force: true }));
+await cp(fileURLToPath(new URL("../../public/", import.meta.url)), WEB_ROOT, {
+  recursive: true,
+  filter: (source) => path.basename(source) !== ".web-assets",
+});
 
 class EmptyTransport implements AppServerTransport, ApprovalTransport {
   readonly #notifications = new Set<AppServerMessageListener>();
@@ -45,6 +54,7 @@ test("serves health and requires a cookie before the WebSocket upgrade", async (
   const transport = new EmptyTransport();
   const services = emptyServices(transport);
   const server = new RemoteWebSocketServer({
+    webRoot: WEB_ROOT,
     token: "test-secret",
     services,
   });
@@ -137,6 +147,7 @@ test("streams same-origin uploads through the local attachment adapter", async (
   const transport = new EmptyTransport();
   const received: Buffer[] = [];
   const server = new RemoteWebSocketServer({
+    webRoot: WEB_ROOT,
     token: "test-secret",
     services: emptyServices(transport),
     uploads: {
@@ -225,6 +236,7 @@ async function stalledUploadService(t: test.TestContext) {
 test("closing the server cancels an upload whose downstream never responds", async (t) => {
   const downstream = await stalledUploadService(t);
   const server = new RemoteWebSocketServer({
+    webRoot: WEB_ROOT,
     token: "test-secret",
     services: emptyServices(new EmptyTransport()),
     uploads: downstream.client,
@@ -256,6 +268,7 @@ for (const [label, leave] of [
   test(`a browser that ${label} after sending the body cancels the downstream upload`, async (t) => {
     const downstream = await stalledUploadService(t);
     const server = new RemoteWebSocketServer({
+      webRoot: WEB_ROOT,
       token: "test-secret",
       services: emptyServices(new EmptyTransport()),
       uploads: downstream.client,
@@ -287,7 +300,7 @@ for (const [label, leave] of [
 test("HTTP login survives restarts and token rotation revokes its cookie", async (t) => {
   const transport = new EmptyTransport();
   const services = emptyServices(transport);
-  const first = new RemoteWebSocketServer({ token: "test-secret", services });
+  const first = new RemoteWebSocketServer({ token: "test-secret", services, webRoot: WEB_ROOT });
   // close() 可以重复调用；注册清理是为了断言失败时服务器不会留着不放，
   // 否则测试进程不会退出，一次断言失败会表现成整套测试挂住。
   t.after(() => first.close());
@@ -302,7 +315,7 @@ test("HTTP login survives restarts and token rotation revokes its cookie", async
   assert.match(session.headers.get("set-cookie") ?? "", /Max-Age=34560000/u);
   await first.close();
 
-  const restarted = new RemoteWebSocketServer({ token: "test-secret", services });
+  const restarted = new RemoteWebSocketServer({ token: "test-secret", services, webRoot: WEB_ROOT });
   t.after(() => restarted.close());
   const restartedAddress = await restarted.listen(0);
   assert.equal((await fetch(
@@ -311,7 +324,7 @@ test("HTTP login survives restarts and token rotation revokes its cookie", async
   )).status, 200);
   await restarted.close();
 
-  const rotated = new RemoteWebSocketServer({ token: "rotated-secret", services });
+  const rotated = new RemoteWebSocketServer({ token: "rotated-secret", services, webRoot: WEB_ROOT });
   t.after(() => rotated.close());
   const rotatedAddress = await rotated.listen(0);
   assert.equal((await fetch(
@@ -350,6 +363,7 @@ test("raw serves only caged Markdown and images with sandbox headers", async (t)
 
   const transport = new EmptyTransport();
   const server = new RemoteWebSocketServer({
+    webRoot: WEB_ROOT,
     token: "test-secret",
     services: emptyServices(transport),
     fileRoots: [await realpath(firstRoot), await realpath(secondRoot)],
@@ -538,6 +552,7 @@ function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
 test("only accepts WebSocket upgrades from its own page", async () => {
   const transport = new EmptyTransport();
   const server = new RemoteWebSocketServer({
+    webRoot: WEB_ROOT,
     token: "test-secret",
     services: emptyServices(transport),
     allowedOrigins: ["https://vps.example.ts.net"],
@@ -583,6 +598,7 @@ test("only accepts WebSocket upgrades from its own page", async () => {
 test("survives an oversized frame instead of taking the process down", async () => {
   const transport = new EmptyTransport();
   const server = new RemoteWebSocketServer({
+    webRoot: WEB_ROOT,
     token: "test-secret",
     services: emptyServices(transport),
   });
@@ -632,46 +648,54 @@ async function loginCookie(
   return cookie;
 }
 
-async function withWebRoot(
-  t: test.TestContext,
-  files: Record<string, string>,
-): Promise<{ base: string; webRoot: string }> {
+async function writeWebRoot(t: test.TestContext, files: Record<string, string>): Promise<string> {
   const webRoot = await mkdtemp(path.join(tmpdir(), "codex-pwa-http-"));
   t.after(() => rm(webRoot, { recursive: true, force: true }));
   for (const [name, body] of Object.entries(files)) {
     await writeFile(path.join(webRoot, name), body);
   }
-  const transport = new EmptyTransport();
+  return webRoot;
+}
+
+async function startWeb(
+  t: test.TestContext,
+  webRoot: string,
+): Promise<{ base: string; server: RemoteWebSocketServer }> {
   const server = new RemoteWebSocketServer({
     token: "test-secret",
-    services: emptyServices(transport),
+    services: emptyServices(new EmptyTransport()),
     webRoot,
   });
   const address = await server.listen(0);
   t.after(() => server.close());
-  return { webRoot, base: `http://${address.host}:${address.port}` };
+  return { server, base: `http://${address.host}:${address.port}` };
 }
 
-test("refresh serves a new resource snapshot while old module URLs survive changes and restarts", async (t) => {
-  const files = {
-    "index.html": '<head><script type="module" src="/app.js"></script><link href="/styles.css" rel="stylesheet"></head>mark-A',
-    "view.html": '<head><script type="module" src="/viewer.js"></script><link href="/viewer.css" rel="stylesheet"></head>',
-    "app.js": 'import "./markdown.js"; window.__PWA_MARK__ = "A";',
-    "markdown.js": "// dependency-A",
-    "styles.css": "body { color: red }",
-    "viewer.js": 'import "./markdown.js";',
-    "viewer.css": ".file-viewer {}",
-    "boot.js": "// boot",
-    "slash-menu.js": "// menu",
-    "display-timezone.js": "// tz",
-    "sw.js": "// sw",
-  };
-  const { webRoot, base } = await withWebRoot(t, files);
+const WEB_FILES = {
+  "index.html": '<head><script type="module" src="/app.js"></script><link href="/styles.css" rel="stylesheet"></head>mark-A',
+  "view.html": '<head><script type="module" src="/viewer.js"></script><link href="/viewer.css" rel="stylesheet"></head>',
+  "app.js": 'import "./markdown.js"; window.__PWA_MARK__ = "A";',
+  "markdown.js": "// dependency-A",
+  "styles.css": "body { color: red }",
+  "viewer.js": 'import "./markdown.js";',
+  "viewer.css": ".file-viewer {}",
+  "boot.js": "// boot",
+  "slash-menu.js": "// menu",
+  "display-timezone.js": "// tz",
+  "sw.js": "// sw-A",
+};
+
+const scriptUrl = (html: string) => /src="([^"]+)"/u.exec(html)![1]!;
+
+test("a running server keeps its startup frontend until restart; old module URLs survive the restart", async (t) => {
+  const webRoot = await writeWebRoot(t, WEB_FILES);
+  const running = await startWeb(t, webRoot);
+  const base = running.base;
   const first = await fetch(base);
   assert.match(first.headers.get("cache-control")!, /no-cache/u);
   const firstHtml = await first.text();
   assert.match(firstHtml, /mark-A/u);
-  const oldApp = /src="([^"]+)"/u.exec(firstHtml)![1]!;
+  const oldApp = scriptUrl(firstHtml);
   assert.match(oldApp, /^\/assets\/[a-f0-9]{64}\/app.js$/u);
   assert.match(firstHtml, /<meta name="codex-remote-assets"/u);
   const oldModule = new URL("./markdown.js", `${base}${oldApp}`).pathname;
@@ -679,55 +703,87 @@ test("refresh serves a new resource snapshot while old module URLs survive chang
   assert.match(asset.headers.get("cache-control")!, /immutable/u);
   assert.match(await asset.text(), /__PWA_MARK__ = "A"/u);
   assert.equal(await (await fetch(`${base}${oldModule}`)).text(), "// dependency-A");
-
   const view = await (await fetch(`${base}/view`)).text();
   assert.match(view, /\/assets\/[a-f0-9]{64}\/viewer\.js/u);
 
+  // 相当于在运行中的工作树里 git pull：旧进程继续提供启动时的一整套。
   await writeFile(path.join(webRoot, "markdown.js"), "// dependency-B");
-  await writeFile(path.join(webRoot, "index.html"), files["index.html"]!.replace("mark-A", "mark-B"));
-  const secondHtml = await (await fetch(base)).text();
-  assert.match(secondHtml, /mark-B/u);
-  const newApp = /src="([^"]+)"/u.exec(secondHtml)![1]!;
-  assert.notEqual(newApp, oldApp);
-  const newModule = new URL("./markdown.js", `${base}${newApp}`).pathname;
-  assert.equal(await (await fetch(`${base}${newModule}`)).text(), "// dependency-B");
+  await writeFile(path.join(webRoot, "index.html"), WEB_FILES["index.html"].replace("mark-A", "mark-B"));
+  await writeFile(path.join(webRoot, "sw.js"), "// sw-B");
+  const duringUpdate = await (await fetch(base)).text();
+  assert.equal(duringUpdate, firstHtml);
   assert.equal(await (await fetch(`${base}${oldModule}`)).text(), "// dependency-A");
+  assert.equal(await (await fetch(`${base}/sw.js`)).text(), "// sw-A");
 
-  const head = await fetch(`${base}${newApp}`, { method: "HEAD" });
+  await running.server.close();
+  const restarted = (await startWeb(t, webRoot)).base;
+  const secondHtml = await (await fetch(restarted)).text();
+  assert.match(secondHtml, /mark-B/u);
+  const newApp = scriptUrl(secondHtml);
+  assert.notEqual(newApp, oldApp);
+  const newModule = new URL("./markdown.js", `${restarted}${newApp}`).pathname;
+  assert.equal(await (await fetch(`${restarted}${newModule}`)).text(), "// dependency-B");
+  assert.equal(await (await fetch(`${restarted}${oldModule}`)).text(), "// dependency-A");
+  assert.equal(await (await fetch(`${restarted}/sw.js`)).text(), "// sw-B");
+
+  const head = await fetch(`${restarted}${newApp}`, { method: "HEAD" });
   assert.equal(head.status, 200);
   assert.equal(await head.text(), "");
-  assert.equal((await fetch(`${base}${newApp.replace("app.js", "config.json")}`)).status, 404);
-  assert.equal((await fetch(`${base}/assets/${"0".repeat(64)}/app.js`)).status, 404);
-  assert.equal((await fetch(`${base}/assets/${"0".repeat(64)}/%2e%2e%2findex.html`)).status, 404);
-  assert.equal((await fetch(`${base}/boot.js`)).status, 200);
+  assert.equal((await fetch(`${restarted}${newApp.replace("app.js", "config.json")}`)).status, 404);
+  assert.equal((await fetch(`${restarted}/assets/${"0".repeat(64)}/app.js`)).status, 404);
+  assert.equal((await fetch(`${restarted}/assets/${"0".repeat(64)}/%2e%2e%2findex.html`)).status, 404);
+  assert.equal((await fetch(`${restarted}/boot.js`)).status, 200);
+  assert.equal((await fetch(`${restarted}/icon.svg`)).status, 404);
 });
 
-test("storage failures for versioned assets are not disguised as missing files", async (t) => {
-  const { webRoot, base } = await withWebRoot(t, {
-    "index.html": '<head><script src="/app.js"></script></head>',
-    "app.js": "// app",
-    "markdown.js": "// md",
-    "styles.css": "body {}",
-    "viewer.js": "// viewer",
-    "viewer.css": ".file-viewer {}",
-    "boot.js": "// boot",
-    "slash-menu.js": "// menu",
-    "display-timezone.js": "// tz",
-  });
-  const html = await (await fetch(base)).text();
-  const appUrl = /src="([^"]+)"/u.exec(html)![1]!;
+test("repeated releases keep only the current and two previous snapshots on disk", async (t) => {
+  const webRoot = await writeWebRoot(t, WEB_FILES);
+  const apps: string[] = [];
+  for (let release = 0; release < 4; release += 1) {
+    await writeFile(path.join(webRoot, "boot.js"), `// boot ${release}`);
+    const { base, server } = await startWeb(t, webRoot);
+    const app = scriptUrl(await (await fetch(base)).text());
+    apps.push(app);
+    await server.close();
+    // 发布先后由目录时间决定；这里拉开间隔，不依赖文件系统时间戳精度。
+    const at = new Date(Date.now() - (10 - release) * 60_000);
+    await utimes(path.join(webRoot, ".web-assets", app.split("/")[2]!), at, at);
+  }
+  await writeFile(path.join(webRoot, "boot.js"), "// boot current");
+  const { base } = await startWeb(t, webRoot);
+  const current = scriptUrl(await (await fetch(base)).text());
+  const kept = (await readdir(path.join(webRoot, ".web-assets"))).filter((name) => !name.startsWith("."));
+  assert.deepEqual(kept.sort(), [current, apps[2]!, apps[3]!].map((url) => url.split("/")[2]!).sort());
+  assert.equal((await fetch(`${base}${apps[0]}`)).status, 404);
+  assert.equal((await fetch(`${base}${apps[1]}`)).status, 404);
+  assert.equal((await fetch(`${base}${apps[2]}`)).status, 200);
+  assert.equal((await fetch(`${base}${apps[3]}`)).status, 200);
+});
+
+test("storage failures for older versioned assets are not disguised as missing files", async (t) => {
+  const webRoot = await writeWebRoot(t, WEB_FILES);
+  const previous = await startWeb(t, webRoot);
+  const appUrl = scriptUrl(await (await fetch(previous.base)).text());
+  await previous.server.close();
+  await writeFile(path.join(webRoot, "boot.js"), "// boot next");
+  const { base } = await startWeb(t, webRoot);
   const snapshotFile = path.join(webRoot, ".web-assets", appUrl.split("/")[2]!, "app.js");
   await chmod(snapshotFile, 0);
   t.after(() => chmod(snapshotFile, 0o644).catch(() => {}));
   const denied = await fetch(`${base}${appUrl}`);
   assert.equal(denied.status, 500);
-  assert.notEqual(denied.status, 404);
 });
 
-test("a page that references a missing script is not published as a complete snapshot", async (t) => {
-  const { base } = await withWebRoot(t, {
+test("an incomplete frontend fails startup instead of being served or published", async (t) => {
+  const webRoot = await writeWebRoot(t, {
     "index.html": '<head><script src="/app.js"></script></head>',
   });
-  const response = await fetch(base);
-  assert.equal(response.status, 500);
+  const server = new RemoteWebSocketServer({
+    token: "test-secret",
+    services: emptyServices(new EmptyTransport()),
+    webRoot,
+  });
+  t.after(() => server.close());
+  await assert.rejects(server.listen(0), /Missing public asset: app\.js/u);
+  await assert.rejects(readdir(path.join(webRoot, ".web-assets")), { code: "ENOENT" });
 });

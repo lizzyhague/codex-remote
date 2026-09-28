@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import vm from "node:vm";
 
 const source = await readFile(new URL("./sw.js", import.meta.url), "utf8");
@@ -8,7 +9,7 @@ const origin = "https://example.test";
 const version = "a".repeat(64);
 const asset = `/assets/${version}/app.js`;
 
-function harness(network) {
+function harness(network, hooks = {}) {
   const handlers = {};
   const stores = new Map();
   const key = (request) => new URL(typeof request === "string" ? request : request.url, origin).href;
@@ -21,6 +22,11 @@ function harness(network) {
       return {
         async match(request) { return entries.get(key(request))?.clone(); },
         async put(request, response) { entries.set(key(request), response.clone()); },
+        async keys() {
+          await hooks.beforeKeys?.();
+          return [...entries.keys()].map((url) => new Request(url));
+        },
+        async delete(request) { return entries.delete(key(request)); },
       };
     },
   };
@@ -31,6 +37,10 @@ function harness(network) {
   return {
     caches,
     handlers,
+    async cachedPaths() {
+      const entries = stores.get("codex-remote-shell-v43") ?? new Map();
+      return [...entries.keys()].map((url) => new URL(url).pathname).sort();
+    },
     async dispatch(request) {
       const pending = [];
       let response;
@@ -88,6 +98,86 @@ test("reload returns current HTML; an incomplete download preserves the complete
   assert.match(await (await worker.dispatch(navigation())).text(), /first$/u);
   assert.equal((await worker.dispatch(navigation("/icon.svg"))).type, "error");
   assert.equal(await (await worker.dispatch(new Request(`${origin}${asset}`))).text(), "script");
+});
+
+const release = (letter) => {
+  const hash = letter.repeat(64);
+  const assets = [`/assets/${hash}/app.js`, `/assets/${hash}/styles.css`];
+  return { assets, html: `<head><meta name="codex-remote-assets" content="${assets.join(",")}"></head>release-${letter}` };
+};
+
+test("each complete release keeps only its own and the replaced offline page's resources", async () => {
+  let current = release("a");
+  let offline = false;
+  const worker = harness(async (request) => {
+    if (offline) throw new TypeError("offline");
+    return new Response(request.mode === "navigate" ? current.html : "resource");
+  });
+  const history = ["a", "b", "c", "d"].map(release);
+  for (const next of history) {
+    current = next;
+    assert.match(await (await worker.dispatch(navigation())).text(), new RegExp(`release-${next.html.at(-1)}$`, "u"));
+    await worker.dispatch(new Request(`${origin}/icon.svg`));
+  }
+  assert.deepEqual(
+    await worker.cachedPaths(),
+    ["/", "/icon.svg", ...history[2].assets, ...history[3].assets].sort(),
+  );
+  offline = true;
+  assert.match(await (await worker.dispatch(navigation())).text(), /release-d$/u);
+  for (const asset of history[3].assets) {
+    assert.equal(await (await worker.dispatch(new Request(`${origin}${asset}`))).text(), "resource");
+  }
+});
+
+test("an incomplete release removes nothing; the next complete one also clears its partial download", async () => {
+  let current = release("a");
+  let missing = null;
+  const worker = harness(async (request) => {
+    if (request.mode === "navigate") return new Response(current.html);
+    return new Response("resource", { status: new URL(request.url).pathname === missing ? 404 : 200 });
+  });
+  const [a, b, c, d] = ["a", "b", "c", "d"].map(release);
+  for (const next of [a, b]) {
+    current = next;
+    await worker.dispatch(navigation());
+  }
+  current = c;
+  missing = c.assets[1];
+  await worker.dispatch(navigation());
+  // 不完整的 c 没有替换离线页，a、b 两套都还在，c 已下载的部分暂留。
+  assert.deepEqual(await worker.cachedPaths(), ["/", ...a.assets, ...b.assets, c.assets[0]].sort());
+  current = d;
+  missing = null;
+  await worker.dispatch(navigation());
+  assert.deepEqual(await worker.cachedPaths(), ["/", ...b.assets, ...d.assets].sort());
+});
+
+test("overlapping offline page updates do not delete resources the other update just committed", async () => {
+  let current = release("a");
+  let gate = null;
+  const worker = harness(async (request) => {
+    if (request.mode === "navigate") return new Response(current.html);
+    return new Response("resource");
+  }, {
+    // 让第一次清理停在列举缓存处，第二次导航在这期间完成。
+    async beforeKeys() { if (gate) await gate.promise; },
+  });
+  const [b, c] = ["b", "c"].map(release);
+  await worker.dispatch(navigation());
+  let open;
+  gate = { promise: new Promise((resolve) => { open = resolve; }) };
+  current = b;
+  const first = worker.dispatch(navigation());
+  await delay(5);
+  current = c;
+  const second = worker.dispatch(navigation());
+  await delay(5);
+  gate = null;
+  open();
+  await Promise.all([first, second]);
+  assert.match(await (await worker.caches.open("codex-remote-shell-v43")).match("/").then((r) => r.text()), /release-c$/u);
+  assert.deepEqual(await worker.cachedPaths(), ["/", ...b.assets, ...c.assets].sort());
 });
 
 test("activation cleans only Codex Remote shell caches and private requests are never intercepted", async () => {
