@@ -184,6 +184,9 @@ async function serve(
 
 async function cleanExpiredTrash(sessions: CodexSessionService): Promise<void> {
   const result = await sessions.purgeExpired();
+  if (result.settled > 0) {
+    console.log(`回收站续做完成了 ${result.settled} 个中断的移入或恢复。`);
+  }
   if (result.deleted > 0) {
     console.log(`回收站自动清除了 ${result.deleted} 个过期会话。`);
   }

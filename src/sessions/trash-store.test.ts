@@ -70,6 +70,26 @@ test("loads legacy entries without a deletion state as ordinary trash", async (c
   assert.equal(store.get("thread-legacy")?.state, "trashed");
 });
 
+test("reloads transition states and rejects them for archived-origin entries", async (context) => {
+  const filePath = await fixture(context);
+  const store = await TrashStore.open(filePath);
+  await store.put({ ...entry("thread-in"), state: "trashing" });
+  await store.put({ ...entry("thread-out"), state: "restoring" });
+  assert.deepEqual(
+    (await TrashStore.open(filePath)).list().map((item) => [item.threadId, item.state]),
+    [["thread-in", "trashing"], ["thread-out", "restoring"]],
+  );
+
+  // archived 来源进出回收站没有 Codex 副作用，出现过渡阶段说明文件被写坏了。
+  for (const state of ["trashing", "restoring", "unknown"]) {
+    await writeFile(filePath, JSON.stringify({
+      version: 1,
+      entries: [{ ...entry(), origin: state === "unknown" ? "active" : "archived", state }],
+    }));
+    await assert.rejects(() => TrashStore.open(filePath), /格式不正确/u);
+  }
+});
+
 test("uses an explicit state file before the platform state directory", () => {
   assert.equal(resolveTrashStatePath({
     CODEX_REMOTE_STATE_FILE: "/var/lib/codex-remote/trash.json",

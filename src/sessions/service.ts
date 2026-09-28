@@ -20,8 +20,10 @@ import type { ThreadSetNameResponse } from "../generated/v2/ThreadSetNameRespons
 import type { ThreadUnarchiveParams } from "../generated/v2/ThreadUnarchiveParams.ts";
 import type { ThreadUnarchiveResponse } from "../generated/v2/ThreadUnarchiveResponse.ts";
 import type { ProjectCatalog } from "../projects/catalog.ts";
+import { AppServerRpcError } from "../app-server/client.ts";
 import {
   TrashStore,
+  type TrashEntry,
   type TrashOrigin,
 } from "./trash-store.ts";
 import { MarkStore } from "./mark-store.ts";
@@ -99,6 +101,8 @@ export type SessionMutationResult = {
 };
 
 export type TrashCleanupResult = {
+  /** 推进到终态的中断移入 / 恢复。 */
+  settled: number;
   deleted: number;
   failed: Array<{ sessionId: string; message: string }>;
 };
@@ -386,31 +390,27 @@ export class CodexSessionService {
     origin: TrashOrigin,
   ): Promise<SessionMutationResult> {
     return this.#mutateMany(projectId, threadIds, "trash", async (projectPath, threadId) => {
-      if (this.#trash.has(threadId)) return;
+      const existing = this.#trash.get(threadId);
+      if (existing?.state === "trashed" || existing?.state === "deleting") return;
       const thread = await this.#readOwnedThread(projectPath, threadId);
       assertThreadCanBeManaged(thread);
-      let archivedHere = false;
-      if (origin === "active") {
-        const params: ThreadArchiveParams = { threadId };
-        await this.#transport.request<ThreadArchiveResponse>("thread/archive", params);
-        archivedHere = true;
-      }
-      try {
+      if ((existing?.origin ?? origin) === "archived") {
         await this.#trash.put({
           threadId,
           projectId,
           deletedAt: this.#now(),
-          origin,
+          origin: "archived",
           state: "trashed",
         });
-      } catch (error) {
-        if (archivedHere) {
-          const params: ThreadUnarchiveParams = { threadId };
-          await this.#transport.request<ThreadUnarchiveResponse>("thread/unarchive", params)
-            .catch(() => {});
-        }
-        throw error;
+        return;
       }
+      // Codex 与这份名单是两个权威：先落下 `trashing` 凭据再归档，任何一步失败或
+      // 退出，条目都还在，之后由这里或定期清理向前推进，不回滚。
+      const pending: TrashEntry = existing?.state === "trashing"
+        ? existing
+        : { threadId, projectId, deletedAt: this.#now(), origin: "active", state: "trashing" };
+      if (existing?.state !== "trashing") await this.#trash.put(pending);
+      await this.#finishTrashing(pending);
     });
   }
 
@@ -425,22 +425,15 @@ export class CodexSessionService {
       }
       const thread = await this.#readOwnedThread(projectPath, threadId);
       assertThreadCanBeManaged(thread);
-      let unarchivedHere = false;
-      if (entry.origin === "active") {
-        const params: ThreadUnarchiveParams = { threadId };
-        await this.#transport.request<ThreadUnarchiveResponse>("thread/unarchive", params);
-        unarchivedHere = true;
-      }
-      try {
+      if (entry.origin === "archived") {
         await this.#trash.remove(threadId);
-      } catch (error) {
-        if (unarchivedHere) {
-          const params: ThreadArchiveParams = { threadId };
-          await this.#transport.request<ThreadArchiveResponse>("thread/archive", params)
-            .catch(() => {});
-        }
-        throw error;
+        return;
       }
+      const pending: TrashEntry = entry.state === "restoring"
+        ? entry
+        : { ...entry, state: "restoring" };
+      if (entry.state !== "restoring") await this.#trash.put(pending);
+      await this.#finishRestoring(pending);
     });
   }
 
@@ -454,13 +447,37 @@ export class CodexSessionService {
     });
   }
 
+  /**
+   * 启动和每日清理的入口：先把上次没走完的移入 / 恢复推进到终态，再永久删除
+   * `deleting` 条目和过期的回收站条目。过渡条目推进失败时留待下次，不会被当作过期删除。
+   */
   purgeExpired(): Promise<TrashCleanupResult> {
     return this.#serializeMutation(async () => {
+      const result: TrashCleanupResult = { settled: 0, deleted: 0, failed: [] };
+      for (const entry of this.#trash.list()) {
+        if (entry.state !== "trashing" && entry.state !== "restoring") continue;
+        try {
+          if (entry.state === "trashing") await this.#finishTrashing(entry);
+          else await this.#finishRestoring(entry);
+          result.settled += 1;
+          this.#emitChange({
+            projectId: entry.projectId,
+            sessionIds: [entry.threadId],
+            change: entry.state === "trashing" ? "trash" : "restore",
+          });
+        } catch (error) {
+          result.failed.push({
+            sessionId: entry.threadId,
+            message: describeFailure(error),
+          });
+        }
+      }
+
       const threshold = this.#now() - TRASH_RETENTION_SECONDS;
       const expired = this.#trash.list().filter((entry) =>
-        entry.state === "deleting" || entry.deletedAt <= threshold
+        entry.state === "deleting" ||
+        (entry.state === "trashed" && entry.deletedAt <= threshold)
       );
-      const result: TrashCleanupResult = { deleted: 0, failed: [] };
       for (const entry of expired) {
         try {
           await this.#deletions.delete(entry);
@@ -481,6 +498,46 @@ export class CodexSessionService {
     });
   }
 
+  /**
+   * `trashing` → `trashed`。会话已经不在 Codex 活跃列表时，`thread/archive` 返回该 thread
+   * 的精确 `no rollout found`，视为此前已归档成功。
+   */
+  async #finishTrashing(entry: TrashEntry): Promise<void> {
+    const params: ThreadArchiveParams = { threadId: entry.threadId };
+    await this.#requestUnlessAlreadyDone(
+      "thread/archive",
+      params,
+      `no rollout found for thread id ${entry.threadId}`,
+    );
+    await this.#trash.put({ ...entry, state: "trashed" });
+  }
+
+  /**
+   * `restoring` → 移除条目。会话已经不在 Codex 归档里时，`thread/unarchive` 返回该 thread
+   * 的精确 `no archived rollout found`，视为此前已恢复成功。
+   */
+  async #finishRestoring(entry: TrashEntry): Promise<void> {
+    const params: ThreadUnarchiveParams = { threadId: entry.threadId };
+    await this.#requestUnlessAlreadyDone(
+      "thread/unarchive",
+      params,
+      `no archived rollout found for thread id ${entry.threadId}`,
+    );
+    await this.#trash.remove(entry.threadId);
+  }
+
+  async #requestUnlessAlreadyDone(
+    method: string,
+    params: unknown,
+    alreadyDoneMessage: string,
+  ): Promise<void> {
+    try {
+      await this.#transport.request(method, params);
+    } catch (error) {
+      if (!isInvalidRequest(error, alreadyDoneMessage)) throw error;
+    }
+  }
+
   async #listTrash(
     projectId: string,
     projectPath: string,
@@ -489,8 +546,10 @@ export class CodexSessionService {
   ): Promise<SessionPage> {
     const offset = parseTrashCursor(cursor);
     const query = searchTerm.toLocaleLowerCase();
+    // 没走完的移入 / 恢复也列在这里：它们不出现在活跃和归档列表，
+    // 回收站是唯一能看到并再次恢复它们的地方。
     const entries = this.#trash.list(projectId)
-      .filter((entry) => entry.state === "trashed")
+      .filter((entry) => entry.state !== "deleting")
       .sort((left, right) => right.deletedAt - left.deletedAt);
     const sessions: SessionSummary[] = [];
     let index = offset;
@@ -533,10 +592,10 @@ export class CodexSessionService {
     if (!this.#marks) return [];
     const query = searchTerm.toLocaleLowerCase();
     const entries = this.#marks.list();
-    const archivedIds = await this.#archivedThreadIds(entries);
+    const notActiveIds = await this.#marksNotConfirmedActive(entries);
     const summaries: SessionSummary[] = [];
     for (const entry of entries) {
-      if (this.#trash.has(entry.threadId) || archivedIds.has(entry.threadId)) continue;
+      if (this.#trash.has(entry.threadId) || notActiveIds.has(entry.threadId)) continue;
       try {
         const params: ThreadReadParams = { threadId: entry.threadId, includeTurns: false };
         const response = await this.#transport.request<ThreadReadResponse>("thread/read", params);
@@ -561,8 +620,17 @@ export class CodexSessionService {
     return summaries;
   }
 
-  async #archivedThreadIds(entries: Array<{ threadId: string; projectId: string }>): Promise<Set<string>> {
-    const archived = new Set<string>();
+  /**
+   * 钉住的会话里哪些不能放进「最近」：已归档的，以及在翻页上限内无法确认状态的。
+   *
+   * 先在归档列表里找；归档列表翻完仍没找到才算确认 active。归档列表超过上限时，
+   * 剩下的再到活跃列表里有界核验，只有在那里找到的才算 active，其余一律当未知排除，
+   * 不因为扫描到了上限就把它们当成 active。
+   */
+  async #marksNotConfirmedActive(
+    entries: Array<{ threadId: string; projectId: string }>,
+  ): Promise<Set<string>> {
+    const excluded = new Set<string>();
     const byProject = new Map<string, string[]>();
     for (const entry of entries) {
       const ids = byProject.get(entry.projectId) ?? [];
@@ -576,30 +644,45 @@ export class CodexSessionService {
       } catch {
         continue;
       }
-      const wanted = new Set(threadIds);
-      const params: ThreadListParams = {
-        cursor: null,
-        limit: PAGE_SIZE,
-        sortKey: "recency_at",
-        sortDirection: "desc",
-        sourceKinds: [...VISIBLE_SOURCE_KINDS],
-        cwd: projectPath,
-        archived: true,
-      };
-      for (let page = 0; page < MAX_LIST_PAGES_PER_REQUEST && wanted.size > 0; page += 1) {
-        const response = await this.#transport.request<ThreadListResponse>("thread/list", params);
-        assertThreadListResponse(response);
-        for (const thread of response.data) {
-          if (wanted.has(thread.id)) {
-            archived.add(thread.id);
-            wanted.delete(thread.id);
-          }
-        }
-        if (response.nextCursor === null) break;
-        params.cursor = response.nextCursor;
-      }
+      const unresolved = new Set(threadIds);
+      const archived = await this.#findInThreadList(projectPath, true, unresolved);
+      for (const threadId of archived.found) excluded.add(threadId);
+      if (unresolved.size === 0 || archived.exhausted) continue;
+      await this.#findInThreadList(projectPath, false, unresolved);
+      for (const threadId of unresolved) excluded.add(threadId);
     }
-    return archived;
+    return excluded;
+  }
+
+  /**
+   * 在项目的归档或活跃列表里找 `wanted` 中的 thread，最多翻 `MAX_LIST_PAGES_PER_REQUEST` 页。
+   * 找到的会从 `wanted` 删去；`exhausted` 表示列表已经翻完，没找到的确定不在这个列表里。
+   */
+  async #findInThreadList(
+    projectPath: string,
+    archived: boolean,
+    wanted: Set<string>,
+  ): Promise<{ found: string[]; exhausted: boolean }> {
+    const found: string[] = [];
+    const params: ThreadListParams = {
+      cursor: null,
+      limit: PAGE_SIZE,
+      sortKey: "recency_at",
+      sortDirection: "desc",
+      sourceKinds: [...VISIBLE_SOURCE_KINDS],
+      cwd: projectPath,
+      archived,
+    };
+    for (let page = 0; page < MAX_LIST_PAGES_PER_REQUEST && wanted.size > 0; page += 1) {
+      const response = await this.#transport.request<ThreadListResponse>("thread/list", params);
+      assertThreadListResponse(response);
+      for (const thread of response.data) {
+        if (wanted.delete(thread.id)) found.push(thread.id);
+      }
+      if (response.nextCursor === null) return { found, exhausted: true };
+      params.cursor = response.nextCursor;
+    }
+    return { found, exhausted: false };
   }
 
   async #markedSummary(
@@ -845,6 +928,12 @@ function parseTrashCursor(cursor: string | null): number {
  */
 function describeFailure(error: unknown): string {
   return error instanceof Error ? error.message : "操作失败。";
+}
+
+function isInvalidRequest(error: unknown, message: string): boolean {
+  return error instanceof AppServerRpcError &&
+    error.code === -32600 &&
+    error.message === message;
 }
 
 function findActiveTurnId(thread: Thread): string | null {

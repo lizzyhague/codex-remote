@@ -80,7 +80,7 @@ CSP。
 
 | 变量或路径 | 内容 | 敏感度 |
 | --- | --- | --- |
-| `CODEX_REMOTE_STATE_FILE` | 回收站登记：thread ID、项目 ID、删除时间、恢复目标、永久删除阶段 | 低 |
+| `CODEX_REMOTE_STATE_FILE` | 回收站登记：thread ID、项目 ID、删除时间、恢复目标、移入 / 恢复 / 永久删除阶段 | 低 |
 | `CODEX_REMOTE_MARKS_FILE` | 钉住会话记录；未设置时与回收站同目录的 `marks.json` | 低 |
 | `CODEX_REMOTE_SETTINGS_FILE` | 应用设置 JSON：当前是附加 Developer 指令；未设置时与回收站同目录的 `settings.json` | 中，按用户指令对待 |
 | `CODEX_REMOTE_WORK_STATE_FILE` | Worker SQLite：已接受消息、任务状态、脱敏事件、工具输出 | 高，按对话数据对待 |
@@ -89,6 +89,8 @@ CSP。
 表中的 JSON 文件和附件索引写入后都会同步文件和所在目录，同步成功才算保存完成；
 状态目录要放在支持目录 `fsync` 的本地文件系统上。任一环节失败时操作按失败报告，
 不留下临时文件；永久删除的删除凭据没有保存完成时，不会去删除 Codex 会话。
+回收站登记里出现 `trashing` 或 `restoring` 阶段后，不认识这两个阶段的旧版本无法读取
+该文件；回退版本前先确认登记里已经没有这两个阶段（启动和每日清理成功后会把它们推进完）。
 
 SQLite 用 WAL，不要在服务运行时只复制主库文件而漏掉 `-wal`。可靠做法是无活动任务时
 停服务再复制。备份时应同时保存表中的 JSON 文件、Worker SQLite 和整个

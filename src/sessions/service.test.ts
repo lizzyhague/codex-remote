@@ -14,7 +14,8 @@ import {
   type AppServerRequester,
 } from "./service.ts";
 import { ApplicationSettingsStore } from "../settings/store.ts";
-import { TrashStore } from "./trash-store.ts";
+import { TrashStore, type TrashEntry } from "./trash-store.ts";
+import { injectFsFaults } from "../workers/fs-fault-injection.ts";
 import { MarkStore } from "./mark-store.ts";
 
 const EXPECTED_CODEX_REMOTE_DEVELOPER_INSTRUCTIONS = [
@@ -49,12 +50,13 @@ async function createFixture(context: TestContext) {
   const project = await realpath(projectPath);
   const outside = await realpath(outsidePath);
   const catalog = await ProjectCatalog.fromRoots([{ id: "workspace", path: root }]);
-  const trash = await TrashStore.open(path.join(temporaryDirectory, "trash.json"));
+  const trashPath = path.join(temporaryDirectory, "trash.json");
+  const trash = await TrashStore.open(trashPath);
   const marks = await MarkStore.open(path.join(temporaryDirectory, "marks.json"));
   const settings = await ApplicationSettingsStore.open(
     path.join(temporaryDirectory, "settings.json"),
   );
-  return { catalog, project, outside, trash, marks, settings };
+  return { catalog, project, outside, trash, trashPath, marks, settings };
 }
 
 function thread(
@@ -403,7 +405,7 @@ test("permanently deletes trash entries after thirty days", async (context) => {
     now: () => 100 + TRASH_RETENTION_SECONDS,
   });
 
-  assert.deepEqual(await service.purgeExpired(), { deleted: 1, failed: [] });
+  assert.deepEqual(await service.purgeExpired(), { settled: 0, deleted: 1, failed: [] });
   assert.equal(trash.has("thread-expired"), false);
   assert.deepEqual(transport.requests, [{
     method: "thread/delete",
@@ -437,7 +439,7 @@ test("startup cleanup resumes a recent deletion left in progress", async (contex
     },
   });
 
-  assert.deepEqual(await service.purgeExpired(), { deleted: 1, failed: [] });
+  assert.deepEqual(await service.purgeExpired(), { settled: 0, deleted: 1, failed: [] });
   assert.deepEqual(forgotten, ["thread-pending"]);
   assert.equal(trash.has("thread-pending"), false);
   assert.equal(marks.has("thread-pending"), false);
@@ -468,6 +470,222 @@ test("a pending permanent deletion cannot reappear in trash or be restored", asy
     }],
   });
   assert.deepEqual(transport.requests, []);
+});
+
+function trashEntry(overrides: Partial<TrashEntry> = {}): TrashEntry {
+  return {
+    threadId: "thread-old",
+    projectId: "workspace/alpha",
+    deletedAt: 1_000,
+    origin: "active",
+    state: "trashed",
+    ...overrides,
+  };
+}
+
+function rpcError(message: string, code = -32600): AppServerRpcError {
+  return new AppServerRpcError({ code, message });
+}
+
+test("keeps a durable trashing record when the trash write fails after archive", async (context) => {
+  const { catalog, project, trash, trashPath } = await createFixture(context);
+  const transport = new FakeTransport();
+  transport.results.push(
+    { thread: thread("thread-old", project, { status: { type: "idle" } }) },
+    {},
+  );
+  const service = new CodexSessionService(transport, catalog, trash, { now: () => 1_000 });
+  // 第一次写是 `trashing` 凭据，第二次写 `trashed` 时失败。
+  const faults = injectFsFaults(context, { fail: { "file-write": 2 } });
+
+  const result = await service.moveToTrash("workspace/alpha", ["thread-old"], "active");
+  assert.deepEqual(result, {
+    succeeded: [],
+    failed: [{ sessionId: "thread-old", message: "injected file-write failure" }],
+  });
+  // 不再尽力 unarchive：Codex 已归档，本地凭据负责把这次请求做完。
+  assert.deepEqual(transport.requests.map((request) => request.method), [
+    "thread/read",
+    "thread/archive",
+  ]);
+  assert.deepEqual(trash.get("thread-old"), trashEntry({ state: "trashing" }));
+  assert.deepEqual(
+    (await TrashStore.open(trashPath)).get("thread-old"),
+    trashEntry({ state: "trashing" }),
+  );
+
+  // 回收站里能看到它，不会从三个列表同时消失。
+  transport.results.push({
+    thread: thread("thread-old", project, { status: { type: "idle" } }),
+  });
+  const page = await service.list("workspace/alpha", { view: "trash" });
+  assert.deepEqual(page.sessions.map((session) => session.id), ["thread-old"]);
+
+  // 重试同一请求：重复归档得到精确的 no rollout found，视为已完成。
+  faults.heal();
+  transport.results.push(
+    { thread: thread("thread-old", project, { status: { type: "idle" } }) },
+    rpcError("no rollout found for thread id thread-old"),
+  );
+  assert.deepEqual(
+    await service.moveToTrash("workspace/alpha", ["thread-old"], "active"),
+    { succeeded: ["thread-old"], failed: [] },
+  );
+  assert.deepEqual(transport.requests.slice(3).map((request) => request.method), [
+    "thread/read",
+    "thread/archive",
+  ]);
+  assert.deepEqual(
+    (await TrashStore.open(trashPath)).get("thread-old"),
+    trashEntry({ state: "trashed" }),
+  );
+});
+
+test("startup cleanup finishes a move to trash interrupted before or after archive", async (context) => {
+  const { catalog, trash, trashPath } = await createFixture(context);
+  // 两条都停在 `trashing`：一条退出时还没归档，一条已归档但没来得及登记。
+  await trash.put(trashEntry({ threadId: "thread-before", state: "trashing" }));
+  await trash.put(trashEntry({ threadId: "thread-after", state: "trashing" }));
+  const transport = new FakeTransport();
+  transport.results.push(
+    {},
+    rpcError("no rollout found for thread id thread-after"),
+  );
+  const service = new CodexSessionService(transport, catalog, await TrashStore.open(trashPath), {
+    now: () => 1_001,
+  });
+  const changes: unknown[] = [];
+  service.onChange((event) => changes.push(event));
+
+  assert.deepEqual(await service.purgeExpired(), { settled: 2, deleted: 0, failed: [] });
+  assert.deepEqual(transport.requests, [
+    { method: "thread/archive", params: { threadId: "thread-before" } },
+    { method: "thread/archive", params: { threadId: "thread-after" } },
+  ]);
+  assert.deepEqual(
+    (await TrashStore.open(trashPath)).list().map((entry) => [entry.threadId, entry.state]),
+    [["thread-before", "trashed"], ["thread-after", "trashed"]],
+  );
+  assert.deepEqual(changes, [
+    { projectId: "workspace/alpha", sessionIds: ["thread-before"], change: "trash" },
+    { projectId: "workspace/alpha", sessionIds: ["thread-after"], change: "trash" },
+  ]);
+});
+
+test("a failed restore stays restorable and a retry tolerates an earlier unarchive", async (context) => {
+  const { catalog, project, trash, trashPath } = await createFixture(context);
+  await trash.put(trashEntry());
+  const transport = new FakeTransport();
+  transport.results.push(
+    { thread: thread("thread-old", project, { status: { type: "idle" } }) },
+    new Error("app-server 连接已断开"),
+  );
+  const service = new CodexSessionService(transport, catalog, trash);
+
+  assert.deepEqual(await service.restoreTrash("workspace/alpha", ["thread-old"]), {
+    succeeded: [],
+    failed: [{ sessionId: "thread-old", message: "app-server 连接已断开" }],
+  });
+  assert.deepEqual(
+    (await TrashStore.open(trashPath)).get("thread-old"),
+    trashEntry({ state: "restoring" }),
+  );
+  transport.results.push({
+    thread: thread("thread-old", project, { status: { type: "idle" } }),
+  });
+  const page = await service.list("workspace/alpha", { view: "trash" });
+  assert.deepEqual(page.sessions.map((session) => session.id), ["thread-old"]);
+
+  // 断开前 Codex 其实已经恢复：重复 unarchive 得到精确的 no archived rollout found。
+  transport.results.push(
+    { thread: thread("thread-old", project, { status: { type: "idle" } }) },
+    rpcError("no archived rollout found for thread id thread-old"),
+  );
+  assert.deepEqual(await service.restoreTrash("workspace/alpha", ["thread-old"]), {
+    succeeded: ["thread-old"],
+    failed: [],
+  });
+  assert.deepEqual(transport.requests.slice(3).map((request) => request.method), [
+    "thread/read",
+    "thread/unarchive",
+  ]);
+  assert.equal((await TrashStore.open(trashPath)).has("thread-old"), false);
+});
+
+test("startup cleanup finishes an interrupted restore instead of purging it", async (context) => {
+  const { catalog, trash, trashPath } = await createFixture(context);
+  // 已超过 30 天，但用户最后的意图是恢复，不能被当成过期条目永久删除。
+  await trash.put(trashEntry({ threadId: "thread-ok", deletedAt: 100, state: "restoring" }));
+  await trash.put(trashEntry({ threadId: "thread-stuck", deletedAt: 100, state: "restoring" }));
+  const transport = new FakeTransport();
+  transport.results.push(
+    rpcError("no archived rollout found for thread id thread-ok"),
+    new Error("app-server 连接已断开"),
+  );
+  const service = new CodexSessionService(transport, catalog, trash, {
+    now: () => 100 + TRASH_RETENTION_SECONDS,
+  });
+  const changes: unknown[] = [];
+  service.onChange((event) => changes.push(event));
+
+  assert.deepEqual(await service.purgeExpired(), {
+    settled: 1,
+    deleted: 0,
+    failed: [{ sessionId: "thread-stuck", message: "app-server 连接已断开" }],
+  });
+  assert.deepEqual(transport.requests.map((request) => request.method), [
+    "thread/unarchive",
+    "thread/unarchive",
+  ]);
+  assert.deepEqual(
+    (await TrashStore.open(trashPath)).list().map((entry) => [entry.threadId, entry.state]),
+    [["thread-stuck", "restoring"]],
+  );
+  assert.deepEqual(changes, [
+    { projectId: "workspace/alpha", sessionIds: ["thread-ok"], change: "restore" },
+  ]);
+});
+
+test("only the exact already-done response counts as a finished archive", async (context) => {
+  const { catalog, trash } = await createFixture(context);
+  await trash.put(trashEntry({ state: "trashing" }));
+  const transport = new FakeTransport();
+  transport.results.push(
+    rpcError("no rollout found for thread id thread-other"),
+    rpcError("no rollout found for thread id thread-old", -32603),
+  );
+  const service = new CodexSessionService(transport, catalog, trash);
+
+  for (const message of [
+    "no rollout found for thread id thread-other",
+    "no rollout found for thread id thread-old",
+  ]) {
+    assert.deepEqual(await service.purgeExpired(), {
+      settled: 0,
+      deleted: 0,
+      failed: [{ sessionId: "thread-old", message }],
+    });
+    assert.equal(trash.get("thread-old")?.state, "trashing");
+  }
+});
+
+test("trashing and restoring an archived-origin session only touch the trash list", async (context) => {
+  const { catalog, project, trash } = await createFixture(context);
+  const transport = new FakeTransport();
+  transport.results.push(
+    { thread: thread("thread-old", project, { status: { type: "idle" } }) },
+    { thread: thread("thread-old", project, { status: { type: "idle" } }) },
+  );
+  const service = new CodexSessionService(transport, catalog, trash, { now: () => 1_000 });
+
+  await service.moveToTrash("workspace/alpha", ["thread-old"], "archived");
+  assert.deepEqual(trash.get("thread-old"), trashEntry({ origin: "archived" }));
+  await service.restoreTrash("workspace/alpha", ["thread-old"]);
+  assert.equal(trash.has("thread-old"), false);
+  assert.deepEqual(transport.requests.map((request) => request.method), [
+    "thread/read",
+    "thread/read",
+  ]);
 });
 
 test("does not archive a session while its task is active", async (context) => {
@@ -535,6 +753,73 @@ test("keeps archived marked sessions out of the recent-session pin group", async
   const page = await service.list("workspace/alpha");
   assert.deepEqual(page.sessions.map((session) => session.id), ["thread-other"]);
   assert.deepEqual(page.marked, []);
+});
+
+function archivedPagesWithout(count: number, project: string): Array<Record<string, unknown>> {
+  return Array.from({ length: count }, (_, index) => ({
+    data: [thread(`thread-archived-${index}`, project)],
+    nextCursor: `archived-${index + 1}`,
+  }));
+}
+
+test("a pinned session beyond the archive scan limit stays out of recent when it is not active", async (context) => {
+  const { catalog, project, trash, marks } = await createFixture(context);
+  await marks.put({ threadId: "thread-deep", projectId: "workspace/alpha" });
+  const transport = new FakeTransport();
+  transport.results.push(
+    { data: [thread("thread-other", project)], nextCursor: null },
+    ...archivedPagesWithout(10, project),
+    { data: [thread("thread-other", project)], nextCursor: null },
+  );
+  const service = new CodexSessionService(transport, catalog, trash, { marks });
+
+  const page = await service.list("workspace/alpha");
+  assert.deepEqual(page.sessions.map((session) => session.id), ["thread-other"]);
+  assert.deepEqual(page.marked, []);
+  const lists = transport.requests.filter((request) => request.method === "thread/list");
+  assert.deepEqual(
+    lists.map((request) => (request.params as { archived: boolean }).archived),
+    [false, ...Array<boolean>(10).fill(true), false],
+  );
+  assert.equal(
+    transport.requests.some((request) => request.method === "thread/read"),
+    false,
+  );
+});
+
+test("a pinned session beyond the archive scan limit is kept once found in the active list", async (context) => {
+  const { catalog, project, trash, marks } = await createFixture(context);
+  await marks.put({ threadId: "thread-pinned", projectId: "workspace/alpha" });
+  const transport = new FakeTransport();
+  transport.results.push(
+    { data: [thread("thread-other", project)], nextCursor: null },
+    ...archivedPagesWithout(10, project),
+    { data: [thread("thread-other", project)], nextCursor: "active-2" },
+    { data: [thread("thread-pinned", project)], nextCursor: "active-3" },
+    { thread: thread("thread-pinned", project, { status: { type: "idle" } }) },
+  );
+  const service = new CodexSessionService(transport, catalog, trash, { marks });
+
+  const page = await service.list("workspace/alpha");
+  assert.deepEqual(page.marked.map((session) => session.id), ["thread-pinned"]);
+});
+
+test("a pinned session unresolved in both bounded scans is treated as unknown", async (context) => {
+  const { catalog, project, trash, marks } = await createFixture(context);
+  await marks.put({ threadId: "thread-unknown", projectId: "workspace/alpha" });
+  const transport = new FakeTransport();
+  transport.results.push(
+    { data: [thread("thread-other", project)], nextCursor: null },
+    ...archivedPagesWithout(10, project),
+    ...archivedPagesWithout(10, project),
+  );
+  const service = new CodexSessionService(transport, catalog, trash, { marks });
+
+  const page = await service.list("workspace/alpha");
+  assert.deepEqual(page.marked, []);
+  const methods = transport.requests.map((request) => request.method);
+  assert.equal(methods.filter((method) => method === "thread/list").length, 21);
+  assert.equal(methods.includes("thread/read"), false);
 });
 
 test("renames a not-loaded thread through app-server without resuming it", async (context) => {
