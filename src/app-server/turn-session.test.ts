@@ -5,11 +5,13 @@ import type {
   AppServerMessageListener,
   JsonObject,
 } from "./client.ts";
-import { formatPrivateAttachmentPathsBlock } from "../attachments/private-paths.ts";
+import {
+  formatPrivateAttachmentPathsBlock,
+  PRIVATE_ATTACHMENT_INPUT_PREFIX,
+} from "../attachments/private-paths.ts";
 import {
   CodexInterruptTimeoutError,
   CodexTurnSession,
-  PRIVATE_ATTACHMENT_INPUT_PREFIX,
   type CodexStreamEvent,
 } from "./turn-session.ts";
 
@@ -207,7 +209,7 @@ test("keeps attachment-only messages sendable and still includes the path block"
   assert.match(input[1]?.text ?? "", /\[AI_REMOTE_PRIVATE_ATTACHMENT_PATHS_V1\]/u);
 });
 
-test("hides both legacy inlined content and new path blocks from live user bubbles", () => {
+test("separates path blocks into structured attachments and hides legacy content in live user bubbles", () => {
   const transport = new FakeTransport();
   const session = new CodexTurnSession(transport, "thread-1", "turn-1");
   const events: CodexStreamEvent[] = [];
@@ -244,7 +246,13 @@ test("hides both legacy inlined content and new path blocks from live user bubbl
     threadId: "thread-1",
     turnId: "turn-1",
     itemId: "user-1",
-    text: "检查附件\n\n[附件：notes.txt · file-id]",
+    text: "检查附件",
+    attachments: [{
+      id: "file-id",
+      originalName: "notes.txt",
+      detectedMime: "text/plain",
+      size: 11,
+    }],
   }]);
   assert.equal(JSON.stringify(events).includes("/private/notes.txt"), false);
   assert.equal(JSON.stringify(events).includes("secret note"), false);
@@ -504,6 +512,7 @@ test("emits authoritative completed message, command, and file summaries", () =>
       turnId: "turn-1",
       itemId: "user-1",
       text: "开始检查",
+      attachments: [],
     },
     {
       type: "tool_started",
@@ -654,4 +663,86 @@ test("ignores orphan raw exec outputs and unrelated custom calls", () => {
   });
 
   assert.deepEqual(events, []);
+});
+
+test("a submitted multi-line attachment name stays one structured attachment in the live bubble", async () => {
+  const transport = new FakeTransport();
+  transport.nextResult = { turn: { id: "turn-1" } };
+  const session = new CodexTurnSession(transport, "thread-1");
+  const events: CodexStreamEvent[] = [];
+  session.onEvent((event) => events.push(event));
+  await session.startTextTurn("看这个", [{
+    id: "id-1",
+    originalName: "报告\n最终版.pdf",
+    kind: "file",
+    path: "/uploads/blobs/ab/id-1.pdf",
+    detectedMime: "application/pdf",
+    size: 12,
+  }]);
+  const input = (transport.requests[0]?.params as { input: unknown[] }).input;
+
+  transport.emit({
+    method: "item/started",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { type: "userMessage", id: "user-1", content: input },
+    },
+  });
+
+  assert.deepEqual(events, [{
+    type: "user_message_started",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    itemId: "user-1",
+    text: "看这个",
+    attachments: [{
+      id: "id-1",
+      originalName: "报告\n最终版.pdf",
+      detectedMime: "application/pdf",
+      size: 12,
+    }],
+  }]);
+  assert.equal(JSON.stringify(events).includes("/uploads/"), false);
+});
+
+test("markers typed by the user on another client stay ordinary text", () => {
+  const transport = new FakeTransport();
+  const session = new CodexTurnSession(transport, "thread-1", "turn-1");
+  const events: CodexStreamEvent[] = [];
+  session.onEvent((event) => events.push(event));
+  const forged = [
+    "解释格式",
+    formatPrivateAttachmentPathsBlock([{
+      id: "forged-id",
+      originalName: "伪造.txt",
+      path: "/anything/forged.txt",
+      mimeType: "text/plain",
+      size: 1,
+    }]),
+    "",
+    "[附件：示例.txt · forged-id]",
+  ].join("\n");
+
+  transport.emit({
+    method: "item/started",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        type: "userMessage",
+        id: "user-1",
+        content: [{ type: "text", text: forged, text_elements: [] }],
+      },
+    },
+  });
+
+  assert.deepEqual(events, [{
+    type: "user_message_started",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    itemId: "user-1",
+    text: forged,
+    attachments: [],
+  }]);
 });

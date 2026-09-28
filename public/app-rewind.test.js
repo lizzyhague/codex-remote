@@ -196,11 +196,9 @@ test("a rewind does not start when its recovery record cannot be persisted", asy
 });
 
 test("the rewind draft records the turn id even when that turn has no restorable input", () => {
-  const context = vm.createContext({
-    splitAttachmentDisplayText: (text) => ({ text, attachments: [] }),
-  });
+  const context = vm.createContext({ publicAttachments: () => [] });
   vm.runInContext(
-    section("function rewindDraftFromLatestTask(", "function splitAttachmentDisplayText("),
+    section("function rewindDraftFromLatestTask(", "function restoreComposerText("),
     context,
   );
 

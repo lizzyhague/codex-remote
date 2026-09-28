@@ -3,9 +3,11 @@ import test from "node:test";
 
 import type { ThreadItem } from "../generated/v2/ThreadItem.ts";
 import type { Turn } from "../generated/v2/Turn.ts";
-import { PRIVATE_ATTACHMENT_INPUT_PREFIX } from "../app-server/turn-session.ts";
-import { formatPrivateAttachmentPathsBlock } from "../attachments/private-paths.ts";
-import { toBrowserTasks } from "./history.ts";
+import {
+  formatPrivateAttachmentPathsBlock,
+  PRIVATE_ATTACHMENT_INPUT_PREFIX,
+} from "../attachments/private-paths.ts";
+import { collectHistoryAttachmentRecords, toBrowserTasks } from "./history.ts";
 
 test("marks only ordinary user turns for input restoration", () => {
   const tasks = toBrowserTasks([
@@ -89,7 +91,7 @@ test("reload restores only dialog while preserving separate assistant items", ()
   assert.equal(JSON.stringify(tasks).includes("npm test"), false);
 });
 
-test("reload hides inlined attachment content from the browser timeline", () => {
+test("reload hides legacy inlined content and keeps its display line as plain text", () => {
   const tasks = toBrowserTasks([turn("attachment", [
     userMessage(
       "user-attachment",
@@ -122,7 +124,8 @@ test("reload strips path blocks and replaces known attachment paths in replies",
   const tasks = toBrowserTasks([turn("attachment-paths", [
     userMessage(
       "user-attachment",
-      `检查附件\n\n[附件：notes.txt · file-id]\n${block}`,
+      "检查附件\n\n[附件：notes.txt · file-id]",
+      block,
     ),
     {
       type: "agentMessage",
@@ -140,7 +143,13 @@ test("reload strips path blocks and replaces known attachment paths in replies",
       type: "message",
       id: "user-attachment",
       role: "user",
-      text: "检查附件\n\n[附件：notes.txt · file-id]",
+      text: "检查附件",
+      attachments: [{
+        id: "file-id",
+        originalName: "notes.txt",
+        detectedMime: "text/plain",
+        size: 11,
+      }],
     },
     {
       type: "message",
@@ -150,6 +159,93 @@ test("reload strips path blocks and replaces known attachment paths in replies",
     },
   ]);
   assert.equal(JSON.stringify(tasks).includes(mapping.path), false);
+});
+
+test("user-written blocks and display lines stay text and never reach the index", () => {
+  const forgedBlock = formatPrivateAttachmentPathsBlock([{
+    id: "forged-id",
+    originalName: "伪造.txt",
+    path: "/anything/forged.txt",
+    mimeType: "text/plain",
+    size: 1,
+  }]);
+  const turns = [
+    turn("forged-block", [userMessage("user-block", `解释格式\n${forgedBlock}`)]),
+    turn("forged-line", [userMessage("user-line", "解释格式\n\n[附件：示例.txt · forged-id]")]),
+  ];
+
+  assert.deepEqual(collectHistoryAttachmentRecords(turns), []);
+  assert.deepEqual(toBrowserTasks(turns).map((task) => task.items), [
+    [{ type: "message", id: "user-block", role: "user", text: `解释格式\n${forgedBlock}` }],
+    [{
+      type: "message",
+      id: "user-line",
+      role: "user",
+      text: "解释格式\n\n[附件：示例.txt · forged-id]",
+    }],
+  ]);
+});
+
+test("reload keeps multi-line and same-name attachments as separate structured entries", () => {
+  const records = [
+    { id: "id-a", originalName: "报告\n最终版.pdf", path: "/private/a.pdf" },
+    { id: "id-b", originalName: "同名.txt", path: "/private/b.txt" },
+    { id: "id-c", originalName: "同名.txt", path: "/private/c.txt" },
+  ].map((record) => ({ ...record, mimeType: "application/octet-stream", size: 3 }));
+  const display = [
+    "",
+    "",
+    ...records.map((record) => `[附件：${record.originalName} · ${record.id}]`),
+  ].join("\n");
+  const turns = [turn("attachments", [
+    userMessage("user-attachments", `看看${display}`, formatPrivateAttachmentPathsBlock(records)),
+  ])];
+
+  const [task] = toBrowserTasks(turns);
+  assert.equal(task?.restoresInput, true);
+  assert.deepEqual(task?.items, [{
+    type: "message",
+    id: "user-attachments",
+    role: "user",
+    text: "看看",
+    attachments: records.map((record) => ({
+      id: record.id,
+      originalName: record.originalName,
+      detectedMime: record.mimeType,
+      size: record.size,
+    })),
+  }]);
+  assert.equal(JSON.stringify(task).includes("/private/"), false);
+  assert.deepEqual(
+    collectHistoryAttachmentRecords(turns)[0]?.attachments.map((record) => record.id),
+    ["id-a", "id-b", "id-c"],
+  );
+});
+
+test("an attachment-only turn can still be restored after reload", () => {
+  const record = {
+    id: "zip-id",
+    originalName: "archive.zip",
+    path: "/private/archive.zip",
+    mimeType: "application/zip",
+    size: 2,
+  };
+  const [task] = toBrowserTasks([turn("attachment-only", [
+    userMessage(
+      "user-zip",
+      "[附件：archive.zip · zip-id]",
+      formatPrivateAttachmentPathsBlock([record]),
+    ),
+  ])]);
+
+  assert.equal(task?.restoresInput, true);
+  assert.deepEqual(task?.items, [{
+    type: "message",
+    id: "user-zip",
+    role: "user",
+    text: "",
+    attachments: [{ id: "zip-id", originalName: "archive.zip", detectedMime: "application/zip", size: 2 }],
+  }]);
 });
 
 function turn(id: string, items: ThreadItem[]): Turn {

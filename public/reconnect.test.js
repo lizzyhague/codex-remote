@@ -129,7 +129,7 @@ function harness() {
     section("function applySessionResumeResult(", "function applyOpenedSession("),
     section("function applyOpenedSession(", "function setSessionView("),
     section("async function uploadFiles(", "function renderAttachmentList("),
-    section("function removeAttachment(", "function displayTextWithAttachments("),
+    section("function removeAttachment(", "function userMessageKey("),
     section("function loadComposerDraftForCurrentSession(", "async function answerApproval("),
   ].join("\n"), context);
   const first = { id: "existing-file", originalName: "first.png", status: "ready" };

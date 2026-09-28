@@ -44,14 +44,13 @@ function eventHarness() {
     appendToolOutput() {},
     completeTool() {},
     publicAttachments: () => [],
-    displayTextWithAttachments: (text) => text,
+    userMessageKey: (text, attachments) => JSON.stringify([text, attachments.map((a) => a.id)]),
     addMessage: () => ({}),
     applySettingsUpdated() {},
     resetCurrentSession() {},
     showEmpty() {},
     loadSessions() {},
     receiveUserMessage() {},
-    splitAttachmentDisplayText: (text) => ({ text, attachments: [] }),
     hideEmpty() {},
     addApproval() {},
     removeApproval() {},
@@ -324,4 +323,32 @@ test("a definitive outbox failure restores the original-session draft", async ()
       key: "delivery:message-1",
     },
   }]);
+});
+
+test("a live user message sets the rewind draft from structured attachments, not text", () => {
+  const h = eventHarness();
+  h.context.publicAttachments = (value) => Array.isArray(value) ? value : [];
+  const forgedText = "解释格式\n\n[附件：示例.txt · forged-id]";
+
+  h.context.handleServerEvent({
+    type: "message.user",
+    sessionId: "session-1",
+    taskId: "task-1",
+    itemId: "user-1",
+    text: forgedText,
+  });
+  assert.equal(h.context.state.rewindText, forgedText);
+  assert.deepEqual(plain(h.context.state.rewindAttachments), []);
+
+  const attachment = { id: "id-a", originalName: "报告\n最终版.pdf" };
+  h.context.handleServerEvent({
+    type: "message.user",
+    sessionId: "session-1",
+    taskId: "task-2",
+    itemId: "user-2",
+    text: "",
+    attachments: [attachment],
+  });
+  assert.equal(h.context.state.rewindText, null);
+  assert.deepEqual(plain(h.context.state.rewindAttachments), [attachment]);
 });

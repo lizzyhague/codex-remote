@@ -958,6 +958,18 @@ button.app-settings-button svg {
   font-family: inherit;
 }
 
+.message-attachments {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message > * + .message-attachments {
+  margin-top: 0.5rem;
+}
+
 .markdown-body {
   min-width: 0;
   overflow-wrap: anywhere;

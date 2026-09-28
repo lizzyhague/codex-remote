@@ -3,11 +3,12 @@ import type { Turn } from "../generated/v2/Turn.ts";
 import type { OpenedSession, SessionPage, SessionSummary } from "../sessions/service.ts";
 import type { AttachmentDisplayMapping } from "../attachments/path-redaction.ts";
 import { redactKnownAttachmentPaths } from "../attachments/path-redaction.ts";
-import { parsePrivateAttachmentPaths } from "../attachments/private-paths.ts";
 import {
-  isPrivateAttachmentInputText,
-  stripPrivateAttachmentInputs,
-} from "../app-server/turn-session.ts";
+  messageAttachmentOf,
+  splitUserMessageContent,
+  type MessageAttachment,
+  type UserMessageContent,
+} from "../attachments/private-paths.ts";
 
 export type BrowserSessionSummary = Omit<SessionSummary, "sessionId">;
 
@@ -16,6 +17,8 @@ export type BrowserTimelineItem = {
   id: string;
   role: "user" | "assistant";
   text: string;
+  /** 只在用户消息带有 Remote 附件时出现；来自独立路径块，不从正文反推。 */
+  attachments?: MessageAttachment[];
 };
 
 export type BrowserTaskSnapshot = {
@@ -66,7 +69,7 @@ export function toBrowserTasks(
   return turns.map((turn) => toBrowserTask(turn, mappings));
 }
 
-/** 从 CLI 原始用户消息里收集路径块，用来补齐显示索引。 */
+/** 从 Remote 附加在用户消息后的独立路径块收集记录，用来补齐显示索引。 */
 export function collectHistoryAttachmentRecords(turns: Turn[]): Array<{
   messageId: string;
   attachments: AttachmentDisplayMapping[];
@@ -75,9 +78,7 @@ export function collectHistoryAttachmentRecords(turns: Turn[]): Array<{
   for (const turn of turns) {
     for (const item of turn.items) {
       if (item.type !== "userMessage") continue;
-      const records = item.content
-        .filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
-        .flatMap((part) => parsePrivateAttachmentPaths(part.text));
+      const records = userMessageContent(item).attachments;
       if (records.length === 0) continue;
       collected.push({
         messageId: item.id,
@@ -118,9 +119,11 @@ function restoresInput(turn: Turn): boolean {
     item.type === "enteredReviewMode" ||
     item.type === "exitedReviewMode"
   );
-  return !isSpecialTurn && turn.items.some((item) =>
-    item.type === "userMessage" && Boolean(userMessageText(item))
-  );
+  return !isSpecialTurn && turn.items.some((item) => {
+    if (item.type !== "userMessage") return false;
+    const content = userMessageContent(item);
+    return Boolean(content.text) || content.attachments.length > 0;
+  });
 }
 
 function toBrowserTimelineItem(
@@ -128,11 +131,15 @@ function toBrowserTimelineItem(
   mappings: readonly AttachmentDisplayMapping[],
 ): BrowserTimelineItem[] {
   if (item.type === "userMessage") {
+    const content = userMessageContent(item);
     return [{
       type: "message",
       id: item.id,
       role: "user",
-      text: redactKnownAttachmentPaths(userMessageText(item), mappings),
+      text: redactKnownAttachmentPaths(content.text, mappings),
+      ...(content.attachments.length > 0
+        ? { attachments: content.attachments.map(messageAttachmentOf) }
+        : {}),
     }];
   }
   if (item.type === "agentMessage") {
@@ -156,12 +163,10 @@ function toBrowserTimelineItem(
   return [];
 }
 
-function userMessageText(item: Extract<ThreadItem, { type: "userMessage" }>): string {
-  return stripPrivateAttachmentInputs(
-    item.content
-      .filter((part): part is Extract<typeof part, { type: "text" }> =>
-        part.type === "text" && !isPrivateAttachmentInputText(part.text))
-      .map((part) => part.text)
-      .join("\n"),
+function userMessageContent(
+  item: Extract<ThreadItem, { type: "userMessage" }>,
+): UserMessageContent {
+  return splitUserMessageContent(
+    item.content.map((part) => part.type === "text" ? part.text : null),
   );
 }

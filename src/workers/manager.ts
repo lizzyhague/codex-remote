@@ -5,7 +5,6 @@ import {
   CodexAttachmentError,
   CodexInterruptTimeoutError,
   CodexTurnCancelledError,
-  stripPrivateAttachmentInputs,
   type CodexStreamEvent,
   validateCodexTurnAttachments,
 } from "../app-server/turn-session.ts";
@@ -2010,9 +2009,6 @@ export class SessionWorkerManager {
         ? { attachments: active.task.attachments }
         : {}),
     };
-    if (event.type === "user_message_started" && typeof converted.text === "string") {
-      converted.text = stripPrivateAttachmentInputs(converted.text);
-    }
     if (event.type === "assistant_text_delta" || event.type === "tool_output_delta") {
       const itemId = typeof converted.itemId === "string" ? converted.itemId : event.itemId;
       const kind = event.type === "assistant_text_delta" ? "assistant" : "tool";

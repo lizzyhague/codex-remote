@@ -1472,7 +1472,7 @@ function renderTasks(tasks) {
   for (const task of tasks) {
     for (const item of Array.isArray(task.items) ? task.items : []) {
       if (item.type === "message") {
-        addMessage(item.role, item.text, item.id, false);
+        addMessage(item.role, item.text, item.id, false, publicAttachments(item.attachments));
         rendered += 1;
       }
     }
@@ -1549,9 +1549,12 @@ async function sendMessage() {
   }
 
   hideEmpty();
-  const displayText = displayTextWithAttachments(text, attachments);
-  const optimistic = addMessage("user", displayText, `local-${Date.now()}`, false);
-  state.pendingUserMessages.push({ text: displayText, element: optimistic, taskId: null });
+  const optimistic = addMessage("user", text, `local-${Date.now()}`, false, attachments);
+  state.pendingUserMessages.push({
+    key: userMessageKey(text, attachments),
+    element: optimistic,
+    taskId: null,
+  });
   elements.messageInput.value = "";
   state.pendingAttachments = state.pendingAttachments.filter((attachment) => attachment.status !== "ready");
   renderAttachmentList();
@@ -1801,11 +1804,9 @@ function mergeAttachments(first, second) {
   return merged;
 }
 
-function displayTextWithAttachments(text, attachments) {
-  if (attachments.length === 0) return text;
-  const lines = attachments.map((attachment) =>
-    `[附件：${attachment.originalName} · ${attachment.id}]`);
-  return text ? `${text}\n\n${lines.join("\n")}` : lines.join("\n");
+/** 只用来把乐观气泡和后端事件对上；附件名不参与拼接，也不会被再次解析。 */
+function userMessageKey(text, attachments) {
+  return JSON.stringify([text, attachments.map((attachment) => attachment.id)]);
 }
 
 async function stopTask() {
@@ -1862,14 +1863,20 @@ function handleServerEvent(event, replay = false) {
       state.running = true;
       state.controlsTask = true;
       setCurrentSessionState("active");
+      const queuedText = typeof event.text === "string" ? event.text : "";
       const queuedAttachments = publicAttachments(event.attachments);
-      if ((typeof event.text === "string" && event.text) || queuedAttachments.length > 0) {
-        const displayText = displayTextWithAttachments(event.text || "", queuedAttachments);
-        let pending = state.pendingUserMessages.find((candidate) =>
-          candidate.text === displayText);
+      if (queuedText || queuedAttachments.length > 0) {
+        const key = userMessageKey(queuedText, queuedAttachments);
+        let pending = state.pendingUserMessages.find((candidate) => candidate.key === key);
         if (!pending) {
-          const element = addMessage("user", displayText, `queued-${event.taskId}`, false);
-          pending = { text: displayText, element, taskId: event.taskId };
+          const element = addMessage(
+            "user",
+            queuedText,
+            `queued-${event.taskId}`,
+            false,
+            queuedAttachments,
+          );
+          pending = { key, element, taskId: event.taskId };
           state.pendingUserMessages.push(pending);
         }
         pending.taskId = event.taskId;
@@ -1917,11 +1924,8 @@ function handleServerEvent(event, replay = false) {
       updateControls();
       break;
     case "message.user":
-      {
-        const rewind = splitAttachmentDisplayText(event.text || "", event.attachments);
-        state.rewindText = rewind.text;
-        state.rewindAttachments = rewind.attachments;
-      }
+      state.rewindText = typeof event.text === "string" && event.text ? event.text : null;
+      state.rewindAttachments = publicAttachments(event.attachments);
       receiveUserMessage(event);
       showThinking();
       break;
@@ -2072,7 +2076,7 @@ function setCurrentSessionState(sessionState) {
   renderSessionList();
 }
 
-function addMessage(role, text, id, buffered) {
+function addMessage(role, text, id, buffered, attachments = []) {
   hideEmpty();
   const article = document.createElement("article");
   article.className = `message ${role}`;
@@ -2082,7 +2086,8 @@ function addMessage(role, text, id, buffered) {
     textElement = document.createElement("pre");
     article.append(textElement);
   } else {
-    article.append(renderMarkdown(text));
+    if (text || attachments.length === 0) article.append(renderMarkdown(text));
+    if (attachments.length > 0) article.append(renderMessageAttachments(attachments));
   }
   elements.timeline.append(article);
 
@@ -2100,21 +2105,36 @@ function addMessage(role, text, id, buffered) {
   return article;
 }
 
+/** 附件名按文字节点原样显示；换行和控制字符不会被当成 Markdown 或另一条附件。 */
+function renderMessageAttachments(attachments) {
+  const list = document.createElement("ul");
+  list.className = "message-attachments";
+  for (const attachment of attachments) {
+    const item = document.createElement("li");
+    item.textContent = `附件：${attachment.originalName} · ${attachment.id}`;
+    list.append(item);
+  }
+  return list;
+}
+
 function receiveUserMessage(event) {
-  if (!event.itemId || !event.text) return;
+  const text = typeof event.text === "string" ? event.text : "";
+  const attachments = publicAttachments(event.attachments);
+  if (!event.itemId || (!text && attachments.length === 0)) return;
   const existing = elements.timeline.querySelector(
     `[data-item-id="${CSS.escape(event.itemId)}"]`,
   );
   if (existing) return;
 
+  const key = userMessageKey(text, attachments);
   const pendingIndex = state.pendingUserMessages.findIndex((pending) =>
-    (event.taskId && pending.taskId === event.taskId) || pending.text === event.text
+    (event.taskId && pending.taskId === event.taskId) || pending.key === key
   );
   if (pendingIndex >= 0) {
     const [pending] = state.pendingUserMessages.splice(pendingIndex, 1);
     pending.element.dataset.itemId = event.itemId;
   } else {
-    addMessage("user", event.text, event.itemId, false);
+    addMessage("user", text, event.itemId, false, attachments);
     scrollToBottom(false);
   }
 }
@@ -3269,34 +3289,13 @@ function rewindDraftFromLatestTask(tasks) {
   const userMessage = latest.items.find((item) =>
     item?.type === "message" && item.role === "user"
   );
-  if (typeof userMessage?.text !== "string" || !userMessage.text) {
+  const text = typeof userMessage?.text === "string" ? userMessage.text : "";
+  // 附件来自后端的结构化字段；正文里看起来像附件行的文字始终只是正文。
+  const attachments = publicAttachments(userMessage?.attachments);
+  if (!text && attachments.length === 0) {
     return { targetTurnId, text: null, attachments: [] };
   }
-  return { targetTurnId, ...splitAttachmentDisplayText(userMessage.text) };
-}
-
-function splitAttachmentDisplayText(text, suppliedAttachments = []) {
-  const supplied = publicAttachments(suppliedAttachments);
-  const lines = String(text || "").split("\n");
-  const parsed = [];
-  while (lines.length > 0) {
-    const match = /^\[附件：(.*) · ([A-Za-z0-9_-]{1,128})\]$/u.exec(lines.at(-1));
-    if (!match) break;
-    lines.pop();
-    parsed.unshift({
-      id: match[2],
-      originalName: match[1],
-      size: NaN,
-      kind: "file",
-      expiresAtMs: null,
-    });
-  }
-  if (parsed.length > 0 && lines.at(-1) === "") lines.pop();
-  const cleanText = lines.join("\n");
-  return {
-    text: cleanText || null,
-    attachments: supplied.length > 0 ? supplied : parsed,
-  };
+  return { targetTurnId, text: text || null, attachments };
 }
 
 function restoreComposerText(text) {

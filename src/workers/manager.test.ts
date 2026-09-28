@@ -2276,16 +2276,19 @@ function historyWithAttachments(): Turn[] {
   const message = (id: string, name: string) => ({
     type: "userMessage",
     id,
-    content: [{
-      type: "text",
-      text: `看附件\n\n${formatPrivateAttachmentPathsBlock([{
-        id: `attachment-${name}`,
-        originalName: `${name}.txt`,
-        path: `/private/uploads/${name}.txt`,
-        mimeType: "text/plain",
-        size: 1,
-      }])}`,
-    }],
+    content: [
+      { type: "text", text: `看附件\n\n[附件：${name}.txt · attachment-${name}]` },
+      {
+        type: "text",
+        text: formatPrivateAttachmentPathsBlock([{
+          id: `attachment-${name}`,
+          originalName: `${name}.txt`,
+          path: `/private/uploads/${name}.txt`,
+          mimeType: "text/plain",
+          size: 1,
+        }]),
+      },
+    ],
   });
   return [
     { id: "turn-1", items: [message("message-1", "one")] },

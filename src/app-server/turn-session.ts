@@ -7,9 +7,11 @@ import type { UserInput } from "../generated/v2/UserInput.ts";
 
 import type { AttachmentDisplayMapping } from "../attachments/path-redaction.ts";
 import {
+  attachmentDisplayText,
   formatPrivateAttachmentPathsBlock,
-  isPrivateAttachmentPathsText,
-  stripPrivateAttachmentPaths,
+  messageAttachmentOf,
+  splitUserMessageContent,
+  type MessageAttachment,
 } from "../attachments/private-paths.ts";
 import type { AppServerMessageListener, JsonObject } from "./client.ts";
 import {
@@ -18,7 +20,6 @@ import {
   type PublicToolView,
 } from "./tool-view.ts";
 import { asObject } from "../shared/json.ts";
-import { indexOfWholeLine } from "../shared/text.ts";
 
 export interface AppServerTransport {
   request<Result = unknown>(method: string, params: unknown): Promise<Result>;
@@ -33,6 +34,7 @@ export type CodexStreamEvent =
     turnId: string;
     itemId: string;
     text: string;
+    attachments: MessageAttachment[];
   }
   | {
     type: "assistant_text_delta";
@@ -93,8 +95,6 @@ export type CodexTurnAttachment = {
   size: number;
 };
 
-export const PRIVATE_ATTACHMENT_INPUT_PREFIX =
-  "[CODEX_REMOTE_PRIVATE_ATTACHMENT_CONTENT_V1]";
 const MAX_TURN_INPUT_CHARS = 1_048_576;
 
 export class CodexAttachmentError extends Error {
@@ -145,7 +145,7 @@ export class CodexTurnSession {
     resolve: (value: boolean) => void;
     reject: (error: unknown) => void;
   } | null = null;
-  #submittedUserText: string | null = null;
+  #submittedUserMessage: { text: string; attachments: MessageAttachment[] } | null = null;
   #attachmentMappings: AttachmentDisplayMapping[] = [];
   readonly #interruptTimeoutMs: number;
 
@@ -225,7 +225,10 @@ export class CodexTurnSession {
         this.#resolveStartingInterrupt(true);
         throw new CodexTurnCancelledError();
       }
-      this.#submittedUserText = displayText;
+      this.#submittedUserMessage = {
+        text: attachments.length > 0 && !text.trim() ? "" : text,
+        attachments: attachments.map(messageAttachmentOf),
+      };
       const response = await this.#transport.request<TurnStartResponse>(
         "turn/start",
         params,
@@ -371,23 +374,23 @@ export class CodexTurnSession {
         Array.isArray(item.content) &&
         typeof params.turnId === "string"
       ) {
-        const receivedText = item.content
-          .map(asObject)
-          .filter((part): part is JsonObject =>
-            part?.type === "text" &&
-            (typeof part.text !== "string" || !isPrivateAttachmentInputText(part.text)))
-          .map((part) => typeof part.text === "string" ? part.text : "")
-          .filter(Boolean)
-          .join("\n");
-        const text = stripPrivateAttachmentInputs(this.#submittedUserText ?? receivedText);
-        this.#submittedUserText = null;
-        if (text) {
+        const received = splitUserMessageContent(item.content.map((value) => {
+          const part = asObject(value);
+          return part?.type === "text" && typeof part.text === "string" ? part.text : null;
+        }));
+        const message = this.#submittedUserMessage ?? {
+          text: received.text,
+          attachments: received.attachments.map(messageAttachmentOf),
+        };
+        this.#submittedUserMessage = null;
+        if (message.text || message.attachments.length > 0) {
           this.#emit({
             type: "user_message_started",
             threadId: this.#threadId,
             turnId: params.turnId,
             itemId: item.id,
-            text,
+            text: message.text,
+            attachments: message.attachments,
           });
         }
         return;
@@ -587,32 +590,6 @@ export function validateCodexTurnAttachments(
       "消息正文和附件说明合计超过 Codex 单轮输入上限，请缩短正文或减少附件。",
     );
   }
-}
-
-export function isPrivateAttachmentInputText(text: string): boolean {
-  if (text.startsWith(PRIVATE_ATTACHMENT_INPUT_PREFIX)) return true;
-  return isPrivateAttachmentPathsText(text) &&
-    stripPrivateAttachmentPaths(text).trim() === "";
-}
-
-/** 去掉新旧两种内部附件说明，保留用户可见正文。 */
-export function stripPrivateAttachmentInputs(text: string): string {
-  return stripLegacyPrivateAttachmentContent(stripPrivateAttachmentPaths(text));
-}
-
-function stripLegacyPrivateAttachmentContent(text: string): string {
-  const start = indexOfWholeLine(text, PRIVATE_ATTACHMENT_INPUT_PREFIX);
-  if (start < 0) return text;
-  return text.slice(0, start).replace(/\n+$/u, "");
-}
-
-
-function attachmentDisplayText(text: string, attachments: CodexTurnAttachment[]): string {
-  const trimmed = text.trim();
-  if (attachments.length === 0) return text;
-  const lines = attachments.map((attachment) =>
-    `[附件：${attachment.originalName} · ${attachment.id}]`);
-  return trimmed ? `${text}\n\n${lines.join("\n")}` : lines.join("\n");
 }
 
 function rawExecItemId(callId: string): string {
