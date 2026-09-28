@@ -42,6 +42,8 @@ export class DirectoryAppServer {
   #resolveUnexpectedExit!: () => void;
   #unexpectedExitResolved = false;
   #ready: Promise<AppServerProcess> | null = null;
+  /** 已创建的子进程，不论初始化是否完成；close() 靠它打断永不返回的 initialize。 */
+  #started: AppServerProcess | null = null;
   #current: AppServerProcess | null = null;
   #closed = false;
 
@@ -65,6 +67,8 @@ export class DirectoryAppServer {
 
     const started = this.#startClient(params);
     this.#ready = started.then(({ client }) => client);
+    // 失败由调用方从本次返回值拿到；#ready 只供后续 request() 使用，不能成为未处理拒绝。
+    this.#ready.catch(() => {});
     const { response } = await started;
     return response;
   }
@@ -103,9 +107,8 @@ export class DirectoryAppServer {
     if (this.#closed) return;
     this.#closed = true;
 
-    const ready = this.#ready;
-    if (!ready) return;
-    const client = await ready.catch(() => null);
+    // 不等 #ready：初始化可能永远不返回。关闭子进程会拒绝在途 initialize。
+    const client = this.#started;
     if (!client) return;
     if (this.#current === client) this.#current = null;
     await client.close();
@@ -119,6 +122,7 @@ export class DirectoryAppServer {
       onNotification: (message) => this.#emit(this.#notificationListeners, message),
       onServerRequest: (message) => this.#emit(this.#serverRequestListeners, message),
     });
+    this.#started = client;
     this.#current = client;
     // close() 先把 #closed 置位，启动失败时先把 #current 清空，两种情况都不算意外退出。
     void client.whenExited().then(() => {

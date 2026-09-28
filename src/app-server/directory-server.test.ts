@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 import type { InitializeParams } from "../generated/InitializeParams.ts";
 import type { InitializeResponse } from "../generated/InitializeResponse.ts";
@@ -105,6 +106,42 @@ test("reports an unexpected child exit as fatal", async () => {
   processes[0]?.crash();
   await runtime.whenExited();
   await runtime.close();
+});
+
+test("close interrupts an initialize that never answers", async () => {
+  // 子进程活着但不回 initialize 时，close() 不能等 ready，否则启动时限到点也关不掉它。
+  let fake: FakeAppServerProcess | null = null;
+  const runtime = new DirectoryAppServer({
+    clientFactory: (options) => {
+      const hanging = new FakeAppServerProcess(1, options);
+      let rejectInitialize!: (error: Error) => void;
+      const initialize = new Promise<InitializeResponse>((_resolve, reject) => {
+        rejectInitialize = reject;
+      });
+      hanging.initialize = () => initialize;
+      const close = hanging.close.bind(hanging);
+      hanging.close = async () => {
+        rejectInitialize(new Error("codex app-server 已退出。"));
+        await close();
+      };
+      fake = hanging;
+      return hanging;
+    },
+  });
+  const initializing = runtime.initialize(INITIALIZE_PARAMS);
+  const initializeResult = assert.rejects(initializing, /已退出/);
+  const outcome = await Promise.race([
+    runtime.close().then(() => "closed" as const),
+    delay(1_000).then(() => "stuck" as const),
+  ]);
+  assert.equal(outcome, "closed");
+  assert.equal((fake as FakeAppServerProcess | null)?.closed, true);
+  await initializeResult;
+  const reported = await Promise.race([
+    runtime.whenExited().then(() => "exited" as const),
+    delay(20).then(() => "pending" as const),
+  ]);
+  assert.equal(reported, "pending", "主动关闭不算意外退出");
 });
 
 test("a deliberate close is not reported as a fatal exit", async () => {

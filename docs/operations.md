@@ -43,7 +43,10 @@ journalctl -u codex-remote.service -f
 
 macOS：看运行用户日志目录下的 `codex-remote.log` 和 `codex-remote.error.log`。
 
-目录 App Server 结束时网页后端会主动退出，由 `Restart=on-failure` 拉起。单个会话
+目录 App Server 结束时网页后端会主动退出，由 `Restart=on-failure` 拉起。启动阶段（目录
+App Server 初始化和启动时的回收站清理）两分钟内没能开始监听，也会以失败退出，日志里是
+“启动超过 120 秒仍未就绪”，未完成的永久删除留到下次启动续做。启动期间或运行中收到
+`SIGINT`/`SIGTERM` 属于计划内停止，即使目录 App Server 同时被信号结束，退出码也保持 0。单个会话
 Worker 异常退出只会把那个任务标成 `failed`，不影响 HTTP 服务和其它 Worker。服务反复
 重启时先看日志里的 App Server / Worker 错误，别只盯着网页入口。
 
