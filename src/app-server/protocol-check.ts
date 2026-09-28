@@ -4,10 +4,6 @@ import path from "node:path";
 
 import type { ModelListResponse } from "../generated/v2/ModelListResponse.ts";
 import type { PermissionProfileListResponse } from "../generated/v2/PermissionProfileListResponse.ts";
-import {
-  assertCodexCliVersion,
-  readCodexProtocolManifest,
-} from "../maintenance/codex-types.ts";
 import { AppServerClient } from "./client.ts";
 import { codexRemoteInitializeParams } from "./initialize.ts";
 
@@ -26,8 +22,6 @@ export async function runAppServerProtocolCheck(
   const environment = options.environment ?? process.env;
   const codexBinary = options.codexBinary ?? (environment.CODEX_BIN?.trim() || "codex");
   const log = options.log ?? console.log;
-  const manifest = await readCodexProtocolManifest();
-  await assertCodexCliVersion(codexBinary, manifest.codexCliVersion, { environment });
 
   const workingDirectory = await mkdtemp(path.join(tmpdir(), "codex-remote-protocol-check-"));
   const client = new AppServerClient({ codexBinary, environment, workingDirectory });

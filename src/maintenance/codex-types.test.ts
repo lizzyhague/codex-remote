@@ -17,7 +17,7 @@ import { runCodexTypes } from "./codex-types.ts";
 
 const execFileAsync = promisify(execFile);
 
-test("isolated generation checks the bound version, experimental surface, and imported tree", async (context) => {
+test("isolated generation reports the installed and verified versions, experimental surface, and imported tree", async (context) => {
   const fixture = await protocolFixture(context);
   await runCodexTypes([], {
     repositoryRoot: fixture.root,
@@ -25,7 +25,8 @@ test("isolated generation checks the bound version, experimental surface, and im
     log: fixture.logs.push.bind(fixture.logs),
   });
 
-  assert.match(fixture.logs.join("\n"), /完全一致.*experimental surface/);
+  assert.match(fixture.logs.join("\n"), /codex-cli 1\.2\.3.*完全一致.*experimental surface/);
+  assert.match(fixture.logs.join("\n"), /已验证版本是 Codex CLI 1\.2\.3/);
   const invocations = await fixture.invocations();
   assert.deepEqual(invocations.map((entry) => entry.arguments), [
     ["--version"],
@@ -35,16 +36,20 @@ test("isolated generation checks the bound version, experimental surface, and im
   assert.match(invocations[1]?.codexHome ?? "", /codex-remote-protocol-/);
 });
 
-test("a different installed CLI is rejected before generation", async (context) => {
+test("a different installed CLI is allowed and identified", async (context) => {
   const fixture = await protocolFixture(context, { cliVersion: "1.2.4" });
-  await assert.rejects(
-    runCodexTypes([], {
-      repositoryRoot: fixture.root,
-      environment: fixture.environment,
-    }),
-    /不等于 codex-protocol\.json 绑定的 "codex-cli 1\.2\.3"/,
-  );
-  assert.deepEqual((await fixture.invocations()).map((entry) => entry.arguments), [["--version"]]);
+  await runCodexTypes([], {
+    repositoryRoot: fixture.root,
+    environment: fixture.environment,
+    log: fixture.logs.push.bind(fixture.logs),
+  });
+  assert.match(fixture.logs.join("\n"), /codex-cli 1\.2\.4/);
+  assert.match(fixture.logs.join("\n"), /已验证版本是 Codex CLI 1\.2\.3/);
+  const invocations = await fixture.invocations();
+  assert.deepEqual(invocations.map((entry) => entry.arguments), [
+    ["--version"],
+    ["app-server", "generate-ts", "--out", invocations[1]?.arguments[3], "--experimental"],
+  ]);
 });
 
 test("check reports generated additions, changes, and stale tracked files", async (context) => {
@@ -118,7 +123,7 @@ async function protocolFixture(context: TestContext, options: FixtureOptions = {
     writeFile(
       path.join(root, "codex-protocol.json"),
       JSON.stringify({
-        codexCliVersion: "1.2.3",
+        verifiedCodexCliVersion: "1.2.3",
         outputDirectory: "src/generated",
         experimental: true,
       }, null, 2) + "\n",

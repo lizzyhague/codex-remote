@@ -63,22 +63,22 @@ test("hides unknown host paths while preserving URLs and relative project paths"
   const source = [
     "项目入口是 src/server/main.ts，接口是 /api/v1。",
     "文档：https://example.com/docs/setup/file.html",
-    "读取 \"/home/lizzy/My Projects/中文项目/秘密 note.txt\"。",
-    "另见 file:///Users/lizzy/private/report.pdf。",
+    "读取 \"/home/example-user/My Projects/中文项目/秘密 note.txt\"。",
+    "另见 file:///Users/example-user/private/report.pdf。",
   ].join("\n");
   const redacted = redactHostPaths(source);
 
   assert.ok(redacted.includes("src/server/main.ts"));
   assert.ok(redacted.includes("/api/v1"));
   assert.ok(redacted.includes("https://example.com/docs/setup/file.html"));
-  assert.equal(redacted.includes("/home/lizzy"), false);
-  assert.equal(redacted.includes("/Users/lizzy"), false);
+  assert.equal(redacted.includes("/home/example-user"), false);
+  assert.equal(redacted.includes("/Users/example-user"), false);
   assert.ok(redacted.includes("‹主机路径›"));
 });
 
 test("redacts only the absolute-path span inside ordinary prose", () => {
   assert.equal(
-    redactHostPaths("请读取 /home/lizzy/My Projects/秘密 note.txt 后继续检查 /api/v1"),
+    redactHostPaths("请读取 /home/example-user/My Projects/秘密 note.txt 后继续检查 /api/v1"),
     "请读取 ‹主机路径› 后继续检查 /api/v1",
   );
 });

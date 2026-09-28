@@ -1,5 +1,5 @@
 {
-  "codexCliVersion": "0.153.2",
+  "verifiedCodexCliVersion": "0.153.2",
   "outputDirectory": "src/generated",
   "experimental": false
 }

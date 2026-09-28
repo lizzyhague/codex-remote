@@ -29,9 +29,11 @@ test("public maintenance docs point to the reproducible protocol workflow", asyn
     assert.match(source, /npm run codex:protocol/);
   }
   assert.doesNotMatch(readme, /generate-ts --out \.\/schemas/);
-  const manifest = JSON.parse(manifestSource) as { codexCliVersion: string };
-  assert.equal(readme.includes(manifest.codexCliVersion), false);
-  assert.equal(operations.includes(manifest.codexCliVersion), false);
+  const manifest = JSON.parse(manifestSource) as { verifiedCodexCliVersion: string };
+  assert.equal(readme.includes(manifest.verifiedCodexCliVersion), false);
+  assert.equal(operations.includes(manifest.verifiedCodexCliVersion), false);
+  assert.match(readme, /不限制用户安装或运行其他版本/);
+  assert.match(operations, /当前安装的 Codex CLI/);
   assert.match(operations, /不会调用模型/);
   assert.match(operations, /不会完整备份或恢复 Codex\s+原生 thread/);
 });

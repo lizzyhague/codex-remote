@@ -56,9 +56,10 @@ Codex/Claude Code 在同一项目中并行执行。
 常驻服务应以已经安装并登录 Codex、且能访问允许项目的非 root Unix 用户运行。部署者
 可以使用现有用户，也可以为服务准备独立用户；仓库不假定固定账户、HOME 或安装路径。
 
-项目当前绑定的 Codex CLI 版本、类型输出目录和 experimental surface 选择只记录在
-[`codex-protocol.json`](codex-protocol.json)。App Server 中部分会话设置接口仍属于实验能力；
-升级 Codex CLI 时要按下文的协议维护入口重新生成和验收，不能只替换可执行文件。
+项目最近完整验证过的 Codex CLI 版本、类型输出目录和 experimental surface 选择只记录在
+[`codex-protocol.json`](codex-protocol.json)。这是项目维护信息，不限制用户安装或运行其他版本的
+Codex CLI。App Server 中部分会话设置接口仍属于实验能力；维护者确认新版本时按下文入口
+重新生成和验收，再更新这个已验证版本号。
 
 Codex App Server 官方说明：https://developers.openai.com/codex/app-server
 
@@ -186,10 +187,10 @@ npm run codex:types
 npm run codex:protocol
 ```
 
-`npm run codex:types` 用 `codex-protocol.json` 绑定的精确 CLI 版本，在隔离的
-`CODEX_HOME` 中按 manifest 记录的 experimental 选择重新生成并逐字节比较真正被业务 import 的
+`npm run codex:types` 用当前安装的 Codex CLI，在隔离的 `CODEX_HOME` 中按 manifest 记录的
+experimental 选择重新生成并逐字节比较真正被业务 import 的
 `src/generated/`。当前生成结果不包含生成器的完整 experimental surface；这与运行时为已采用方法
-设置 `experimentalApi: true` 是两个独立边界。`npm run codex:protocol` 会连接同一版本的真实 App Server，只做
+设置 `experimentalApi: true` 是两个独立边界。`npm run codex:protocol` 会连接当前安装版本的真实 App Server，只做
 experimental 初始化和只读协议查询，不创建 thread，也不调用模型。这两项和
 `npm run typecheck && npm test` 一起构成无需模型的协议升级检查。
 

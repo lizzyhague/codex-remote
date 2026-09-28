@@ -801,7 +801,7 @@ test("archiving the open session closes it and tells every device", async (conte
 test("a successful mutation response cannot carry a private failure path", async (context) => {
   context.mock.method(console, "error", () => {});
   const { sessions, services } = setup();
-  sessions.archiveFailure = "archive failed at /home/lizzy/My Projects/秘密.md";
+  sessions.archiveFailure = "archive failed at /home/example-user/My Projects/秘密.md";
   const socket = new FakeSocket();
   const connection = new BrowserConnection("phone", socket, services);
   context.after(() => connection.disconnect());
@@ -821,7 +821,7 @@ test("a successful mutation response cannot carry a private failure path", async
       message: "会话整理失败，请查看服务日志。",
     }],
   });
-  assert.equal(JSON.stringify(result).includes("/home/lizzy"), false);
+  assert.equal(JSON.stringify(result).includes("/home/example-user"), false);
 });
 
 test("refuses session housekeeping while the project has a task", async (context) => {

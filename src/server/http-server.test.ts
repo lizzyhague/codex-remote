@@ -680,8 +680,17 @@ const WEB_FILES = {
   "viewer.js": 'import "./markdown.js";',
   "viewer.css": ".file-viewer {}",
   "boot.js": "// boot",
+  "mcp-form.js": "// mcp form",
+  "notice.js": "// notice",
   "slash-menu.js": "// menu",
   "display-timezone.js": "// tz",
+  "project-labels.js": "// labels",
+  "recovery-state.js": "// recovery",
+  "manifest.webmanifest": "{}",
+  "icon.svg": "<svg></svg>",
+  "icon-192.png": "fake png",
+  "icon-512.png": "fake png",
+  "icon-512-maskable.png": "fake png",
   "sw.js": "// sw-A",
 };
 
@@ -733,7 +742,7 @@ test("a running server keeps its startup frontend until restart; old module URLs
   assert.equal((await fetch(`${restarted}/assets/${"0".repeat(64)}/app.js`)).status, 404);
   assert.equal((await fetch(`${restarted}/assets/${"0".repeat(64)}/%2e%2e%2findex.html`)).status, 404);
   assert.equal((await fetch(`${restarted}/boot.js`)).status, 200);
-  assert.equal((await fetch(`${restarted}/icon.svg`)).status, 404);
+  assert.equal((await fetch(`${restarted}/icon.svg`)).status, 200);
 });
 
 test("repeated releases keep only the current and two previous snapshots on disk", async (t) => {
@@ -775,15 +784,14 @@ test("storage failures for older versioned assets are not disguised as missing f
 });
 
 test("an incomplete frontend fails startup instead of being served or published", async (t) => {
-  const webRoot = await writeWebRoot(t, {
-    "index.html": '<head><script src="/app.js"></script></head>',
-  });
+  const webRoot = await writeWebRoot(t, WEB_FILES);
+  await rm(path.join(webRoot, "sw.js"));
   const server = new RemoteWebSocketServer({
     token: "test-secret",
     services: emptyServices(new EmptyTransport()),
     webRoot,
   });
   t.after(() => server.close());
-  await assert.rejects(server.listen(0), /Missing public asset: app\.js/u);
+  await assert.rejects(server.listen(0), /Missing public asset: sw\.js/u);
   await assert.rejects(readdir(path.join(webRoot, ".web-assets")), { code: "ENOENT" });
 });

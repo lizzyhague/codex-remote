@@ -44,27 +44,31 @@ Node 直接跑 TypeScript，没有构建步骤。重启会断开浏览器连接�
 
 ## Codex CLI 与 App Server 协议升级
 
-[`codex-protocol.json`](../codex-protocol.json) 是协议生成的唯一权威：它同时记录精确的
-Codex CLI 版本、业务实际 import 的输出目录 `src/generated/`，以及生成器是否包含完整
-experimental surface。当前生成选择为 false；运行时仍为已采用的方法设置
-`experimentalApi: true`，两者不是同一个开关。升级时要分别复核。不要在 README、运维命令或
-generated 文件里另维护一份版本号。
+[`codex-protocol.json`](../codex-protocol.json) 记录项目最近完整验证过的 Codex CLI 版本、业务
+实际 import 的输出目录 `src/generated/`，以及生成器是否包含完整 experimental surface。
+版本号是已验证事实，不是运行时限制；用户可以自行更新 Codex CLI，Codex Remote 不会因版本
+不同而拒绝启动或检查协议。当前生成选择为 false；运行时仍为已采用的方法设置
+`experimentalApi: true`，两者不是同一个开关。不要在 README、运维命令或 generated 文件里
+另维护一份已验证版本号。
 
 在不被运行中服务读取的隔离工作树或分支里升级：
 
-1. 只修改 `codex-protocol.json` 的 `codexCliVersion`，并安装该精确版本的 CLI；如果候选
-   可执行文件不在默认 `PATH`，临时用 `CODEX_BIN=/absolute/path/to/codex` 指定。
-2. 运行 `npm run codex:types -- --write`。入口会先核对 `codex --version`，再使用空的临时
+1. 安装要验证的 CLI；如果候选可执行文件不在默认 `PATH`，临时用
+   `CODEX_BIN=/absolute/path/to/codex` 指定。入口使用当前安装的 Codex CLI，不要为了通过版本
+   检查而降级用户的 CLI。
+2. 运行 `npm run codex:types -- --write`。入口会记录 `codex --version`，再使用空的临时
    `CODEX_HOME`，按 manifest 的 `experimental` 值决定是否传 `--experimental`；它会精确替换
    `src/generated/`，不会把文件写到另一个未被 import 的目录，也不会覆盖该目录已有的未知改动。
-3. 用 `git diff -- codex-protocol.json src/generated` 审查新增、删除和字段变化。尤其重新核对
+3. 用 `git diff -- src/generated` 审查新增、删除和字段变化。尤其重新核对
    本项目实际调用的方法、server request / notification 联合、experimental 方法，以及此前
    未采用的宿主能力是否变得可达；不要手工裁剪完整生成结果。
 4. 再运行 `npm run codex:types`、`npm run typecheck` 和 `npm test`。第一条会在隔离目录重生成并
    逐字节比较，后两条只验证仓库类型和 fake transport，不能单独证明真实协议兼容。
-5. 运行 `npm run codex:protocol`。它连接 manifest 绑定版本的真实 App Server，使用 Remote
+5. 运行 `npm run codex:protocol`。它连接当前安装版本的真实 App Server，使用 Remote
    实际的 `experimentalApi` 初始化，并查询 `model/list` 与 `permissionProfile/list`；不会创建
    thread、不会启动 turn，也不会调用模型。
+6. 上述检查都通过后，再把 manifest 的 `verifiedCodexCliVersion` 改成这次验证的版本，
+   与经过审查的 `src/generated/` 一起提交。
 
 会调用模型的端到端 smoke（当前是 `npm run smoke:attachments`）另算：只在测试实例、共享上传
 服务、项目配置和登录状态准备好，而且明确允许产生真实模型调用时运行。它不能被前面的无模型

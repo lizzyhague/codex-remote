@@ -19,7 +19,7 @@ const MANIFEST_NAME = "codex-protocol.json";
 const EXPECTED_OUTPUT_DIRECTORY = "src/generated";
 
 export type CodexProtocolManifest = {
-  codexCliVersion: string;
+  verifiedCodexCliVersion: string;
   outputDirectory: typeof EXPECTED_OUTPUT_DIRECTORY;
   experimental: boolean;
 };
@@ -45,8 +45,7 @@ export async function runCodexTypes(
   const log = options.log ?? console.log;
   const manifest = await readCodexProtocolManifest(repositoryRoot);
   const codexBinary = environment.CODEX_BIN?.trim() || "codex";
-
-  await assertCodexCliVersion(codexBinary, manifest.codexCliVersion, {
+  const codexVersion = await readCodexCliVersion(codexBinary, {
     cwd: repositoryRoot,
     environment,
   });
@@ -79,8 +78,9 @@ export async function runCodexTypes(
         throw new Error(formatDifferenceFailure(manifest.outputDirectory, differences));
       }
       log(
-        `Codex CLI ${manifest.codexCliVersion} 的生成结果与 ${manifest.outputDirectory} 完全一致` +
-          `${manifest.experimental ? "（包含 experimental surface）" : ""}。`,
+        `${codexVersion} 的生成结果与 ${manifest.outputDirectory} 完全一致` +
+          `${manifest.experimental ? "（包含 experimental surface）" : ""}；` +
+          `manifest 记录的已验证版本是 Codex CLI ${manifest.verifiedCodexCliVersion}。`,
       );
       return;
     }
@@ -89,8 +89,8 @@ export async function runCodexTypes(
     await replaceGeneratedDirectory(outputDirectory, generatedDirectory);
     log(
       differences.length === 0
-        ? `${manifest.outputDirectory} 已经是 Codex CLI ${manifest.codexCliVersion} 的生成结果。`
-        : `已用 Codex CLI ${manifest.codexCliVersion} 更新 ${manifest.outputDirectory}；` +
+        ? `${manifest.outputDirectory} 已经是 ${codexVersion} 的生成结果。`
+        : `已用 ${codexVersion} 更新 ${manifest.outputDirectory}；` +
           `请审查 ${differences.length} 项生成差异。`,
     );
   } finally {
@@ -112,15 +112,15 @@ export async function readCodexProtocolManifest(
     throw new Error(`${MANIFEST_NAME} 必须是对象。`);
   }
   const keys = Object.keys(value).sort();
-  const expectedKeys = ["codexCliVersion", "experimental", "outputDirectory"];
+  const expectedKeys = ["experimental", "outputDirectory", "verifiedCodexCliVersion"];
   if (keys.join("\n") !== expectedKeys.join("\n")) {
     throw new Error(`${MANIFEST_NAME} 只能包含 ${expectedKeys.join("、")}。`);
   }
   if (
-    typeof value.codexCliVersion !== "string" ||
-    !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(value.codexCliVersion)
+    typeof value.verifiedCodexCliVersion !== "string" ||
+    !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(value.verifiedCodexCliVersion)
   ) {
-    throw new Error(`${MANIFEST_NAME} 的 codexCliVersion 必须是明确版本号。`);
+    throw new Error(`${MANIFEST_NAME} 的 verifiedCodexCliVersion 必须是明确版本号。`);
   }
   if (value.outputDirectory !== EXPECTED_OUTPUT_DIRECTORY) {
     throw new Error(
@@ -132,29 +132,23 @@ export async function readCodexProtocolManifest(
     throw new Error(`${MANIFEST_NAME} 的 experimental 必须是布尔值。`);
   }
   return {
-    codexCliVersion: value.codexCliVersion,
+    verifiedCodexCliVersion: value.verifiedCodexCliVersion,
     outputDirectory: value.outputDirectory,
     experimental: value.experimental,
   };
 }
 
-export async function assertCodexCliVersion(
+async function readCodexCliVersion(
   codexBinary: string,
-  expectedVersion: string,
   options: { cwd?: string; environment?: NodeJS.ProcessEnv } = {},
-): Promise<void> {
+): Promise<string> {
   const { stdout } = await runCommand(codexBinary, ["--version"], {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     environment: options.environment ?? process.env,
   });
   const actual = stdout.trim();
-  const expected = `codex-cli ${expectedVersion}`;
-  if (actual !== expected) {
-    throw new Error(
-      `当前 Codex CLI 是 ${JSON.stringify(actual || "（无版本输出）")}，` +
-        `不等于 ${MANIFEST_NAME} 绑定的 ${JSON.stringify(expected)}。`,
-    );
-  }
+  if (!actual) throw new Error("codex --version 没有输出版本。");
+  return actual;
 }
 
 function parseArguments(arguments_: string[]): boolean {
@@ -220,7 +214,7 @@ function formatDifferenceFailure(outputDirectory: string, differences: Differenc
   return [
     `隔离生成结果与 ${outputDirectory} 不一致（${differences.length} 项）：`,
     ...shown,
-    "确认 CLI 版本和 manifest 后，用 --write 更新，再审查 git diff。",
+    "确认当前 CLI 和 experimental 选择后，用 --write 更新，再审查 git diff。",
   ].join("\n");
 }
 

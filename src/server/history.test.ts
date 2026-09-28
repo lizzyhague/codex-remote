@@ -262,7 +262,7 @@ test("reload uses a stable turn error and redacts host paths without flattening 
         text: [
           "相对路径 src/server/main.ts 保持不变。",
           "URL https://example.com/docs/setup 保持不变。",
-          "宿主文件在 /Users/lizzy/private/秘密 note.txt。",
+          "宿主文件在 /Users/example-user/private/秘密 note.txt。",
         ].join("\n"),
         phase: null,
         memoryCitation: null,
@@ -284,7 +284,7 @@ test("reload uses a stable turn error and redacts host paths without flattening 
   assert.equal(task?.items[0]?.text, "用户原文 ‹主机路径› 和 /api/v1 保持不变");
   assert.ok(task?.items[1]?.text.includes("src/server/main.ts"));
   assert.ok(task?.items[1]?.text.includes("https://example.com/docs/setup"));
-  assert.equal(task?.items[1]?.text.includes("/Users/lizzy"), false);
+  assert.equal(task?.items[1]?.text.includes("/Users/example-user"), false);
   assert.ok(task?.items[1]?.text.includes("‹主机路径›"));
 });
 

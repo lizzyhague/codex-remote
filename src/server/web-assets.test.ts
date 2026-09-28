@@ -29,6 +29,7 @@ async function fixture(t: test.TestContext, files: Record<string, string> = {}) 
     "styles.css": "body { color: red }",
     "viewer.js": 'import { render } from "./markdown.js";',
     "viewer.css": ".file-viewer { color: blue }",
+    "icon.svg": "<svg>old</svg>",
     ...files,
   };
   for (const [name, body] of Object.entries(contents)) {
@@ -81,7 +82,7 @@ test("a loaded snapshot ignores later source edits; the next load publishes a ne
   assert.equal(assetUrl(page(first), "app.js"), firstApp);
   assert.doesNotMatch(page(first), /edited/u);
   assert.match((await first.read(firstModule))!.body.toString("utf8"), /mark-A/u);
-  assert.equal(first.file("icon.svg"), null);
+  assert.equal(first.file("icon.svg")!.toString("utf8"), "<svg>old</svg>");
   assert.deepEqual(await versions(root), [first.version]);
 
   const second = await load(root);
@@ -101,14 +102,22 @@ test("the current version is served from memory even if its directory disappears
   assert.match((await assets.read(url))!.body.toString("utf8"), /__PWA_MARK__/u);
 });
 
-test("refuses to load a snapshot that is missing a module import or a page script", async (t) => {
+test("refuses to load a snapshot that is missing any required file or module import", async (t) => {
+  const missingPage = await fixture(t);
+  await rm(path.join(missingPage, "index.html"));
+  await assert.rejects(load(missingPage), /Missing public asset: index\.html/u);
+
+  const missingUnreferenced = await fixture(t);
+  await rm(path.join(missingUnreferenced, "icon.svg"));
+  await assert.rejects(load(missingUnreferenced), /Missing public asset: icon\.svg/u);
+
   const missingImport = await fixture(t, { "app.js": 'import { render } from "./missing.js";' });
   await assert.rejects(load(missingImport), /Missing public asset: missing\.js/u);
   await assert.rejects(readdir(path.join(missingImport, ".web-assets")), { code: "ENOENT" });
 
   const missingScript = await fixture(t);
   await rm(path.join(missingScript, "styles.css"));
-  await assert.rejects(load(missingScript), /Missing public asset: styles\.css \(referenced by index\.html\)/u);
+  await assert.rejects(load(missingScript), /Missing public asset: styles\.css/u);
 });
 
 test("concurrent loads of the same files do not leave a partial snapshot", async (t) => {

@@ -172,11 +172,11 @@ test("hides unknown host paths in tool copies without changing URLs or relative 
     type: "commandExecution",
     command: "node src/server/main.ts https://example.com/docs/setup /home/private/project/file.ts",
     status: "completed",
-    aggregatedOutput: "read /Users/lizzy/中文项目/秘密.txt\nGET https://example.com/api/v1",
+    aggregatedOutput: "read /Users/example-user/中文项目/秘密.txt\nGET https://example.com/api/v1",
   }, "completed");
 
   assert.equal(JSON.stringify(view).includes("/home/private"), false);
-  assert.equal(JSON.stringify(view).includes("/Users/lizzy"), false);
+  assert.equal(JSON.stringify(view).includes("/Users/example-user"), false);
   assert.ok(view?.input?.includes("src/server/main.ts"));
   assert.ok(view?.input?.includes("https://example.com/docs/setup"));
   assert.ok(view?.output?.includes("https://example.com/api/v1"));

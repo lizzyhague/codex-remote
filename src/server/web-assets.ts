@@ -43,6 +43,7 @@ export class WebAssets {
         contents.set(file, await readFile(path.join(root, file)));
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        throw new Error(`Missing public asset: ${file}`, { cause: error });
       }
     }
     const entries = [...contents].filter(([file]) => versioned.has(file));

@@ -4,23 +4,17 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { readCodexProtocolManifest } from "../maintenance/codex-types.ts";
 import { runAppServerProtocolCheck } from "./protocol-check.ts";
 
-test("real-protocol check opts into experimental methods without starting a turn", async (context) => {
+test("real-protocol check accepts the installed CLI and opts into experimental methods without starting a turn", async (context) => {
   const directory = await mkdtemp(path.join(tmpdir(), "protocol-check-test-"));
   context.after(() => rm(directory, { recursive: true, force: true }));
   const fakeCodex = path.join(directory, "fake-codex.mjs");
   const requestLog = path.join(directory, "requests.jsonl");
-  const manifest = await readCodexProtocolManifest();
   await writeFile(fakeCodex, `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 const args = process.argv.slice(2);
-if (args.length === 1 && args[0] === "--version") {
-  console.log(${JSON.stringify(`codex-cli ${manifest.codexCliVersion}`)});
-  process.exit(0);
-}
 if (args[0] !== "app-server" || args[1] !== "--stdio") process.exit(20);
 const lines = createInterface({ input: process.stdin });
 lines.on("line", (line) => {
@@ -28,7 +22,7 @@ lines.on("line", (line) => {
   appendFileSync(process.env.FAKE_REQUEST_LOG, JSON.stringify(message) + "\\n");
   if (message.method === "initialize") {
     console.log(JSON.stringify({ id: message.id, result: {
-      userAgent: "fake-codex",
+      userAgent: "fake-codex/9.9.9",
       codexHome: "/private/fake",
       platformFamily: "unix",
       platformOs: "linux"
@@ -61,5 +55,6 @@ lines.on("line", (line) => {
   assert.equal(requests[0]?.params?.capabilities?.experimentalApi, true);
   assert.equal(requests.some((request) => request.method === "thread/start"), false);
   assert.equal(requests.some((request) => request.method === "turn/start"), false);
+  assert.match(logs.join("\n"), /fake-codex\/9\.9\.9/);
   assert.match(logs.join("\n"), /未调用模型/);
 });
