@@ -357,6 +357,10 @@ button.app-settings-button svg {
   line-height: 1.5;
 }
 
+.session-list-error p {
+  margin: 0 0 0.75rem;
+}
+
 .session-item {
   position: relative;
   display: grid;

@@ -43,7 +43,7 @@ function harness() {
     projectDisplayLabel,
     location: { protocol: "https:", host: "example.com", search: "" },
     RECONNECT_DELAY_MS: 2500, REQUEST_TIMEOUT_MS: 15000, SESSION_LOADING_RETRY_MS: 1000,
-    CONNECTION_NOTICE_KEY: "connection",
+    CONNECTION_NOTICE_KEY: "connection", TEMPORARY_WARNING: { tone: "warning" },
     MAX_ATTACHMENT_BYTES: 25 * 1024 * 1024, MAX_MESSAGE_ATTACHMENTS: 100,
     PROJECT_KEY: "project", ATTACHMENT_DRAFTS_KEY: "drafts",
     state: {
@@ -345,6 +345,25 @@ for (const outcome of ["success", "failure"]) {
     assert.equal(sockets.length, 1, "不能因此断开重连");
     assert.equal(sockets[0].readyState, 1);
     assert.deepEqual(h.notices, []);
+  });
+}
+
+for (const projects of [[], [{ id: "project-2", name: "Other" }]]) {
+  test(`reconnecting after the open session's project left the whitelist (${projects.length} left) settles without another reconnect`, async () => {
+    const h = harness();
+    const { context, gates, sockets } = h;
+    const listed = deferred();
+    gates.set("projects.list", listed);
+    listed.resolve({ projects });
+    await h.connect();
+
+    assert.equal(context.state.sessionId, null, "失效挂载被解除");
+    assert.equal(context.state.projectId, projects[0]?.id ?? null);
+    assert.equal(h.requests.some((request) => request.type === "session.resume"), false);
+    assert.equal(context.state.connectionReady, true);
+    assert.equal(sockets.length, 1, "不再主动断开重连");
+    assert.equal(sockets[0].readyState, 1);
+    assert.deepEqual(h.notices, ["当前会话所在的项目已不可用，已退出该会话。"]);
   });
 }
 

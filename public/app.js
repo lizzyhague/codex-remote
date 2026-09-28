@@ -159,6 +159,7 @@ const state = {
   markedSessions: [],
   sessionCursor: null,
   sessionLoading: false,
+  sessionLoadError: null,
   navigationBusy: false,
   sessionLoadGeneration: 0,
   openGeneration: 0,
@@ -166,7 +167,8 @@ const state = {
   pickerGeneration: 0,
   sessionSearchTimer: null,
   selectionMode: false,
-  selectedSessions: new Set(),
+  /** 会话 ID → 选中时所在列表里的摘要；只含当前项目、当前视图、当前列表里可整理的项。 */
+  selectedSessions: new Map(),
   sidebarCollapsed: stateGet(SIDEBAR_COLLAPSED_KEY) === "1",
   displayTimezone: loadDisplayTimezonePreference(),
   developerInstructions: "",
@@ -638,21 +640,29 @@ async function loadProjects(generation = state.generation) {
     elements.projectSelect.append(option);
   }
 
+  const savedProject = state.projectId || stateGet(PROJECT_KEY);
+  const savedAvailable = projects.some((project) => project.id === savedProject);
+  // 列表读取成功就是后端的权威白名单；扫描失败会让请求本身失败，走重连。
+  // 缺了当前会话的项目时退出挂载（草稿按原会话保存），不再留着它反复重连。
+  if (state.sessionId && !savedAvailable) {
+    invalidateOpenIntent();
+    resetCurrentSession();
+    showNotice("当前会话所在的项目已不可用，已退出该会话。", TEMPORARY_WARNING);
+  }
+
   if (projects.length === 0) {
-    if (state.sessionId) throw new Error("当前会话的项目暂时不可用。");
     state.projectId = null;
+    state.sessions = [];
+    state.markedSessions = [];
+    state.sessionCursor = null;
+    state.sessionLoadError = null;
+    renderSessionList();
     showEmpty("项目白名单里暂时没有可用项目。");
     updateControls();
     return;
   }
 
-  const savedProject = state.projectId || stateGet(PROJECT_KEY);
-  if (state.sessionId && !projects.some((project) => project.id === savedProject)) {
-    throw new Error("当前会话的项目暂时不可用。");
-  }
-  state.projectId = projects.some((project) => project.id === savedProject)
-    ? savedProject
-    : projects[0].id;
+  state.projectId = savedAvailable ? savedProject : projects[0].id;
   elements.projectSelect.value = state.projectId;
   stateSet(PROJECT_KEY, state.projectId);
   if (!state.sessionId) {
@@ -676,6 +686,7 @@ async function loadSessions({ append = false } = {}) {
     state.sessions = [];
     state.markedSessions = [];
     state.sessionCursor = null;
+    state.sessionLoadError = null;
     renderSessionList();
   }
 
@@ -697,9 +708,21 @@ async function loadSessions({ append = false } = {}) {
       : sessions;
     state.markedSessions = view === "active" ? marked : [];
     state.sessionCursor = typeof data?.nextCursor === "string" ? data.nextCursor : null;
+    reconcileSelectedSessions();
+    syncCurrentSessionTitle();
     renderSessionList();
   } catch (error) {
-    showNotice(errorMessage(error), TEMPORARY_ERROR);
+    if (
+      generation !== state.sessionLoadGeneration ||
+      projectId !== state.projectId || view !== state.sessionView
+    ) return;
+    if (append) {
+      showNotice(errorMessage(error), TEMPORARY_ERROR);
+    } else {
+      // 列表已经清空；失败必须画成错误态，不能落到“还没有会话”这类权威空文案。
+      state.sessionLoadError = errorMessage(error);
+      reconcileSelectedSessions();
+    }
   } finally {
     if (generation === state.sessionLoadGeneration) {
       state.sessionLoading = false;
@@ -972,6 +995,7 @@ function setSessionView(view, load = true) {
   state.sessions = [];
   state.markedSessions = [];
   state.sessionCursor = null;
+  state.sessionLoadError = null;
   setSelectionMode(false, false);
   elements.sessionViewTitle.textContent = view === "active"
     ? "最近会话"
@@ -1013,6 +1037,8 @@ function renderSessionList() {
     loading.className = "session-list-empty";
     loading.textContent = "正在加载会话……";
     elements.sessionList.append(loading);
+  } else if (state.sessionLoadError && listEmpty) {
+    elements.sessionList.append(createSessionLoadError(state.sessionLoadError));
   } else if (state.sessions.length === 0) {
     if (marked.length === 0) {
       const empty = document.createElement("p");
@@ -1037,6 +1063,23 @@ function renderSessionList() {
   updateControls();
 }
 
+function createSessionLoadError(message) {
+  const container = document.createElement("div");
+  container.className = "session-list-empty session-list-error";
+  container.setAttribute("role", "alert");
+  const text = document.createElement("p");
+  text.textContent = `会话列表没有读取成功：${message}`;
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "quiet";
+  retry.textContent = "重试";
+  retry.addEventListener("click", () => {
+    void loadSessions();
+  });
+  container.append(text, retry);
+  return container;
+}
+
 function createSessionItem(session) {
   const item = document.createElement("article");
   item.className = "session-item";
@@ -1049,15 +1092,19 @@ function createSessionItem(session) {
     label.className = "session-select-label";
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
-    checkbox.checked = state.selectedSessions.has(session.id);
-    checkbox.disabled = session.state === "active";
+    const selectable = sessionSelectable(session);
+    checkbox.checked = selectable && state.selectedSessions.has(session.id);
+    checkbox.disabled = !selectable;
     checkbox.setAttribute("aria-label", `选择 ${session.title || "新会话"}`);
+    if (session.state !== "active" && !selectable) {
+      label.title = "这个会话属于其他项目，切换到它的项目后再整理。";
+    }
     checkbox.addEventListener("change", () => {
       if (checkbox.checked && state.selectedSessions.size >= 100) {
         checkbox.checked = false;
         showNotice("一次最多整理 100 个会话。", TEMPORARY_WARNING);
       } else if (checkbox.checked) {
-        state.selectedSessions.add(session.id);
+        state.selectedSessions.set(session.id, session);
       } else {
         state.selectedSessions.delete(session.id);
       }
@@ -1218,19 +1265,54 @@ function visibleSessionSummaries() {
   return items;
 }
 
+/**
+ * 批量整理只作用于当前项目：跨项目钉住的会话出现在「最近」顶部，但不能混进
+ * 以当前项目为目标的一次请求。
+ */
+function sessionSelectable(session) {
+  return session.state !== "active" &&
+    Boolean(state.projectId) && session.projectId === state.projectId;
+}
+
 function selectableSessions() {
-  return visibleSessionSummaries().filter((session) => session.state !== "active");
+  return visibleSessionSummaries().filter(sessionSelectable);
+}
+
+/** 列表换成新结果后，选择只保留仍在列表里且仍可整理的项，并换成最新摘要。 */
+function reconcileSelectedSessions() {
+  if (state.selectedSessions.size === 0) return;
+  const current = new Map(selectableSessions().map((session) => [session.id, session]));
+  const next = new Map();
+  for (const id of state.selectedSessions.keys()) {
+    const session = current.get(id);
+    if (session) next.set(id, session);
+  }
+  state.selectedSessions = next;
+}
+
+/** 当前列表里有正在打开的会话时，让右侧标题跟列表（例如另一台设备的重命名）一致。 */
+function syncCurrentSessionTitle() {
+  if (!state.sessionId) return;
+  const session = visibleSessionSummaries().find((candidate) =>
+    candidate.id === state.sessionId && candidate.projectId === state.projectId
+  );
+  if (!session) return;
+  const title = session.title || "新会话";
+  if (title === state.sessionTitle) return;
+  state.sessionTitle = title;
+  updateConversationTitle();
 }
 
 function toggleSelectAllSessions() {
-  const ids = selectableSessions().map((session) => session.id);
-  const capped = ids.slice(0, 100);
-  const allSelected = capped.length > 0 && capped.every((id) => state.selectedSessions.has(id));
+  const sessions = selectableSessions();
+  const capped = sessions.slice(0, 100);
+  const allSelected = capped.length > 0 &&
+    capped.every((session) => state.selectedSessions.has(session.id));
   if (allSelected) {
     state.selectedSessions.clear();
   } else {
-    state.selectedSessions = new Set(capped);
-    if (ids.length > 100) showNotice("一次最多整理 100 个会话。", TEMPORARY_WARNING);
+    state.selectedSessions = new Map(capped.map((session) => [session.id, session]));
+    if (sessions.length > 100) showNotice("一次最多整理 100 个会话。", TEMPORARY_WARNING);
   }
   renderSessionList();
 }
@@ -1248,38 +1330,59 @@ function updateSelectionControls() {
   elements.bulkTrashButton.textContent = state.sessionView === "trash" ? "永久删除" : "删除";
 }
 
+/**
+ * 一次批量操作的对象：提示文字和实际发送都只用这一份。
+ * 列表正在刷新时不给对象，等选择和新列表核对过再操作。
+ */
+function selectedSessionTargets() {
+  if (state.sessionLoading || !state.projectId) return null;
+  reconcileSelectedSessions();
+  const sessions = [...state.selectedSessions.values()];
+  if (sessions.length === 0) return null;
+  return {
+    projectId: state.projectId,
+    sessionIds: sessions.map((session) => session.id),
+    sessions,
+  };
+}
+
 async function runBulkPrimaryAction() {
+  const targets = selectedSessionTargets();
+  if (!targets) return;
   const action = state.sessionView === "active"
     ? "archive"
     : state.sessionView === "archived"
     ? "unarchive"
     : "restore-trash";
-  await mutateSessions(action, [...state.selectedSessions]);
+  await mutateSessions(action, targets.sessionIds, {
+    projectId: targets.projectId,
+    fromSelection: true,
+  });
 }
 
 async function runBulkDangerAction() {
-  const sessionIds = [...state.selectedSessions];
-  if (sessionIds.length === 0) return;
+  const targets = selectedSessionTargets();
+  if (!targets) return;
+  const { sessions, sessionIds, projectId } = targets;
   if (state.sessionView === "trash") {
-    const selected = visibleSessionSummaries().filter((session) => state.selectedSessions.has(session.id));
     if (!window.confirm(
-      selected.length === 1
-        ? `立刻永久删除「${selected[0].title || "新会话"}」。这一步无法撤销，会话原文会一并删除。继续吗？`
-        : `立刻永久删除 ${selected.length} 个会话。这一步无法撤销，会话原文会一并删除。继续吗？`,
+      sessions.length === 1
+        ? `立刻永久删除「${sessions[0].title || "新会话"}」。这一步无法撤销，会话原文会一并删除。继续吗？`
+        : `立刻永久删除 ${sessions.length} 个会话。这一步无法撤销，会话原文会一并删除。继续吗？`,
     )) return;
-    await mutateSessions("delete-trash", sessionIds);
+    await mutateSessions("delete-trash", sessionIds, { projectId, fromSelection: true });
     return;
   }
   if (sessionIds.length > 1 && !window.confirm(
     `删除 ${sessionIds.length} 个会话。30 天内可以在回收站里还原，到期后自动永久删除。继续吗？`,
   )) return;
   const action = state.sessionView === "archived" ? "trash-archived" : "trash-active";
-  await mutateSessions(action, sessionIds);
+  await mutateSessions(action, sessionIds, { projectId, fromSelection: true });
 }
 
-async function mutateSessions(action, sessionIds) {
-  if (!state.projectId || sessionIds.length === 0) return;
-  const projectId = state.projectId;
+/** `projectId` 是这组会话所属的项目，撤销沿用它，不跟随页面后来切到的项目。 */
+async function mutateSessions(action, sessionIds, { projectId, fromSelection = false }) {
+  if (!projectId || sessionIds.length === 0) return;
   setNavigationBusy(true);
   try {
     const result = await request("sessions.mutate", { projectId, sessionIds, action });
@@ -1292,7 +1395,7 @@ async function mutateSessions(action, sessionIds) {
       resetCurrentSession();
       showEmpty("选择以前的会话，或者新建一个会话。");
     }
-    setSelectionMode(false, false);
+    if (fromSelection) setSelectionMode(false, false);
     await loadSessions();
 
     if (succeeded.length > 0) {
@@ -1313,7 +1416,7 @@ async function mutateSessions(action, sessionIds) {
         : "";
       if (undoAction) {
         showActionNotice(`${label}${failureNote}`, "撤销", () =>
-          mutateSessions(undoAction, succeeded), {
+          mutateSessions(undoAction, succeeded, { projectId }), {
           tone: failed.length > 0 ? "error" : "info",
         });
       } else {
