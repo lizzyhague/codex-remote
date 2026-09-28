@@ -56,8 +56,9 @@ Codex/Claude Code 在同一项目中并行执行。
 常驻服务应以已经安装并登录 Codex、且能访问允许项目的非 root Unix 用户运行。部署者
 可以使用现有用户，也可以为服务准备独立用户；仓库不假定固定账户、HOME 或安装路径。
 
-初始开源版本针对 Codex CLI `0.147.0` 开发和测试。App Server 中部分会话设置接口
-仍属于实验能力；升级 Codex CLI 后应重新运行测试并做浏览器验收。
+项目当前绑定的 Codex CLI 版本、类型输出目录和 experimental surface 选择只记录在
+[`codex-protocol.json`](codex-protocol.json)。App Server 中部分会话设置接口仍属于实验能力；
+升级 Codex CLI 时要按下文的协议维护入口重新生成和验收，不能只替换可执行文件。
 
 Codex App Server 官方说明：https://developers.openai.com/codex/app-server
 
@@ -181,19 +182,24 @@ cookie，令牌本身不写入浏览器存储。cookie 不依赖内存会话表�
 ```bash
 npm run typecheck
 npm test
+npm run codex:types
+npm run codex:protocol
 ```
 
-`npm run smoke` 会连接真实的 Codex App Server；`npm run smoke:server` 会启动真实网页
-后端，因此只在本机环境变量、项目配置和 Codex 登录状态都准备好时运行。
+`npm run codex:types` 用 `codex-protocol.json` 绑定的精确 CLI 版本，在隔离的
+`CODEX_HOME` 中按 manifest 记录的 experimental 选择重新生成并逐字节比较真正被业务 import 的
+`src/generated/`。当前生成结果不包含生成器的完整 experimental surface；这与运行时为已采用方法
+设置 `experimentalApi: true` 是两个独立边界。`npm run codex:protocol` 会连接同一版本的真实 App Server，只做
+experimental 初始化和只读协议查询，不创建 thread，也不调用模型。这两项和
+`npm run typecheck && npm test` 一起构成无需模型的协议升级检查。
 
-`src/generated/` 中的 TypeScript 类型由 Codex CLI 生成，并与生成时使用的 Codex
-版本绑定。当前绑定使用 Codex CLI 0.153.2 生成。官方生成命令为：
+会创建真实会话并调用模型的端到端检查（当前是 `npm run smoke:attachments`）不属于单元测试，
+只应在测试实例、附件服务、项目配置和 Codex 登录状态都准备好，并且明确允许模型调用时运行。
+`npm run smoke:server` 会启动临时网页后端并读取真实项目/会话目录，同样不在普通单测中运行。
 
-```bash
-codex app-server generate-ts --out ./schemas
-```
-
-升级类型时应记录 Codex CLI 版本、检查生成差异，并运行全部测试。
+`src/generated/` 是生成器的完整输出，不手工裁剪或编辑。升级步骤、`--write` 用法和差异审查清单
+见[运维说明](docs/operations.md#codex-cli-与-app-server-协议升级)。类型检查和 fake transport
+单测不能替代真实 App Server 协议检查。
 
 ## 许可证与商标
 

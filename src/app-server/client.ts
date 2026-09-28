@@ -25,6 +25,7 @@ type RpcErrorPayload = {
 
 export type AppServerClientOptions = {
   codexBinary?: string;
+  environment?: NodeJS.ProcessEnv;
   workingDirectory?: string;
   /**
    * 为这个 app-server 建立独立进程组。会话 Worker 使用它，确保异常清理时
@@ -81,7 +82,7 @@ export class AppServerClient {
       ["app-server", "--stdio"],
       {
         cwd: options.workingDirectory,
-        env: process.env,
+        env: options.environment ?? process.env,
         stdio: ["pipe", "pipe", "pipe"],
         detached: this.#processGroup,
       },

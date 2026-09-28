@@ -17,6 +17,7 @@
     "src/approvals/**/*.ts",
     "src/app-server/**/*.ts",
     "src/commands/**/*.ts",
+    "src/maintenance/**/*.ts",
     "src/projects/**/*.ts",
     "src/server/**/*.ts",
     "src/sessions/**/*.ts",

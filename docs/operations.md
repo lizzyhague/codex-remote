@@ -42,8 +42,34 @@ Node 直接跑 TypeScript，没有构建步骤。重启会断开浏览器连接�
 `waiting_for_permission` 会被标成 `interrupted`，`queued` 的继续调度；关闭时仍在启动、
 尚未向 Codex 提交这一轮的任务也保持 `queued`。
 
-升级 Codex CLI 后也要跑一遍上面的检查。`src/generated/` 的类型跟生成它的 Codex 版本
-绑定，协议变了要重新生成并审查差异，不要直接关掉类型检查。
+## Codex CLI 与 App Server 协议升级
+
+[`codex-protocol.json`](../codex-protocol.json) 是协议生成的唯一权威：它同时记录精确的
+Codex CLI 版本、业务实际 import 的输出目录 `src/generated/`，以及生成器是否包含完整
+experimental surface。当前生成选择为 false；运行时仍为已采用的方法设置
+`experimentalApi: true`，两者不是同一个开关。升级时要分别复核。不要在 README、运维命令或
+generated 文件里另维护一份版本号。
+
+在不被运行中服务读取的隔离工作树或分支里升级：
+
+1. 只修改 `codex-protocol.json` 的 `codexCliVersion`，并安装该精确版本的 CLI；如果候选
+   可执行文件不在默认 `PATH`，临时用 `CODEX_BIN=/absolute/path/to/codex` 指定。
+2. 运行 `npm run codex:types -- --write`。入口会先核对 `codex --version`，再使用空的临时
+   `CODEX_HOME`，按 manifest 的 `experimental` 值决定是否传 `--experimental`；它会精确替换
+   `src/generated/`，不会把文件写到另一个未被 import 的目录，也不会覆盖该目录已有的未知改动。
+3. 用 `git diff -- codex-protocol.json src/generated` 审查新增、删除和字段变化。尤其重新核对
+   本项目实际调用的方法、server request / notification 联合、experimental 方法，以及此前
+   未采用的宿主能力是否变得可达；不要手工裁剪完整生成结果。
+4. 再运行 `npm run codex:types`、`npm run typecheck` 和 `npm test`。第一条会在隔离目录重生成并
+   逐字节比较，后两条只验证仓库类型和 fake transport，不能单独证明真实协议兼容。
+5. 运行 `npm run codex:protocol`。它连接 manifest 绑定版本的真实 App Server，使用 Remote
+   实际的 `experimentalApi` 初始化，并查询 `model/list` 与 `permissionProfile/list`；不会创建
+   thread、不会启动 turn，也不会调用模型。
+
+会调用模型的端到端 smoke（当前是 `npm run smoke:attachments`）另算：只在测试实例、共享上传
+服务、项目配置和登录状态准备好，而且明确允许产生真实模型调用时运行。它不能被前面的无模型
+协议检查暗中带上，也不能把没运行写成已通过。协议变更完成后，再按普通更新流程把前后端作为
+一个版本切换。
 
 ## 状态和日志
 
@@ -86,7 +112,12 @@ Worker 异常退出只会把那个任务标成 `failed`，不影响 HTTP 服务�
 一律 404，不提供下载和目录浏览。需要登录 cookie，响应禁止缓存并带 `nosniff` 和沙箱
 CSP。
 
-## 状态文件与备份
+## Codex Remote 辅助状态与备份
+
+本节只覆盖 Codex Remote 为网页、队列、回收站和附件显示维护的辅助状态。Codex 自己仍是原生
+thread 与完整历史的权威；下面的文件不包含那些原生 thread，本项目也不会完整备份或恢复 Codex
+原生 thread。没有 Codex 官方保证和经过验证的恢复流程时，不要把复制其内部数据目录写成完整
+会话备份方案。项目白名单、服务环境、登录凭据和独立上传服务同样不在下表中，要按各自来源恢复。
 
 | 变量或路径 | 内容 | 敏感度 |
 | --- | --- | --- |
@@ -103,9 +134,10 @@ CSP。
 该文件；回退版本前先确认登记里已经没有这两个阶段（启动和每日清理成功后会把它们推进完）。
 
 SQLite 用 WAL，不要在服务运行时只复制主库文件而漏掉 `-wal`。可靠做法是无活动任务时
-停服务再复制。备份时应同时保存表中的 JSON 文件、Worker SQLite 和整个
+停服务再复制。备份 Remote 辅助状态时应同时保存表中的 JSON 文件、Worker SQLite 和整个
 `attachment-index/` 目录。附件本体不在本仓库的数据目录里，备份独立上传服务时按它自己
-的运维说明。
+的运维说明。恢复后先核对文件所有者和权限、项目白名单、环境里的兼容 CLI 版本，再启动并检查
+日志与 `/healthz`；这仍只恢复 Remote 辅助状态，不改变上面对 Codex 原生 thread 的边界。
 
 ## 新增前端文件
 

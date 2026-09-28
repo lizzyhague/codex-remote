@@ -90,7 +90,7 @@ cp deploy/launchd/codex-remote.plist.example deploy/launchd/codex-remote.plist.l
 mkdir -p "$HOME/Library/Logs/codex-remote" && chmod 700 "$HOME/Library/Logs/codex-remote"
 ```
 
-占位符比 systemd 多两个：`__SERVICE_LABEL__`（每个实例用不同的 launchd label）和
+占位符比 systemd 多两个：`__REMOTE_SERVICE_LABEL__`（每个实例用不同的 launchd label）和
 `__LOG_DIR__`。文件名、plist 里的 `Label` 和 `launchctl` 命令三者必须一致；下面的
 `io.example.*` 只是例子。
 

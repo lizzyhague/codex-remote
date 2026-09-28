@@ -12,7 +12,8 @@
     "start": "node src/server/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --test \"src/**/*.test.ts\" \"public/**/*.test.js\"",
-    "smoke": "node src/app-server/smoke.ts",
+    "codex:types": "node src/maintenance/codex-types.ts",
+    "codex:protocol": "node src/app-server/protocol-check.ts",
     "smoke:server": "node src/server/smoke.ts",
     "smoke:attachments": "node src/server/attachment-smoke.ts"
   },
