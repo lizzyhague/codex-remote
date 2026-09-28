@@ -170,7 +170,7 @@ test("follow-device disables the city select and keeps the previous city", () =>
 
 test("page times use the local display preference instead of the host clock", () => {
   assert.match(app, /from "\.\/display-timezone\.js"/u);
-  assert.match(app, /resolveDisplayTimeZone\(state\.displayTimezone, deviceTimeZone\(\)\)/u);
+  assert.match(app, /resolveDisplayTimeZone\(displayedTimezone\(\), deviceTimeZone\(\)\)/u);
   assert.match(app, /refreshDisplayedTimes\(\)/u);
   assert.match(app, /loadDisplayTimezonePreference\(\)/u);
   assert.match(app, /value < 1_000_000_000_000 \? value \* 1_000 : value/u);

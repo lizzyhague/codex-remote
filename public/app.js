@@ -5,6 +5,7 @@ import {
   deviceTimeZone,
   formatDisplayTime,
   loadDisplayTimezonePreference,
+  normalizeDisplayTimezonePreference,
   resolveDisplayTimeZone,
   saveDisplayTimezonePreference,
 } from "./display-timezone.js";
@@ -67,6 +68,7 @@ const elements = {
   sessionMetrics: byId("session-metrics"),
   currentSessionTitle: byId("current-session-title"),
   sessionSidebar: byId("session-sidebar"),
+  conversationShell: byId("conversation-shell"),
   openSidebarButton: byId("open-sidebar-button"),
   collapseSidebarButton: byId("collapse-sidebar-button"),
   appSettingsButton: byId("app-settings-button"),
@@ -170,7 +172,9 @@ const state = {
   /** 会话 ID → 选中时所在列表里的摘要；只含当前项目、当前视图、当前列表里可整理的项。 */
   selectedSessions: new Map(),
   sidebarCollapsed: stateGet(SIDEBAR_COLLAPSED_KEY) === "1",
+  /** 已保存的显示时区；设置对话框里未保存的改动只放在 draft 里预览。 */
   displayTimezone: loadDisplayTimezonePreference(),
+  displayTimezoneDraft: null,
   developerInstructions: "",
   appSettingsBusy: false,
   mobileSidebarOpen: false,
@@ -266,15 +270,14 @@ elements.appSettingsDialog.addEventListener("cancel", (event) => {
 });
 elements.appSettingsDialog.addEventListener("close", () => {
   closeFieldInfoPopovers();
+  discardDisplayTimezoneDraft();
   setAppSettingsStatus("");
 });
-elements.followDeviceTimezoneInput.addEventListener("change", commitDisplayTimezonePreference);
-elements.displayTimezoneCitySelect.addEventListener("change", commitDisplayTimezonePreference);
+elements.followDeviceTimezoneInput.addEventListener("change", previewDisplayTimezonePreference);
+elements.displayTimezoneCitySelect.addEventListener("change", previewDisplayTimezonePreference);
 window.addEventListener("storage", (event) => {
   if (event.key !== DISPLAY_TIMEZONE_KEY) return;
-  state.displayTimezone = loadDisplayTimezonePreference();
-  syncAppSettingsForm();
-  refreshDisplayedTimes();
+  applyStoredDisplayTimezone();
 });
 
 elements.sessionSearchInput.addEventListener("input", () => {
@@ -318,9 +321,7 @@ elements.bulkTrashButton.addEventListener("click", () => {
   void runBulkDangerAction();
 });
 
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && state.mobileSidebarOpen) closeMobileSidebar();
-});
+document.addEventListener("keydown", closeMobileSidebarOnEscape);
 
 elements.newSessionButton.addEventListener("click", () => {
   void startSession();
@@ -1509,11 +1510,14 @@ function openSidebar() {
   if (isMobileNavigation()) {
     state.mobileSidebarOpen = true;
     elements.appView.dataset.mobileSidebarOpen = "true";
-  } else {
-    state.sidebarCollapsed = false;
-    elements.appView.dataset.sidebarCollapsed = "false";
-    stateSet(SIDEBAR_COLLAPSED_KEY, "0");
+    syncSidebarState();
+    // 抽屉盖住页面后焦点进入侧栏；落在“收起”上，键盘用户一步就能退出。
+    elements.collapseSidebarButton.focus();
+    return;
   }
+  state.sidebarCollapsed = false;
+  elements.appView.dataset.sidebarCollapsed = "false";
+  stateSet(SIDEBAR_COLLAPSED_KEY, "0");
   syncSidebarState();
 }
 
@@ -1529,9 +1533,25 @@ function closeSidebar() {
 }
 
 function closeMobileSidebar() {
+  const wasOpen = state.mobileSidebarOpen;
   state.mobileSidebarOpen = false;
   elements.appView.dataset.mobileSidebarOpen = "false";
   syncSidebarState();
+  if (wasOpen && isMobileNavigation()) restoreFocusAfterMobileSidebar();
+}
+
+/** 焦点还在侧栏里（或随侧栏变 inert 掉回 body）时交还给汉堡按钮；已被对话框等接走就不抢。 */
+function restoreFocusAfterMobileSidebar() {
+  const active = document.activeElement;
+  if (active && active !== document.body && !elements.sessionSidebar.contains(active)) return;
+  elements.openSidebarButton.focus();
+}
+
+function closeMobileSidebarOnEscape(event) {
+  if (event.key !== "Escape" || !state.mobileSidebarOpen) return;
+  // 从侧栏打开的模态对话框自己处理 Escape；侧栏留着，关闭对话框后焦点才有地方回去。
+  if (document.querySelector("dialog[open]")) return;
+  closeMobileSidebar();
 }
 
 function isMobileNavigation() {
@@ -1552,6 +1572,8 @@ function syncSidebarState() {
     : !state.sidebarCollapsed;
   elements.sessionSidebar.inert = !sidebarVisible;
   elements.sessionSidebar.setAttribute("aria-hidden", String(!sidebarVisible));
+  // 移动端侧栏盖住页面时，被遮住的会话页不可聚焦、不可点、对辅助技术隐藏。
+  elements.conversationShell.inert = isMobileNavigation() && state.mobileSidebarOpen;
   elements.openSidebarButton.setAttribute("aria-expanded", String(sidebarVisible));
   updateConversationTitle();
 }
@@ -3575,12 +3597,13 @@ function formatDate(value) {
   const milliseconds = value < 1_000_000_000_000 ? value * 1_000 : value;
   return formatDisplayTime(
     milliseconds,
-    resolveDisplayTimeZone(state.displayTimezone, deviceTimeZone()),
+    resolveDisplayTimeZone(displayedTimezone(), deviceTimeZone()),
   );
 }
 
 async function openAppSettings() {
   if (state.appSettingsBusy) return;
+  discardDisplayTimezoneDraft();
   syncAppSettingsForm();
   setAppSettingsStatus("");
   await loadDeveloperInstructions();
@@ -3600,10 +3623,11 @@ function closeFieldInfoPopovers() {
 }
 
 function syncAppSettingsForm() {
-  const prefs = state.displayTimezone;
+  const prefs = displayedTimezone();
   elements.followDeviceTimezoneInput.checked = prefs.followDevice;
+  elements.followDeviceTimezoneInput.disabled = state.appSettingsBusy;
   elements.displayTimezoneCitySelect.value = prefs.cityTimeZone;
-  elements.displayTimezoneCitySelect.disabled = prefs.followDevice;
+  elements.displayTimezoneCitySelect.disabled = prefs.followDevice || state.appSettingsBusy;
 }
 
 function developerInstructionsDirty() {
@@ -3644,6 +3668,7 @@ async function saveAppSettings() {
     const value = typeof data?.developerInstructions === "string" ? data.developerInstructions : "";
     state.developerInstructions = value;
     elements.developerInstructionsInput.value = value;
+    commitDisplayTimezoneDraft();
     elements.appSettingsDialog.close();
   } catch (error) {
     setAppSettingsStatus(errorMessage(error), "error");
@@ -3666,13 +3691,47 @@ function updateAppSettingsControls() {
   elements.appSettingsCancelButton.disabled = disabled;
   elements.appSettingsCloseButton.disabled = disabled;
   elements.appSettingsSaveButton.disabled = disabled;
+  syncAppSettingsForm();
 }
 
-function commitDisplayTimezonePreference() {
-  state.displayTimezone = saveDisplayTimezonePreference({
+function displayedTimezone() {
+  return state.displayTimezoneDraft ?? state.displayTimezone;
+}
+
+/** 对话框里改时区只预览；随“保存”写入本地存储，取消、关闭或 Escape 时丢弃。 */
+function previewDisplayTimezonePreference() {
+  const next = normalizeDisplayTimezonePreference({
     followDevice: elements.followDeviceTimezoneInput.checked,
     cityTimeZone: elements.displayTimezoneCitySelect.value,
   });
+  const saved = state.displayTimezone;
+  state.displayTimezoneDraft = next.followDevice === saved.followDevice &&
+      next.cityTimeZone === saved.cityTimeZone
+    ? null
+    : next;
+  syncAppSettingsForm();
+  refreshDisplayedTimes();
+}
+
+function commitDisplayTimezoneDraft() {
+  if (state.displayTimezoneDraft === null) return;
+  state.displayTimezone = saveDisplayTimezonePreference(state.displayTimezoneDraft);
+  state.displayTimezoneDraft = null;
+  syncAppSettingsForm();
+  refreshDisplayedTimes();
+}
+
+function discardDisplayTimezoneDraft() {
+  if (state.displayTimezoneDraft === null) return;
+  state.displayTimezoneDraft = null;
+  syncAppSettingsForm();
+  refreshDisplayedTimes();
+}
+
+/** 另一个标签页保存了时区：更新已保存值；本页正在预览的未保存改动保持不动。 */
+function applyStoredDisplayTimezone() {
+  state.displayTimezone = loadDisplayTimezonePreference();
+  if (state.displayTimezoneDraft !== null) return;
   syncAppSettingsForm();
   refreshDisplayedTimes();
 }
