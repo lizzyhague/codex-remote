@@ -2,6 +2,7 @@ export class SlashCommandMenu {
   constructor(options) {
     this._input = options.input;
     this._element = options.element;
+    this._button = options.button ?? null;
     this._request = options.request;
     this._onResult = options.onResult;
     this._onError = options.onError;
@@ -14,6 +15,9 @@ export class SlashCommandMenu {
     this._visibleItems = [];
     this._selectedIndex = 0;
     this._busy = false;
+    this._element.addEventListener?.("keydown", (event) => {
+      this.handleKeydown(event);
+    });
   }
 
   async load() {
@@ -28,11 +32,15 @@ export class SlashCommandMenu {
     }
   }
 
-  close() {
+  close({ restoreButtonFocus = false } = {}) {
+    const restoreFocus = restoreButtonFocus && this._fromButton;
     this._element.hidden = true;
     this._element.replaceChildren();
+    this._button?.setAttribute("aria-expanded", "false");
     this._visibleItems = [];
     this._selectedIndex = 0;
+    this._fromButton = false;
+    if (restoreFocus) this._button?.focus();
   }
 
   toggleAll() {
@@ -62,13 +70,17 @@ export class SlashCommandMenu {
     if (this._element.hidden || !this._visibleItems.length) return false;
     if (event.key === "Escape") {
       event.preventDefault();
-      this.close();
+      this.close({ restoreButtonFocus: true });
       return true;
     }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       this._moveSelection(event.key === "ArrowDown" ? 1 : -1);
       return true;
+    }
+    if (event.key === "Tab" && this._fromButton) {
+      this.close({ restoreButtonFocus: true });
+      return false;
     }
     if (event.key === "Enter" || event.key === "Tab") {
       event.preventDefault();
@@ -141,8 +153,9 @@ export class SlashCommandMenu {
 
   async _chooseCommand(command) {
     if (command.name === "rename" && this._onRename) {
+      const fromButton = this._fromButton;
       this.close();
-      if (!this._fromButton) this._setInput("");
+      if (!fromButton) this._setInput("");
       this._onRename();
       return;
     }
@@ -159,6 +172,7 @@ export class SlashCommandMenu {
     await this._withBusy(async () => {
       this.close();
       if (clearInput) this._setInput("");
+      else this._input.focus();
       const result = await this._request("command.run", {
         command: command.name,
         option,
@@ -185,8 +199,9 @@ export class SlashCommandMenu {
   _show(fragment, buttons) {
     this._element.replaceChildren(fragment);
     this._element.hidden = false;
+    this._button?.setAttribute("aria-expanded", String(this._fromButton));
     this._visibleItems = buttons;
-    this._selectedIndex = Math.max(0, buttons.findIndex((button) => !button.disabled));
+    this._selectedIndex = buttons.findIndex((button) => !button.disabled);
     this._updateSelection();
   }
 
@@ -206,8 +221,11 @@ export class SlashCommandMenu {
   _updateSelection() {
     this._visibleItems.forEach((button, index) => {
       button.setAttribute("aria-selected", index === this._selectedIndex ? "true" : "false");
+      button.tabIndex = index === this._selectedIndex ? 0 : -1;
     });
-    this._visibleItems[this._selectedIndex]?.scrollIntoView({ block: "nearest" });
+    const selected = this._visibleItems[this._selectedIndex];
+    selected?.scrollIntoView({ block: "nearest" });
+    if (this._fromButton) selected?.focus();
   }
 
   _setInput(value) {

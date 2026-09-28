@@ -17,6 +17,8 @@ function eventHarness() {
   const shown = [];
   const cleared = [];
   const notes = [];
+  const finalized = [];
+  const thinking = [];
   const context = vm.createContext({
     TEMPORARY_ERROR: { lifetime: "temporary", tone: "error" },
     state: {
@@ -38,11 +40,12 @@ function eventHarness() {
     updateControls() {},
     appendAssistantDelta() {},
     completeAssistant() {},
-    showThinking() {},
+    showThinking: () => thinking.push("show"),
     sealAssistantStreams() {},
     startTool() {},
     appendToolOutput() {},
     completeTool() {},
+    finalizeTaskProjection: (...args) => finalized.push(args),
     publicAttachments: () => [],
     userMessageKey: (text, attachments) => JSON.stringify([text, attachments.map((a) => a.id)]),
     addMessage: () => ({}),
@@ -58,7 +61,7 @@ function eventHarness() {
     removeInteraction() {},
   });
   vm.runInContext(section("function handleServerEvent(", "function setCurrentSessionState("), context);
-  return { context, shown, cleared, notes };
+  return { context, shown, cleared, notes, finalized, thinking };
 }
 
 test("a retry notice belongs to its task and clears on later progress", () => {
@@ -113,6 +116,7 @@ test("live and replayed final task errors stay in the timeline without a replay 
 
   const live = eventHarness();
   live.context.handleServerEvent(event);
+  assert.deepEqual(live.finalized, [["task-1", "failed"]]);
   assert.deepEqual(live.notes, ["任务失败：最终失败。"]);
   assert.deepEqual(plain(live.shown), [{
     text: "最终失败。",
@@ -121,6 +125,7 @@ test("live and replayed final task errors stay in the timeline without a replay 
 
   const replayed = eventHarness();
   replayed.context.handleServerEvent(event, true);
+  assert.deepEqual(replayed.finalized, [["task-1", "failed"]]);
   assert.deepEqual(replayed.notes, ["任务失败：最终失败。"]);
   assert.deepEqual(replayed.shown, []);
 });
@@ -147,6 +152,27 @@ test("a replayed pre-turn failure clears its pending user-message binding", () =
   assert.deepEqual(h.context.state.pendingUserMessages, []);
   assert.deepEqual(h.notes, ["任务失败：Worker 启动失败。"]);
   assert.deepEqual(h.shown, []);
+});
+
+test("a late tool completion cannot restore thinking after task terminal", () => {
+  const h = eventHarness();
+  h.context.handleServerEvent({
+    type: "task.completed",
+    taskId: "task-1",
+    sessionId: "session-1",
+    status: "interrupted",
+  });
+  h.context.handleServerEvent({
+    type: "tool.completed",
+    taskId: "task-1",
+    sessionId: "session-1",
+    itemId: "tool-1",
+    tool: { status: "completed" },
+  });
+
+  assert.equal(h.context.state.running, false);
+  assert.deepEqual(h.finalized, [["task-1", "interrupted"]]);
+  assert.deepEqual(h.thinking, []);
 });
 
 test("a replayed non-retry error does not recreate a temporary notice", () => {

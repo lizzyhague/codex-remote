@@ -202,6 +202,7 @@ syncAppSettingsForm();
 const slashCommandOptions = {
   input: elements.messageInput,
   element: elements.slashMenu,
+  button: elements.commandMenuButton,
   request: requestSlashCommand,
   onResult: (result) => { addCommandResult(result); void refreshPickerLabels(); },
   onRename: openRenameDialog,
@@ -1935,14 +1936,14 @@ function handleServerEvent(event, replay = false) {
       break;
     case "message.delta":
       hideThinking();
-      appendAssistantDelta(event.itemId, event.delta || "");
+      appendAssistantDelta(event.itemId, event.delta || "", event.taskId);
       break;
     case "message.completed":
       hideThinking();
-      completeAssistant(event.itemId, event.text || "");
+      completeAssistant(event.itemId, event.text || "", event.taskId);
       break;
     case "tool.started":
-      sealAssistantStreams();
+      sealAssistantStreams(event.taskId);
       hideThinking();
       startTool(event);
       showThinking(event.tool?.kind === "think" ? "正在思考" : "正在执行工具");
@@ -1952,12 +1953,13 @@ function handleServerEvent(event, replay = false) {
       break;
     case "tool.completed":
       completeTool(event);
-      showThinking();
+      if (state.running) showThinking();
       break;
     case "task.completed":
       if (!replay) void refreshSessionMetrics();
       clearNotice(taskNoticeKey("retry", event.taskId || event.sessionId));
       clearNotice(taskNoticeKey("control", event.sessionId));
+      finalizeTaskProjection(event.taskId, event.status);
       {
         const pendingIndex = state.pendingUserMessages.findIndex((pending) =>
           pending.taskId === event.taskId
@@ -2080,7 +2082,7 @@ function setCurrentSessionState(sessionState) {
   renderSessionList();
 }
 
-function addMessage(role, text, id, buffered, attachments = []) {
+function addMessage(role, text, id, buffered, attachments = [], taskId = null) {
   hideEmpty();
   const article = document.createElement("article");
   article.className = `message ${role}`;
@@ -2104,6 +2106,8 @@ function addMessage(role, text, id, buffered, attachments = []) {
       completed: false,
       markdownRendered: false,
       frame: null,
+      taskId,
+      taskTerminal: false,
     });
   }
   return article;
@@ -2150,40 +2154,71 @@ function receiveUserMessage(event) {
  * 重放，同一条正文于是来第二遍——不先看一眼页面就会画成两份。用户气泡一直有
  * 这道检查，这里补上；返回 null 表示页面上已经有了，这一份直接丢掉。
  */
-function assistantStreamFor(itemId) {
+function assistantStreamFor(itemId, taskId = null) {
   const stream = state.assistantStreams.get(itemId);
-  if (stream) return stream;
+  if (stream) {
+    if (!stream.taskId && taskId) stream.taskId = taskId;
+    return stream;
+  }
   if (elements.timeline.querySelector(`[data-item-id="${CSS.escape(itemId)}"]`)) return null;
-  addMessage("assistant", "", itemId, true);
+  addMessage("assistant", "", itemId, true, [], taskId);
   return state.assistantStreams.get(itemId);
 }
 
-function appendAssistantDelta(itemId, delta) {
+function appendAssistantDelta(itemId, delta, taskId = null) {
   if (!itemId || !delta) return;
-  const stream = assistantStreamFor(itemId);
+  const stream = assistantStreamFor(itemId, taskId);
   if (!stream) return;
   stream.target += delta;
   stream.element.classList.add("pending");
   scheduleAssistantFrame(stream);
 }
 
-function sealAssistantStreams() {
+function sealAssistantStreams(taskId = null, immediate = false) {
   for (const [itemId, stream] of state.assistantStreams) {
-    if (!stream.completed && stream.target) completeAssistant(itemId, stream.target);
+    if (taskId && stream.taskId !== taskId) continue;
+    if (immediate && stream.target) {
+      stream.taskTerminal = true;
+      finishAssistantStream(stream);
+    } else if (!stream.completed && stream.target) {
+      completeAssistant(itemId, stream.target, stream.taskId);
+    }
   }
 }
 
-function completeAssistant(itemId, text) {
-  const stream = assistantStreamFor(itemId);
+function completeAssistant(itemId, text, taskId = null) {
+  const stream = assistantStreamFor(itemId, taskId);
   if (!stream) return;
+  if (stream.completed && stream.target === text) return;
   if (!text.startsWith(stream.shown)) {
     stream.shown = "";
     stream.textElement.textContent = "";
   }
   stream.target = text;
   stream.completed = true;
+  if (stream.taskTerminal) {
+    stream.markdownRendered = false;
+    finishAssistantStream(stream);
+    return;
+  }
   stream.element.classList.add("pending");
   scheduleAssistantFrame(stream);
+}
+
+function finishAssistantStream(stream) {
+  if (stream.completed && stream.frame === null && stream.markdownRendered) {
+    stream.element.classList.remove("pending");
+    return;
+  }
+  const stickToBottom = isNearBottom();
+  if (stream.frame !== null) cancelAnimationFrame(stream.frame);
+  stream.frame = null;
+  stream.completed = true;
+  stream.shown = stream.target;
+  stream.element.classList.remove("pending");
+  stream.element.replaceChildren(renderMarkdown(stream.target));
+  stream.markdownRendered = true;
+  if (stickToBottom) scrollToBottom(false);
 }
 
 function scheduleAssistantFrame(stream) {
@@ -2199,6 +2234,7 @@ function animateAssistant(stream) {
     const stickToBottom = isNearBottom();
     stream.shown = stream.target;
     stream.element.replaceChildren(renderMarkdown(stream.target));
+    if (stream.completed) stream.element.classList.remove("pending");
     if (stickToBottom) scrollToBottom(false);
     return;
   }
@@ -2234,7 +2270,7 @@ function startTool(event) {
   const tool = publicTool(event.tool);
   const kind = normalizeToolKind(tool.kind);
   if (kind === "think") {
-    state.commands.set(itemId, { mode: "hidden", kind });
+    state.commands.set(itemId, { mode: "hidden", kind, taskId: event.taskId ?? null });
     return;
   }
   const entries = publicToolEntries(tool.entries, kind, tool.title);
@@ -2250,6 +2286,8 @@ function startTool(event) {
       title: tool.title || kind,
       status: tool.status || "inProgress",
       entries,
+      taskId: event.taskId ?? null,
+      taskTerminalStatus: null,
     };
     state.commands.set(itemId, command);
     renderToolEntry(command);
@@ -2280,6 +2318,8 @@ function startTool(event) {
     output: typeof tool.output === "string" ? tool.output : "",
     truncated: tool.outputTruncated === true,
     exitCode: typeof tool.exitCode === "number" ? tool.exitCode : null,
+    taskId: event.taskId ?? null,
+    taskTerminalStatus: null,
   };
   state.commands.set(itemId, command);
   renderToolEntry(command);
@@ -2303,6 +2343,8 @@ function completeTool(event) {
   if (!state.commands.has(itemId)) startTool(event);
   const command = state.commands.get(itemId);
   if (!command) return;
+  if (!command.taskId && event.taskId) command.taskId = event.taskId;
+  const taskTerminalStatus = command.taskTerminalStatus;
   const tool = publicTool(event.tool);
   const nextKind = normalizeToolKind(tool.kind || command.kind);
   if (nextKind === "think") {
@@ -2316,6 +2358,7 @@ function completeTool(event) {
   if (typeof tool.status === "string" && tool.status) command.status = tool.status;
   if (command.mode === "inline") {
     command.entries = publicToolEntries(tool.entries, nextKind, command.title);
+    if (taskTerminalStatus) command.status = taskTerminalStatus;
     renderToolEntry(command);
     return;
   }
@@ -2329,7 +2372,24 @@ function completeTool(event) {
     command.truncated = tool.outputTruncated === true || tool.output.length > MAX_COMMAND_OUTPUT;
   }
   if (typeof tool.exitCode === "number") command.exitCode = tool.exitCode;
+  if (taskTerminalStatus) command.status = taskTerminalStatus;
   renderToolEntry(command);
+}
+
+function finalizeTaskProjection(taskId, taskStatus) {
+  if (!taskId) return;
+  sealAssistantStreams(taskId, true);
+  const toolStatus = taskStatus === "interrupted"
+    ? "interrupted"
+    : taskStatus === "completed"
+    ? "completed"
+    : "failed";
+  for (const command of state.commands.values()) {
+    if (command.taskId !== taskId || !isRunningTool(command)) continue;
+    command.status = toolStatus;
+    command.taskTerminalStatus = toolStatus;
+    renderToolEntry(command);
+  }
 }
 
 function renderToolEntry(command) {
@@ -3398,6 +3458,8 @@ function commandStatus(status) {
     ? "完成"
     : status === "failed"
     ? "失败"
+    : status === "interrupted"
+    ? "已停止"
     : status === "declined"
     ? "已拒绝"
     : status === "inProgress" || status === "in_progress" || status === "pending"

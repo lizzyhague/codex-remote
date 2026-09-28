@@ -5,7 +5,7 @@ import vm from "node:vm";
 
 const source = await readFile(new URL("./app.js", import.meta.url), "utf8");
 const STREAMS = source.slice(
-  source.indexOf("function assistantStreamFor(itemId)"),
+  source.indexOf("function assistantStreamFor(itemId,"),
   source.indexOf("function scheduleAssistantFrame(stream)"),
 );
 
@@ -20,7 +20,7 @@ function streamContext({ onPage = [] } = {}) {
           onPage.some((id) => selector.includes(`"${id}"`)) ? { id: selector } : null,
       },
     },
-    addMessage: (role, text, id) => {
+    addMessage: (role, text, id, _buffered, _attachments, taskId) => {
       added.push({ role, id });
       context.state.assistantStreams.set(id, {
         element: { classList: { add() {} } },
@@ -30,6 +30,8 @@ function streamContext({ onPage = [] } = {}) {
         completed: false,
         markdownRendered: false,
         frame: null,
+        taskId: taskId ?? null,
+        taskTerminal: false,
       });
     },
     scheduleAssistantFrame: () => {},
@@ -51,9 +53,10 @@ test("a replayed reply already drawn from history is dropped instead of doubled"
 test("a reply the page has never drawn still opens its own bubble", () => {
   const { context, added } = streamContext();
 
-  context.appendAssistantDelta("item-2", "你好");
+  context.appendAssistantDelta("item-2", "你好", "task-2");
   assert.deepEqual(added, [{ role: "assistant", id: "item-2" }]);
   assert.equal(context.state.assistantStreams.get("item-2").target, "你好");
+  assert.equal(context.state.assistantStreams.get("item-2").taskId, "task-2");
 
   context.completeAssistant("item-2", "你好，世界");
   assert.equal(added.length, 1);
