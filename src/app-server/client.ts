@@ -82,7 +82,7 @@ export class AppServerClient {
       ["app-server", "--stdio"],
       {
         cwd: options.workingDirectory,
-        env: options.environment ?? process.env,
+        env: withoutRemoteAccessToken(options.environment ?? process.env),
         stdio: ["pipe", "pipe", "pipe"],
         detached: this.#processGroup,
       },
@@ -324,6 +324,12 @@ export class AppServerClient {
     }
     this.#pending.clear();
   }
+}
+
+function withoutRemoteAccessToken(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const childEnvironment = { ...environment };
+  delete childEnvironment.CODEX_REMOTE_TOKEN;
+  return childEnvironment;
 }
 
 function processGroupExists(processGroupId: number): boolean {

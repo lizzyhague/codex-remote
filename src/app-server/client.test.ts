@@ -87,6 +87,61 @@ lines.on("line", (line) => {
   }
 });
 
+test("does not pass the web access token to app-server", async (context) => {
+  const temporaryDirectory = await mkdtemp(path.join(tmpdir(), "codex-remote-env-"));
+  context.after(() => rm(temporaryDirectory, { recursive: true, force: true }));
+  const fakeServer = path.join(temporaryDirectory, "fake-app-server.mjs");
+  await writeFile(fakeServer, `#!/usr/bin/env node
+import { createInterface } from "node:readline";
+const lines = createInterface({ input: process.stdin });
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method !== "initialize") return;
+  console.log(JSON.stringify({
+    id: message.id,
+    result: {
+      userAgent: JSON.stringify({
+        remoteToken: process.env.CODEX_REMOTE_TOKEN ?? null,
+        inherited: process.env.CODEX_REMOTE_ENV_PROBE ?? null
+      }),
+      codexHome: "/tmp/fake-codex",
+      platformFamily: "unix",
+      platformOs: "linux"
+    }
+  }));
+});
+`, "utf8");
+  await chmod(fakeServer, 0o700);
+
+  const client = new AppServerClient({
+    codexBinary: fakeServer,
+    environment: {
+      ...process.env,
+      CODEX_REMOTE_TOKEN: "web-access-token-must-not-be-inherited",
+      CODEX_REMOTE_ENV_PROBE: "still-inherited",
+    },
+  });
+  try {
+    const initialized = await client.initialize({
+      clientInfo: {
+        name: "codex_remote_test",
+        title: "Codex Remote Test",
+        version: "0.1.0",
+      },
+      capabilities: {
+        experimentalApi: false,
+        requestAttestation: false,
+      },
+    });
+    assert.deepEqual(JSON.parse(initialized.userAgent), {
+      remoteToken: null,
+      inherited: "still-inherited",
+    });
+  } finally {
+    await client.close();
+  }
+});
+
 test("closes descendants left in a Worker process group", async (context) => {
   const temporaryDirectory = await mkdtemp(path.join(tmpdir(), "codex-remote-group-"));
   const pidFile = path.join(temporaryDirectory, "descendant.pid");
