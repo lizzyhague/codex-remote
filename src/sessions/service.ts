@@ -459,11 +459,15 @@ export class CodexSessionService {
    * 启动和每日清理的入口：先把上次没走完的移入 / 恢复推进到终态，再永久删除
    * `deleting` 条目和过期的回收站条目。过渡条目推进失败时留待下次，不会被当作过期删除。
    */
-  purgeExpired(): Promise<TrashCleanupResult> {
-    return this.#serializeMutation(async () => {
-      const result: TrashCleanupResult = { settled: 0, deleted: 0, failed: [] };
-      for (const entry of this.#trash.list()) {
-        if (entry.state !== "trashing" && entry.state !== "restoring") continue;
+  async purgeExpired(): Promise<TrashCleanupResult> {
+    const result: TrashCleanupResult = { settled: 0, deleted: 0, failed: [] };
+    const unsettledIds = this.#trash.list()
+      .filter((entry) => entry.state === "trashing" || entry.state === "restoring")
+      .map((entry) => entry.threadId);
+    for (const threadId of unsettledIds) {
+      await this.#serializeMutation(async () => {
+        const entry = this.#trash.get(threadId);
+        if (!entry || (entry.state !== "trashing" && entry.state !== "restoring")) return;
         try {
           if (entry.state === "trashing") await this.#finishTrashing(entry);
           else await this.#finishRestoring(entry);
@@ -479,14 +483,25 @@ export class CodexSessionService {
             message: describeFailure(error),
           });
         }
-      }
+      });
+    }
 
-      const threshold = this.#now() - TRASH_RETENTION_SECONDS;
-      const expired = this.#trash.list().filter((entry) =>
+    const threshold = this.#now() - TRASH_RETENTION_SECONDS;
+    const expiredIds = this.#trash.list()
+      .filter((entry) =>
         entry.state === "deleting" ||
         (entry.state === "trashed" && entry.deletedAt <= threshold)
-      );
-      for (const entry of expired) {
+      )
+      .map((entry) => entry.threadId);
+    for (const threadId of expiredIds) {
+      await this.#serializeMutation(async () => {
+        const entry = this.#trash.get(threadId);
+        const currentThreshold = this.#now() - TRASH_RETENTION_SECONDS;
+        if (
+          !entry ||
+          (entry.state !== "deleting" &&
+            (entry.state !== "trashed" || entry.deletedAt > currentThreshold))
+        ) return;
         try {
           await this.#deletions.delete(entry);
           result.deleted += 1;
@@ -501,9 +516,9 @@ export class CodexSessionService {
             message: describeFailure(error),
           });
         }
-      }
-      return result;
-    });
+      });
+    }
+    return result;
   }
 
   /**

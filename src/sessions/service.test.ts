@@ -413,6 +413,70 @@ test("permanently deletes trash entries after thirty days", async (context) => {
   }]);
 });
 
+test("rechecks retention after an expired session is restored and trashed again", async (context) => {
+  const { catalog, project, trash } = await createFixture(context);
+  for (const threadId of ["thread-blocking", "thread-refreshed"]) {
+    await trash.put({
+      threadId,
+      projectId: "workspace/alpha",
+      deletedAt: 100,
+      origin: "archived",
+      state: "trashed",
+    });
+  }
+  const firstDeleteStarted = Promise.withResolvers<void>();
+  const releaseFirstDelete = Promise.withResolvers<void>();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const transport: AppServerRequester = {
+    async request<Result>(method: string, params: unknown) {
+      requests.push({ method, params });
+      const threadId = (params as { threadId?: unknown }).threadId;
+      if (method === "thread/delete") {
+        assert.equal(threadId, "thread-blocking");
+        firstDeleteStarted.resolve();
+        await releaseFirstDelete.promise;
+        return {} as Result;
+      }
+      if (method === "thread/read" && threadId === "thread-refreshed") {
+        return { thread: thread("thread-refreshed", project) } as Result;
+      }
+      assert.fail(`unexpected request: ${method} ${String(threadId)}`);
+    },
+  };
+  let now = 100 + TRASH_RETENTION_SECONDS;
+  const service = new CodexSessionService(transport, catalog, trash, { now: () => now });
+
+  const cleanup = service.purgeExpired();
+  await firstDeleteStarted.promise;
+  const restore = service.restoreTrash("workspace/alpha", ["thread-refreshed"]);
+  now += 1;
+  const retrash = service.moveToTrash(
+    "workspace/alpha",
+    ["thread-refreshed"],
+    "archived",
+  );
+  releaseFirstDelete.resolve();
+  assert.deepEqual(await restore, { succeeded: ["thread-refreshed"], failed: [] });
+  assert.deepEqual(
+    await retrash,
+    { succeeded: ["thread-refreshed"], failed: [] },
+  );
+
+  assert.deepEqual(await cleanup, { settled: 0, deleted: 1, failed: [] });
+  assert.equal(trash.has("thread-blocking"), false);
+  assert.deepEqual(trash.get("thread-refreshed"), {
+    threadId: "thread-refreshed",
+    projectId: "workspace/alpha",
+    deletedAt: now,
+    origin: "archived",
+    state: "trashed",
+  });
+  assert.deepEqual(
+    requests.filter((request) => request.method === "thread/delete"),
+    [{ method: "thread/delete", params: { threadId: "thread-blocking" } }],
+  );
+});
+
 test("startup cleanup resumes a recent deletion left in progress", async (context) => {
   const { catalog, trash, marks } = await createFixture(context);
   await trash.put({
