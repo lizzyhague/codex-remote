@@ -2240,12 +2240,13 @@ function addMessage(role, text, id, buffered, attachments = [], taskId = null) {
 
 /** 附件名按文字节点原样显示；换行和控制字符不会被当成 Markdown 或另一条附件。 */
 function renderMessageAttachments(attachments) {
-  const list = document.createElement("ul");
+  const list = document.createElement("div");
   list.className = "message-attachments";
   for (const attachment of attachments) {
-    const item = document.createElement("li");
-    item.textContent = `附件：${attachment.originalName} · ${attachment.id}`;
-    list.append(item);
+    const chip = document.createElement("span");
+    chip.className = "message-attachment";
+    chip.textContent = attachment.originalName || "未命名文件";
+    list.append(chip);
   }
   return list;
 }

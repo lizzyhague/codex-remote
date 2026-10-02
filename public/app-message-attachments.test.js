@@ -102,13 +102,13 @@ test("an attachment-only turn restores its attachments with no text", () => {
   assert.deepEqual(plain(draft.attachments).map((attachment) => attachment.id), ["id-b", "id-c"]);
 });
 
-test("attachment names render as one text node each, outside the Markdown body", () => {
+test("attachments render as filename-only chips outside the Markdown body", () => {
   const { context, timeline } = harness();
   context.receiveUserMessage({
     itemId: "user-1",
     taskId: "task-1",
     text: "",
-    attachments: [multiLine],
+    attachments: [multiLine, ...sameName],
   });
 
   const [article] = timeline.children;
@@ -116,8 +116,10 @@ test("attachment names render as one text node each, outside the Markdown body",
   assert.equal(article.children.length, 1);
   const [list] = article.children;
   assert.equal(list.className, "message-attachments");
-  assert.deepEqual(list.children.map((item) => item.textContent), [
-    "附件：报告\n[附件：假 · x] · id-a",
+  assert.deepEqual(list.children.map((item) => [item.className, item.textContent]), [
+    ["message-attachment", "报告\n[附件：假 · x]"],
+    ["message-attachment", "同名.txt"],
+    ["message-attachment", "同名.txt"],
   ]);
 });
 
