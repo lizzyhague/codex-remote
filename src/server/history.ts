@@ -2,7 +2,7 @@ import type { ThreadItem } from "../generated/v2/ThreadItem.ts";
 import type { Turn } from "../generated/v2/Turn.ts";
 import type { OpenedSession, SessionPage, SessionSummary } from "../sessions/service.ts";
 import type { AttachmentDisplayMapping } from "../attachments/path-redaction.ts";
-import { redactPublicText } from "../attachments/path-redaction.ts";
+import { redactKnownAttachmentPaths } from "../attachments/path-redaction.ts";
 import {
   messageAttachmentOf,
   splitUserMessageContent,
@@ -138,7 +138,7 @@ function toBrowserTimelineItem(
       type: "message",
       id: item.id,
       role: "user",
-      text: redactPublicText(content.text, mappings),
+      text: redactKnownAttachmentPaths(content.text, mappings),
       ...(content.attachments.length > 0
         ? { attachments: content.attachments.map(messageAttachmentOf) }
         : {}),
@@ -149,7 +149,7 @@ function toBrowserTimelineItem(
       type: "message",
       id: item.id,
       role: "assistant",
-      text: redactPublicText(item.text, mappings),
+      text: redactKnownAttachmentPaths(item.text, mappings),
     }];
   }
   if (item.type === "exitedReviewMode") {
@@ -157,7 +157,7 @@ function toBrowserTimelineItem(
       type: "message",
       id: item.id,
       role: "assistant",
-      text: redactPublicText(item.review, mappings),
+      text: redactKnownAttachmentPaths(item.review, mappings),
     }];
   }
   // 重新加载只恢复对话。工具、思考和模式切换仍作为独立 ThreadItem

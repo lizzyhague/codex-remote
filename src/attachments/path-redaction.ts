@@ -6,6 +6,7 @@ export type AttachmentDisplayMapping = {
 
 type Replacement = {
   variant: string;
+  searchVariant: string;
   label: string;
 };
 
@@ -30,21 +31,30 @@ export function redactKnownAttachmentPaths(
   text: string,
   mappings: readonly AttachmentDisplayMapping[],
 ): string {
-  const replacements = replacementsFor(mappings);
-  if (replacements.length === 0 || text.length === 0) return text;
-  let result = "";
-  let index = 0;
-  while (index < text.length) {
-    const matched = matchAt(text, index, replacements);
-    if (matched) {
-      result += matched.label;
-      index += matched.variant.length;
-    } else {
-      result += text[index];
-      index += 1;
+  if (mappings.length === 0 || text.length === 0) return text;
+  const replacements = cachedReplacementsFor(mappings);
+  if (replacements.length === 0) return text;
+  const searchableText = normalizePercentEscapes(text);
+  const hits: { index: number; replacement: Replacement }[] = [];
+  for (const replacement of replacements) {
+    let index = searchableText.indexOf(replacement.searchVariant);
+    while (index !== -1) {
+      hits.push({ index, replacement });
+      index = searchableText.indexOf(replacement.searchVariant, index + 1);
     }
   }
-  return result;
+  if (hits.length === 0) return text;
+  hits.sort((left, right) =>
+    left.index - right.index || right.replacement.variant.length - left.replacement.variant.length
+  );
+  let result = "";
+  let cursor = 0;
+  for (const { index, replacement } of hits) {
+    if (index < cursor) continue;
+    result += text.slice(cursor, index) + replacement.label;
+    cursor = index + replacement.variant.length;
+  }
+  return result + text.slice(cursor);
 }
 
 /**
@@ -65,14 +75,6 @@ export function redactHostPaths(text: string): string {
   return redactRawPosixPaths(redacted, currentProtectedUrls);
 }
 
-/** 已知附件先换成友好名称，剩余宿主绝对路径再统一隐藏。 */
-export function redactPublicText(
-  text: string,
-  mappings: readonly AttachmentDisplayMapping[] = [],
-): string {
-  return redactHostPaths(redactKnownAttachmentPaths(text, mappings));
-}
-
 /** 递归替换对象里的已知附件路径；只改显示副本，不改原值。 */
 export function redactKnownAttachmentPathsDeep<T>(
   value: T,
@@ -82,19 +84,11 @@ export function redactKnownAttachmentPathsDeep<T>(
   return redactValue(value, mappings) as T;
 }
 
-/** 递归建立浏览器显示副本；不修改输入对象。 */
-export function redactPublicTextDeep<T>(
-  value: T,
-  mappings: readonly AttachmentDisplayMapping[] = [],
-): T {
-  return redactPublicValue(value, mappings) as T;
-}
-
 /**
- * 流式输出时先扣住可能构成已知附件或其他宿主路径的尾部，确认安全后再发给页面。
+ * 流式输出时先扣住可能构成已知附件路径的尾部前缀，完整匹配后再发给页面。
  * flush 用于完成、失败或中断，避免丢字、重复或一直缓冲。
  */
-export class BrowserPathStreamRedactor {
+export class AttachmentPathStreamRedactor {
   #mappings: AttachmentDisplayMapping[];
   #replacements: Replacement[];
   #buffer = "";
@@ -146,21 +140,6 @@ export class BrowserPathStreamRedactor {
           break;
         }
       }
-      if (isPossibleHostPathStart(source, index)) {
-        const boundary = findStreamBoundary(source, index + 1);
-        if (boundary === -1 && !flushing) {
-          this.#buffer = rest;
-          return emitted;
-        }
-        const end = boundary === -1 ? source.length : boundary;
-        const candidate = source.slice(index, end);
-        const redacted = redactHostPaths(candidate);
-        if (redacted !== candidate) {
-          emitted += redacted;
-          index = end;
-          continue;
-        }
-      }
       emitted += source[index];
       index += 1;
     }
@@ -183,18 +162,30 @@ function redactValue(value: unknown, mappings: readonly AttachmentDisplayMapping
   return value;
 }
 
-function redactPublicValue(value: unknown, mappings: readonly AttachmentDisplayMapping[]): unknown {
-  if (typeof value === "string") return redactPublicText(value, mappings);
-  if (Array.isArray(value)) return value.map((entry) => redactPublicValue(entry, mappings));
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
-        key,
-        redactPublicValue(entry, mappings),
-      ]),
-    );
+const REPLACEMENT_CACHE_LIMIT = 32;
+const replacementCache = new Map<string, Replacement[]>();
+
+function cachedReplacementsFor(
+  mappings: readonly AttachmentDisplayMapping[],
+): Replacement[] {
+  const key = JSON.stringify(mappings.map((mapping) => [
+    mapping.id,
+    mapping.originalName,
+    mapping.path,
+  ]));
+  const cached = replacementCache.get(key);
+  if (cached) {
+    replacementCache.delete(key);
+    replacementCache.set(key, cached);
+    return cached;
   }
-  return value;
+  const replacements = replacementsFor(mappings);
+  if (replacementCache.size >= REPLACEMENT_CACHE_LIMIT) {
+    const oldest = replacementCache.keys().next().value;
+    if (oldest !== undefined) replacementCache.delete(oldest);
+  }
+  replacementCache.set(key, replacements);
+  return replacements;
 }
 
 function replacementsFor(mappings: readonly AttachmentDisplayMapping[]): Replacement[] {
@@ -213,7 +204,11 @@ function replacementsFor(mappings: readonly AttachmentDisplayMapping[]): Replace
     for (const variant of pathVariants(mapping.path)) {
       if (!variant || seen.has(variant)) continue;
       seen.add(variant);
-      replacements.push({ variant, label });
+      replacements.push({
+        variant,
+        searchVariant: normalizePercentEscapes(variant),
+        label,
+      });
     }
   }
   replacements.sort((left, right) => right.variant.length - left.variant.length);
@@ -307,6 +302,11 @@ function isPercentHexAt(value: string, index: number): boolean {
   if (!/[0-9a-f]/iu.test(value[index] ?? "")) return false;
   return value[index - 1] === "%" ||
     (value[index - 2] === "%" && /[0-9a-f]/iu.test(value[index - 1] ?? ""));
+}
+
+/** 百分号转义大小写等价；转换不改变字符串长度，命中位置可直接用于原文。 */
+function normalizePercentEscapes(value: string): string {
+  return value.replace(/%[0-9a-f]{2}/giu, (escape) => escape.toUpperCase());
 }
 
 type TextRange = { start: number; end: number };
@@ -406,31 +406,6 @@ function rawPosixPathEnd(text: string, start: number): number {
 
 function isHostPathCandidate(value: string): boolean {
   return value.slice(1).includes("/");
-}
-
-function isPossibleHostPathStart(source: string, index: number): boolean {
-  const rest = source.slice(index);
-  const lower = rest.toLowerCase();
-  if (lower.startsWith("file:") || lower.startsWith("file%3a")) return true;
-  if (lower.startsWith("%2f") || "%2f".startsWith(lower)) return true;
-  if (/^[a-z]:\\/iu.test(rest) || /^[a-z]:$/iu.test(rest)) return true;
-  if (source[index] !== "/") return false;
-  if (
-    source[index + 1] === "/" ||
-    source[index - 1] === "/" ||
-    source[index - 1] === ":" ||
-    (source[index - 1] !== undefined && /[\p{L}\p{N}._~\/-]/u.test(source[index - 1]!))
-  ) {
-    return false;
-  }
-  return !protectedUrlRanges(source).some((range) => index >= range.start && index < range.end);
-}
-
-function findStreamBoundary(source: string, start: number): number {
-  for (let index = start; index < source.length; index += 1) {
-    if (STREAM_BOUNDARY_PATTERN.test(source[index]!)) return index;
-  }
-  return -1;
 }
 
 function looksLikePublicRoute(value: string): boolean {

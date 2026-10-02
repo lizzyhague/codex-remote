@@ -155,13 +155,13 @@ function approvalHarness() {
   return { context, approvalList };
 }
 
-test("an approval card always names its source and shows only the public scope summary", () => {
+test("an approval card names its source and shows the command path", () => {
   const h = approvalHarness();
   h.context.addApproval({
     id: "approval-1",
     kind: "command",
     reason: "需要读取一个文件",
-    commandSummary: "cat ‹主机路径›",
+    commandSummary: "cat /home/example/project/file.txt",
     network: { protocol: "https", host: "example.com" },
     canApprove: true,
   }, {
@@ -172,9 +172,9 @@ test("an approval card always names its source and shows only the public scope s
   const card = h.approvalList.children[0];
   assert.equal(card.dataset.sessionId, "session-a-123456");
   assert.match(visibleText(card), /来源会话：后台会话 · session-/u);
-  assert.match(visibleText(card), /命令：cat ‹主机路径›/u);
+  assert.match(visibleText(card), /命令：cat \/home\/example\/project\/file\.txt/u);
   assert.match(visibleText(card), /网络访问：https:\/\/example\.com/u);
-  assert.equal(visibleText(card).includes("/home/"), false);
+  assert.ok(visibleText(card).includes("/home/example/project/file.txt"));
 });
 
 test("an incomplete permission summary offers decline but not approval", () => {

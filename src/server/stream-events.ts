@@ -1,6 +1,6 @@
 import type { CodexStreamEvent } from "../app-server/turn-session.ts";
 import type { AttachmentDisplayMapping } from "../attachments/path-redaction.ts";
-import { redactPublicTextDeep } from "../attachments/path-redaction.ts";
+import { redactKnownAttachmentPathsDeep } from "../attachments/path-redaction.ts";
 import { publicTurnErrorMessage } from "./public-output.ts";
 
 export function toBrowserStreamEvent(
@@ -45,10 +45,10 @@ export function toBrowserStreamEvent(
   return { type, sessionId, taskId: nativeTurnId, nativeTurnId, ...projectedPayload };
 }
 
-/** 所有浏览器事件使用同一份显示副本，隐藏宿主绝对路径但保留其他文字。 */
+/** 把已知附件路径从即将发给浏览器的事件副本里换掉。 */
 export function redactBrowserStreamEvent<T extends Record<string, unknown>>(
   event: T,
   mappings: readonly AttachmentDisplayMapping[],
 ): T {
-  return redactPublicTextDeep(event, mappings);
+  return redactKnownAttachmentPathsDeep(event, mappings);
 }

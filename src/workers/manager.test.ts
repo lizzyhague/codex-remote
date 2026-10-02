@@ -47,7 +47,7 @@ test("keeps an accepted turn running after the browser disconnects", async (cont
   assert.equal(fixture.store.require(accepted.taskId).status, "completed");
 });
 
-test("publishes recognizable path-redacted approval scopes and resolves an answer only once", async (context) => {
+test("publishes complete approval paths and resolves an answer only once", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 50 });
   const events: Array<{ audience: string; event: Record<string, unknown> }> = [];
   fixture.manager.onEvent((stored) => events.push({
@@ -73,13 +73,13 @@ test("publishes recognizable path-redacted approval scopes and resolves an answe
     id: "thread-1",
     title: "测试会话",
   });
-  assert.equal(JSON.stringify(commandEvent.event).includes("/home/private"), false);
+  assert.ok(JSON.stringify(commandEvent.event).includes("/home/private/project/secret.txt"));
   assert.deepEqual(commandEvent.event.approval, {
     id: "command-approval-1",
     kind: "command",
-    reason: "读取 ‹主机路径›",
+    reason: "读取 /home/private/project/secret.txt",
     startedAtMs: (commandEvent.event.approval as { startedAtMs: number }).startedAtMs,
-    commandSummary: "cat ‹主机路径›",
+    commandSummary: "cat /home/private/project/secret.txt",
     network: { host: "registry.npmjs.org", protocol: "https" },
     canApprove: true,
   });
@@ -116,14 +116,14 @@ test("publishes recognizable path-redacted approval scopes and resolves an answe
   });
   await waitFor(() => commandEvents().length === 3);
   const permissionEvent = commandEvents()[2]!.event;
-  assert.equal(JSON.stringify(permissionEvent).includes("/home/private"), false);
+  assert.ok(JSON.stringify(permissionEvent).includes("/home/private/project/secret.txt"));
   assert.deepEqual(
     (permissionEvent.approval as { permissionSummary: string[] }).permissionSummary,
     [
       "网络：允许额外网络访问",
-      "读取：…/secret.txt",
+      "读取：/home/private/project/secret.txt",
       "写入：文件系统根目录",
-      "读取：项目目录/…/generated",
+      "读取：项目目录/src/generated",
     ],
   );
   assert.equal((permissionEvent.approval as { canApprove: boolean }).canApprove, true);

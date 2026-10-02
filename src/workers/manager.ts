@@ -10,9 +10,9 @@ import {
 } from "../app-server/turn-session.ts";
 import type { AttachmentDisplayMapping } from "../attachments/path-redaction.ts";
 import {
-  BrowserPathStreamRedactor,
+  AttachmentPathStreamRedactor,
   redactKnownAttachmentPaths,
-  redactPublicTextDeep,
+  redactKnownAttachmentPathsDeep,
 } from "../attachments/path-redaction.ts";
 import { collectHistoryAttachmentRecords } from "../server/history.ts";
 import type { Turn } from "../generated/v2/Turn.ts";
@@ -203,7 +203,7 @@ export class SessionWorkerManager {
   readonly #uploads: SessionWorkerManagerOptions["uploads"];
   readonly #attachmentIndex: AttachmentDisplayIndex | null;
   readonly #settings: ApplicationSettingsStore | undefined;
-  readonly #pathRedactors = new Map<string, BrowserPathStreamRedactor>();
+  readonly #pathRedactors = new Map<string, AttachmentPathStreamRedactor>();
   readonly #listeners = new Set<(event: WorkerManagerEvent) => void>();
   readonly #workers = new Map<string, ActiveWorker>();
   readonly #launching = new Map<string, LaunchingTask>();
@@ -2037,11 +2037,11 @@ export class SessionWorkerManager {
     itemId: string,
     kind: "assistant" | "tool",
     mappings: readonly AttachmentDisplayMapping[],
-  ): BrowserPathStreamRedactor {
+  ): AttachmentPathStreamRedactor {
     const key = `${threadId}:${kind}:${itemId}`;
     const existing = this.#pathRedactors.get(key);
     if (existing) return existing;
-    const created = new BrowserPathStreamRedactor(mappings);
+    const created = new AttachmentPathStreamRedactor(mappings);
     this.#pathRedactors.set(key, created);
     return created;
   }
@@ -2120,7 +2120,7 @@ function publicApprovalText(
   mappings: readonly AttachmentDisplayMapping[],
 ): string | null {
   if (!value) return null;
-  const summary = redactPathBearingTokens(redactKnownAttachmentPaths(value, mappings));
+  const summary = redactEnvironmentAssignments(redactKnownAttachmentPaths(value, mappings));
   return clipPublicSummary(summary);
 }
 
@@ -2129,14 +2129,14 @@ function publicCommandSummary(
   mappings: readonly AttachmentDisplayMapping[],
 ): string {
   if (!value?.trim()) return "";
-  const summary = redactPathBearingTokens(redactKnownAttachmentPaths(value.trim(), mappings));
+  const summary = redactEnvironmentAssignments(redactKnownAttachmentPaths(value.trim(), mappings));
   return clipPublicSummary(summary);
 }
 
-function redactPathBearingTokens(value: string): string {
+function redactEnvironmentAssignments(value: string): string {
   return value.split(/(\s+)/u).map((token) => {
     if (!token || /^\s+$/u.test(token)) return token;
-    if (token.includes("/") || token.includes("\\")) return "‹主机路径›";
+    if (token.includes("/") || token.includes("\\")) return token;
     const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=/u.exec(token);
     if (assignment) return `${assignment[1]}=‹值已隐藏›`;
     return token;
@@ -2269,7 +2269,7 @@ function publicFileSystemEntryScope(
       ? `项目目录/${publicPathScope(special.subpath, mappings)}`
       : "项目目录";
   }
-  // unknown 携带的宿主路径可以安全隐藏，但隐藏后无法让用户判断授权范围。
+  // unknown 的结构未定义，无法保证网页展示了完整授权范围。
   if (special.kind === "unknown") return null;
   return null;
 }
@@ -2282,8 +2282,7 @@ function publicPathScope(
   if (attachment !== value) return attachment;
   const normalized = value.replaceAll("\\", "/").replace(/\/+$/u, "");
   if (!normalized) return "文件系统根目录";
-  const name = normalized.split("/").at(-1)?.trim();
-  return name ? `…/${clipPublicSummary(name, 80)}` : "主机路径（完整路径已隐藏）";
+  return clipPublicSummary(value, 240);
 }
 
 function clipPublicSummary(value: string, limit = 240): string {
@@ -2295,7 +2294,7 @@ function publicInteraction(
   interaction: WorkerInteractionRequest,
   mappings: readonly AttachmentDisplayMapping[] = [],
 ): Record<string, unknown> {
-  return redactPublicTextDeep(
+  return redactKnownAttachmentPathsDeep(
     structuredClone(interaction) as unknown as Record<string, unknown>,
     mappings,
   );

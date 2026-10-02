@@ -30,7 +30,7 @@ test("realtime turn failures use the same stable browser message as history", (c
   assert.equal(JSON.stringify([completed, retrying]).includes(raw), false);
 });
 
-test("event projection redacts host paths without flattening user or server text", () => {
+test("event projection preserves host paths in user and server text", () => {
   const user = redactBrowserStreamEvent({
     type: "message.user",
     text: "用户原文 /home/example/kept.txt 和 /api/v1",
@@ -40,9 +40,8 @@ test("event projection redacts host paths without flattening user or server text
     text: "src/server/main.ts https://example.com/docs/setup /home/private/project/file.ts",
   }, []);
 
-  assert.equal(user.text, "用户原文 ‹主机路径› 和 /api/v1");
+  assert.equal(user.text, "用户原文 /home/example/kept.txt 和 /api/v1");
   assert.ok(assistant.text.includes("src/server/main.ts"));
   assert.ok(assistant.text.includes("https://example.com/docs/setup"));
-  assert.equal(assistant.text.includes("/home/private"), false);
-  assert.ok(assistant.text.includes("‹主机路径›"));
+  assert.ok(assistant.text.includes("/home/private/project/file.ts"));
 });

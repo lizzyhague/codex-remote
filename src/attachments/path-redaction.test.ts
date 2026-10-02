@@ -2,11 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  BrowserPathStreamRedactor,
+  AttachmentPathStreamRedactor,
   redactHostPaths,
   redactKnownAttachmentPaths,
   redactKnownAttachmentPathsDeep,
-  redactPublicText,
 } from "./path-redaction.ts";
 
 const mapping = {
@@ -59,7 +58,7 @@ test("replaces form, lowercase-percent, unicode-JSON and file URL variants", () 
   }
 });
 
-test("hides unknown host paths while preserving URLs and relative project paths", () => {
+test("detects host paths for public error guards without changing URLs or relative paths", () => {
   const source = [
     "项目入口是 src/server/main.ts，接口是 /api/v1。",
     "文档：https://example.com/docs/setup/file.html",
@@ -83,14 +82,6 @@ test("redacts only the absolute-path span inside ordinary prose", () => {
   );
 });
 
-test("public text prefers an attachment label and hides other host paths", () => {
-  const redacted = redactPublicText(
-    `${mapping.path}\n/home/private/project/secret.txt`,
-    [mapping],
-  );
-  assert.equal(redacted, "附件：报告.pdf\n‹主机路径›");
-});
-
 test("adds a short id when two attachments share a name", () => {
   const other = {
     id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -102,8 +93,36 @@ test("adds a short id when two attachments share a name", () => {
   assert.ok(redacted.includes("附件：报告.pdf (aaaaaaaa)"));
 });
 
+test("replaces the longest overlapping form once and leaves neighbours intact", () => {
+  const fileUrl = `file://${mapping.path}`;
+  const source = `链接 ${fileUrl}，原样 ${mapping.path}${mapping.path}。`;
+  assert.equal(
+    redactKnownAttachmentPaths(source, [mapping]),
+    "链接 附件：报告.pdf，原样 附件：报告.pdf附件：报告.pdf。",
+  );
+});
+
+test("scans long text against many attachments without per-character matching", () => {
+  const mappings = Array.from({ length: 1000 }, (_, index) => {
+    const id = `${String(index).padStart(8, "0")}-7425-40de-944b-e07fc1f90ae7`;
+    return {
+      id,
+      originalName: `文件${index}.pdf`,
+      path: `/example/uploads/blobs/${String(index % 100).padStart(2, "0")}/${id}.pdf`,
+    };
+  });
+  const text = "普通回复文字 /example/uploads/ 没有附件路径。".repeat(2000);
+  const started = performance.now();
+  assert.equal(redactKnownAttachmentPaths(text, mappings), text);
+  assert.ok(performance.now() - started < 500, "redaction took too long");
+
+  const cachedStarted = performance.now();
+  assert.equal(redactKnownAttachmentPaths(text, mappings.map((entry) => ({ ...entry }))), text);
+  assert.ok(performance.now() - cachedStarted < 500, "cached redaction took too long");
+});
+
 test("holds a split path across deltas and does not emit the raw address", () => {
-  const redactor = new BrowserPathStreamRedactor([mapping]);
+  const redactor = new AttachmentPathStreamRedactor([mapping]);
   const prefix = mapping.path.slice(0, 18);
   const rest = mapping.path.slice(18);
   assert.equal(redactor.push(`看 ${prefix}`), "看 ");
@@ -111,11 +130,11 @@ test("holds a split path across deltas and does not emit the raw address", () =>
   assert.equal(redactor.flush(), "");
 });
 
-test("holds and redacts an unknown host path split across deltas", () => {
-  const redactor = new BrowserPathStreamRedactor();
-  assert.equal(redactor.push("读取 /home/private"), "读取 ");
+test("streams unknown host paths unchanged", () => {
+  const redactor = new AttachmentPathStreamRedactor();
+  assert.equal(redactor.push("读取 /home/private"), "读取 /home/private");
   const completed = redactor.push("/project/秘密 note.txt\n继续");
-  assert.equal(completed, "‹主机路径›\n继续");
+  assert.equal(completed, "/project/秘密 note.txt\n继续");
   assert.equal(redactor.flush(), "");
 });
 
@@ -126,24 +145,24 @@ test("holds a split form-encoded attachment path", () => {
   };
   const encoded = new URLSearchParams({ path: complex.path }).toString();
   const split = encoded.indexOf("%E7");
-  const redactor = new BrowserPathStreamRedactor([complex]);
+  const redactor = new AttachmentPathStreamRedactor([complex]);
   assert.equal(redactor.push(encoded.slice(0, split)), "path=");
   assert.equal(redactor.push(`${encoded.slice(split)}\n`), "附件：报告.pdf\n");
   assert.equal(redactor.flush(), "");
 });
 
 test("streaming leaves relative paths and HTTP URLs intact", () => {
-  const redactor = new BrowserPathStreamRedactor();
+  const redactor = new AttachmentPathStreamRedactor();
   const source = "src/server/main.ts https://example.com/docs/setup\n";
   assert.equal(redactor.push(source), source);
   assert.equal(redactor.flush(), "");
 });
 
 test("flushes remaining text without duplicating or dropping it", () => {
-  const redactor = new BrowserPathStreamRedactor([mapping]);
+  const redactor = new AttachmentPathStreamRedactor([mapping]);
   assert.equal(redactor.push("普通文字"), "普通文字");
   assert.equal(redactor.flush(), "");
-  const again = new BrowserPathStreamRedactor([mapping]);
+  const again = new AttachmentPathStreamRedactor([mapping]);
   const held = again.push(mapping.path.slice(0, 20));
   assert.equal(held, "");
   const flushed = again.flush();

@@ -1,5 +1,5 @@
 import type { AttachmentDisplayMapping } from "../attachments/path-redaction.ts";
-import { redactPublicText } from "../attachments/path-redaction.ts";
+import { redactKnownAttachmentPaths } from "../attachments/path-redaction.ts";
 import { isObject } from "../shared/json.ts";
 
 export type PublicToolKind =
@@ -290,7 +290,7 @@ function view(
   fields: Partial<PublicToolView> & Pick<PublicToolView, "kind" | "title" | "status">,
   mappings: readonly AttachmentDisplayMapping[] = [],
 ): PublicToolView {
-  const redact = (text: string) => redactPublicText(text, mappings);
+  const redact = (text: string) => redactKnownAttachmentPaths(text, mappings);
   const clippedOutput = clipOutput(fields.output == null ? null : redact(fields.output));
   return {
     kind: fields.kind,
