@@ -930,7 +930,10 @@ export class SessionWorkerManager {
   #managedOpen(opened: OpenedSession, fullAccessEnabled: boolean): ManagedSessionReady {
     this.#initializeDesiredFullAccess(opened.session.id, fullAccessEnabled);
     const pending = this.#store.pendingForThread(opened.session.id);
-    const replayTask = pending ?? terminalReplayTask(this.#store.latestForThread(opened.session.id));
+    const replayTask = pending ?? terminalReplayTask(
+      this.#store.latestForThread(opened.session.id),
+      opened.turns,
+    );
     return {
       loadState: "ready",
       opened,
@@ -2309,9 +2312,20 @@ function uploadManagerError(error: unknown): WorkerManagerError {
   return new WorkerManagerError("attachment_failed", "附件处理失败，请查看服务日志。");
 }
 
-function terminalReplayTask(task: WorkerTask | null): WorkerTask | null {
+function terminalReplayTask(
+  task: WorkerTask | null,
+  turns: readonly Turn[],
+): WorkerTask | null {
   if (!task) return null;
-  if (task.status === "interrupted" && task.interruptionReason) return task;
+  if (task.status === "interrupted" && task.interruptionReason) {
+    // 中断事件会补出 Codex 历史没有的工具过程和“任务已停止”提示。不过 turn
+    // 已被 /rewind（或其他客户端）删除后，继续重放会把刚删掉的消息重新画回来，
+    // 而且每次刷新都会复活。没有 native turn 的中断仍只能依靠事件日志展示；有
+    // native turn 的则以本次 thread/resume 返回的持久化历史为准。
+    if (task.nativeTurnId === null || turns.some((turn) => turn.id === task.nativeTurnId)) {
+      return task;
+    }
+  }
   if (task.status === "failed" && task.nativeTurnId === null) return task;
   return null;
 }

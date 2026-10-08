@@ -1571,6 +1571,62 @@ test("requires rewind to name its target turn and returns a small receipt", asyn
   );
 });
 
+test("does not replay an interrupted turn after rewind removed it", async (context) => {
+  let workerCreations = 0;
+  const interruptedTurn = {
+    id: "native-turn-1",
+    items: [],
+    itemsView: "summary",
+    status: "interrupted",
+    error: null,
+    startedAt: 1,
+    completedAt: 2,
+    durationMs: 1_000,
+  } as Turn;
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    afterWorkerCreate: (worker) => {
+      workerCreations += 1;
+      // 第一次恢复和执行 rewind 时，持久化历史里仍有这一轮；rewind 后的
+      // 第二次恢复模拟 Codex 返回已经删掉该 turn 的历史。
+      if (workerCreations === 2 || workerCreations === 3) {
+        (worker.opened.turns as Turn[]).push(interruptedTurn);
+      }
+    },
+  });
+  fixture.manager.start();
+  const accepted = await fixture.manager.enqueueMessage(
+    "project-1",
+    "thread-1",
+    "message-1",
+    "会被停止并回退",
+  );
+  const active = await fixture.waitForWorker();
+  assert.deepEqual(await fixture.manager.stopTask("thread-1"), { requested: true });
+  await waitFor(() => active.closeCount === 1);
+  assert.equal(fixture.store.require(accepted.taskId).nativeTurnId, "native-turn-1");
+
+  const before = await fixture.manager.resumeSession("project-1", "thread-1");
+  assert.equal(before.loadState, "ready");
+  if (before.loadState !== "ready") throw new Error("会话没有恢复完成");
+  assert.ok(before.replayEvents.some(({ event }) => event.type === "task.queued"));
+
+  await fixture.manager.runCommand(
+    "project-1",
+    "thread-1",
+    "rewind-1",
+    "rewind",
+    null,
+    null,
+    "native-turn-1",
+  );
+  const after = await fixture.manager.resumeSession("project-1", "thread-1");
+  assert.equal(after.loadState, "ready");
+  if (after.loadState !== "ready") throw new Error("会话没有恢复完成");
+  assert.deepEqual(after.opened.turns, []);
+  assert.deepEqual(after.replayEvents, []);
+});
+
 test("serializes short-lived Workers for the same historical thread", async (context) => {
   let releaseFirst!: () => void;
   let reportFirstStarted!: () => void;
