@@ -4,6 +4,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { PublicAttachment } from "../shared-upload/types.ts";
+import {
+  parsePendingTurnSettings,
+  type PendingTurnSettings,
+} from "../app-server/turn-settings.ts";
 
 export type WorkerTaskStatus =
   | "queued"
@@ -133,6 +137,7 @@ export class WorkerStateStore {
         thread_id TEXT PRIMARY KEY,
         full_access_enabled INTEGER NOT NULL
           CHECK (full_access_enabled IN (0, 1)),
+        pending_turn_settings_json TEXT,
         updated_at_ms INTEGER NOT NULL
       ) STRICT;
     `);
@@ -140,6 +145,11 @@ export class WorkerStateStore {
       .map((row) => String(asRow(row).name));
     if (!taskColumns.includes("attachments_json")) {
       database.exec("ALTER TABLE worker_tasks ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'");
+    }
+    const settingsColumns = database.prepare("PRAGMA table_info(worker_session_settings)").all()
+      .map((row) => String(asRow(row).name));
+    if (!settingsColumns.includes("pending_turn_settings_json")) {
+      database.exec("ALTER TABLE worker_session_settings ADD COLUMN pending_turn_settings_json TEXT");
     }
     if (pruneObsoleteEvents(database) > 0) database.exec("VACUUM");
     return new WorkerStateStore(database);
@@ -162,6 +172,44 @@ export class WorkerStateStore {
         full_access_enabled = excluded.full_access_enabled,
         updated_at_ms = excluded.updated_at_ms
     `).run(threadId, enabled ? 1 : 0, nowMs);
+  }
+
+  sessionPendingTurnSettings(threadId: string): PendingTurnSettings | null {
+    const row = this.#database.prepare(`
+      SELECT pending_turn_settings_json FROM worker_session_settings WHERE thread_id = ?
+    `).get(threadId);
+    const source = row ? asRow(row).pending_turn_settings_json : null;
+    if (typeof source !== "string") return null;
+    try {
+      return parsePendingTurnSettings(JSON.parse(source));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 行可能还不存在（从没确认过 Full access 的会话），这时用调用方给的当前 desired
+   * 值补一行；已有行只改待生效设置，不动 desired setting。
+   */
+  setSessionPendingTurnSettings(
+    threadId: string,
+    pending: PendingTurnSettings | null,
+    fullAccessFallback: boolean,
+    nowMs: number,
+  ): void {
+    this.#database.prepare(`
+      INSERT INTO worker_session_settings (
+        thread_id, full_access_enabled, pending_turn_settings_json, updated_at_ms
+      ) VALUES (?, ?, ?, ?)
+      ON CONFLICT(thread_id) DO UPDATE SET
+        pending_turn_settings_json = excluded.pending_turn_settings_json,
+        updated_at_ms = excluded.updated_at_ms
+    `).run(
+      threadId,
+      fullAccessFallback ? 1 : 0,
+      pending ? JSON.stringify(pending) : null,
+      nowMs,
+    );
   }
 
   /**

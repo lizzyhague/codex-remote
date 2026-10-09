@@ -14,6 +14,7 @@ import {
   CodexTurnSession,
   type CodexStreamEvent,
 } from "./turn-session.ts";
+import { turnSettingsOverride } from "./turn-settings.ts";
 
 class FakeTransport {
   readonly requests: Array<{ method: string; params: unknown }> = [];
@@ -101,6 +102,26 @@ test("streams assistant text and command output for its own thread", async () =>
       delta: "ok\n",
     },
   ]);
+});
+
+test("carries next-turn model and permission overrides on turn/start", async () => {
+  const transport = new FakeTransport();
+  transport.nextResult = { turn: { id: "turn-1" } };
+  const session = new CodexTurnSession(transport, "thread-1");
+
+  await session.startTextTurn("继续", [], turnSettingsOverride({
+    model: { id: "gpt-test", effort: "high" },
+    permissions: ":danger-full-access",
+  }));
+  assert.deepEqual(transport.requests[0]?.params, {
+    threadId: "thread-1",
+    input: [{ type: "text", text: "继续", text_elements: [] }],
+    model: "gpt-test",
+    effort: "high",
+    permissions: ":danger-full-access",
+    approvalPolicy: "never",
+  });
+  session.dispose();
 });
 
 test("sends a path block for images, text, PDF and zip without reading file bytes", async () => {

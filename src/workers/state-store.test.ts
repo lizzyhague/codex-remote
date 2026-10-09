@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { WorkerStateStore } from "./state-store.ts";
@@ -102,6 +103,45 @@ test("persists desired Full access selection across state-store reopen", async (
   assert.equal(store.sessionDesiredFullAccess("thread-1"), true);
   store.setSessionDesiredFullAccess("thread-1", false, 200);
   assert.equal(store.sessionDesiredFullAccess("thread-1"), false);
+});
+
+test("persists next-turn settings beside the desired setting and upgrades old files", async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-worker-settings-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "work.sqlite");
+  // 旧版本的表没有待生效设置这一列。
+  const legacy = new DatabaseSync(file);
+  legacy.exec(`
+    CREATE TABLE worker_session_settings (
+      thread_id TEXT PRIMARY KEY,
+      full_access_enabled INTEGER NOT NULL CHECK (full_access_enabled IN (0, 1)),
+      updated_at_ms INTEGER NOT NULL
+    ) STRICT;
+    INSERT INTO worker_session_settings VALUES ('thread-1', 1, 1);
+  `);
+  legacy.close();
+
+  let store = await WorkerStateStore.open(file);
+  assert.equal(store.sessionPendingTurnSettings("thread-1"), null);
+  store.setSessionPendingTurnSettings("thread-1", {
+    model: { id: "gpt-test", effort: null },
+    permissions: ":read-only",
+  }, false, 100);
+  // 已有行只改待生效设置，不动 desired setting。
+  assert.equal(store.sessionDesiredFullAccess("thread-1"), true);
+  store.setSessionPendingTurnSettings("thread-2", { permissions: ":workspace" }, false, 100);
+  assert.equal(store.sessionDesiredFullAccess("thread-2"), false);
+  store.close();
+
+  store = await WorkerStateStore.open(file);
+  context.after(() => store.close());
+  assert.deepEqual(store.sessionPendingTurnSettings("thread-1"), {
+    model: { id: "gpt-test", effort: null },
+    permissions: ":read-only",
+  });
+  store.setSessionPendingTurnSettings("thread-1", null, false, 200);
+  assert.equal(store.sessionPendingTurnSettings("thread-1"), null);
+  assert.equal(store.sessionDesiredFullAccess("thread-1"), true);
 });
 
 test("persists only public attachment metadata with an accepted message", async (context) => {

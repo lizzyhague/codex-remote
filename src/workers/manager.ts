@@ -20,6 +20,11 @@ import { AttachmentDisplayIndex } from "./attachment-index.ts";
 import type { ApprovalEvent, ApprovalRequest } from "../approvals/broker.ts";
 import type { CommandName } from "../commands/catalog.ts";
 import type { CommandOptions } from "../commands/runner.ts";
+import {
+  hasPendingTurnSettings,
+  turnSettingsOverride,
+  type PendingTurnSettings,
+} from "../app-server/turn-settings.ts";
 import type { ProjectCatalog } from "../projects/catalog.ts";
 import type { OpenedSession } from "../sessions/service.ts";
 import type { TrashStore } from "../sessions/trash-store.ts";
@@ -214,6 +219,8 @@ export class SessionWorkerManager {
   readonly #clientSessions = new Map<string, string>();
   /** 用户最后确认的会话设置；任务自己的 effective 权限固化在 WorkerTask。 */
   readonly #sessionDesiredFullAccess = new Map<string, boolean>();
+  /** 会话运行中选定、下一轮 `turn/start` 才带上的模型与权限；同样落 SQLite。 */
+  readonly #sessionPendingTurnSettings = new Map<string, PendingTurnSettings | null>();
   readonly #threadOperationTails = new Map<string, Promise<void>>();
   readonly #attachmentLeases = new Map<string, AttachmentLease>();
   readonly #workerStartControllers = new Set<AbortController>();
@@ -290,6 +297,7 @@ export class SessionWorkerManager {
     }
     this.#clearPathRedactors(threadId);
     this.#sessionDesiredFullAccess.delete(threadId);
+    this.#sessionPendingTurnSettings.delete(threadId);
     if (this.#attachmentIndex) {
       await this.#trackIndexOperation(this.#attachmentIndex.remove(threadId));
     }
@@ -601,8 +609,12 @@ export class SessionWorkerManager {
     threadId: string,
     command: CommandName,
   ): Promise<CommandOptions> {
-    return this.#withIdleWorker(projectId, threadId, (worker) =>
-      worker.commands.options(command));
+    const options = (worker: SessionWorker) =>
+      worker.commands.options(command, this.#knownPendingTurnSettings(threadId));
+    if (command !== "model" && command !== "permissions") {
+      return this.#withIdleWorker(projectId, threadId, options);
+    }
+    return this.#withSettingsWorker(projectId, threadId, options, options);
   }
 
   async runCommand(
@@ -662,33 +674,72 @@ export class SessionWorkerManager {
       });
     }
 
+    if (command === "model" || command === "permissions") {
+      if (!option) {
+        throw new WorkerManagerError(
+          "command_option_required",
+          command === "model" ? "请先选择一个模型。" : "请先选择一种权限。",
+        );
+      }
+      return this.#withSettingsWorker(
+        projectId,
+        threadId,
+        async (worker) => {
+          const result = command === "model"
+            ? await worker.commands.setModel(option, argument)
+            : await worker.commands.setPermissions(option);
+          this.#assertOpen();
+          // 已经直接写进 Codex 的那一项不再留着等下一轮，免得旧选择把它盖回去。
+          this.#updatePendingTurnSettings(threadId, worker, (pending) => {
+            if (command === "model") delete pending.model;
+            else delete pending.permissions;
+            return pending;
+          });
+          if (typeof result.fullAccessEnabled === "boolean") {
+            this.#recordDesiredFullAccess(threadId, result.fullAccessEnabled);
+            const browserResult: Record<string, unknown> = { ...result };
+            delete browserResult.fullAccessEnabled;
+            return browserResult;
+          }
+          return result;
+        },
+        async (worker) => {
+          if (command === "model") {
+            const staged = await worker.commands.stageModel(option, argument);
+            this.#assertOpen();
+            this.#updatePendingTurnSettings(threadId, worker, (pending) => ({
+              ...pending,
+              model: staged.model,
+            }));
+            return staged.message;
+          }
+          const staged = await worker.commands.stagePermissions(option);
+          this.#assertOpen();
+          this.#updatePendingTurnSettings(threadId, worker, (pending) => ({
+            ...pending,
+            permissions: staged.permissions,
+          }));
+          // desired setting 跟着用户的选择走：下一条消息准入时按它固化 permission_mode，
+          // 启动前的 reconcile 才不会把刚选的权限调回去。正在跑的这一轮仍按 Worker
+          // 的 effective 状态决定离线自动批准。
+          this.#recordDesiredFullAccess(threadId, staged.fullAccess);
+          return staged.message;
+        },
+      );
+    }
+
     return this.#withIdleWorker(projectId, threadId, async (worker) => {
-      let result;
-      if (command === "model") {
-        if (!option) throw new WorkerManagerError("command_option_required", "请先选择一个模型。");
-        result = await worker.commands.setModel(option, argument);
-      } else if (command === "permissions") {
-        if (!option) throw new WorkerManagerError("command_option_required", "请先选择一种权限。");
-        result = await worker.commands.setPermissions(option);
-      } else if (command === "rename") {
-        if (!argument) {
-          throw new WorkerManagerError(
-            "command_argument_required",
-            "请在 /rename 后面写一个会话名称。",
-          );
-        }
-        result = await worker.commands.rename(argument);
-      } else {
+      if (command !== "rename") {
         throw new WorkerManagerError("unknown_command", "不支持这个斜杠命令。");
       }
-
-      this.#assertOpen();
-      if (typeof result.fullAccessEnabled === "boolean") {
-        this.#recordDesiredFullAccess(threadId, result.fullAccessEnabled);
-        const browserResult: Record<string, unknown> = { ...result };
-        delete browserResult.fullAccessEnabled;
-        return browserResult;
+      if (!argument) {
+        throw new WorkerManagerError(
+          "command_argument_required",
+          "请在 /rename 后面写一个会话名称。",
+        );
       }
+      const result = await worker.commands.rename(argument);
+      this.#assertOpen();
       return result;
     });
   }
@@ -1063,6 +1114,33 @@ export class SessionWorkerManager {
     }
   }
 
+  /**
+   * 模型和权限在会话运行中也能改。空闲时和以前一样，用短命令 Worker 立即写进 Codex；
+   * 有任务时借正在跑的 Worker 读列表、校验选项，选定的值由 `busy` 存成下一轮的设置，
+   * 不碰正在跑的这一轮。任务还在排队或启动、收尾时没有可借的 Worker，照旧拒绝。
+   */
+  #withSettingsWorker<Result>(
+    projectId: string,
+    threadId: string,
+    idle: (worker: SessionWorker) => Promise<Result>,
+    busy: (worker: SessionWorker) => Promise<Result>,
+  ): Promise<Result> {
+    return this.#serializeThreadOperation(threadId, () => {
+      this.#assertKnownThreadProject(projectId, threadId);
+      if (!this.#store.pendingForThread(threadId)) {
+        return this.#withTransientWorkerUnlocked(projectId, threadId, idle);
+      }
+      const active = this.#workers.get(threadId);
+      if (!active || active.finishing) {
+        throw new WorkerManagerError(
+          "task_already_running",
+          "这个会话的任务正在启动或收尾，请稍后再改。",
+        );
+      }
+      return busy(active.worker);
+    });
+  }
+
   #withIdleWorker<Result>(
     projectId: string,
     threadId: string,
@@ -1222,8 +1300,16 @@ export class SessionWorkerManager {
       }
 
       let startPromise: Promise<string | null>;
+      // 压缩不是对话轮次，待生效的设置留给下一条消息。
+      const submittedSettings = task.kind === "message"
+        ? this.#knownPendingTurnSettings(task.threadId)
+        : null;
       if (task.kind === "message") {
-        startPromise = worker.turns.startTextTurn(task.payload, attachments);
+        startPromise = worker.turns.startTextTurn(
+          task.payload,
+          attachments,
+          turnSettingsOverride(submittedSettings),
+        );
       } else {
         // 打断一轮压缩会给会话上下文留下什么，Codex 没有给出保证，所以指令一旦
         // 发出就不再停。标记必须在请求之前落下，中间不能有 await，否则会出现
@@ -1238,6 +1324,10 @@ export class SessionWorkerManager {
         await worker.turns.interruptActiveTurn().catch(() => false);
       }
       const nativeTurnId = await startPromise;
+      // Codex 接受了这一轮才算交付；失败时保留，用户下一条消息会再带一次。
+      if (submittedSettings) {
+        this.#clearSubmittedTurnSettings(task.threadId, worker, submittedSettings);
+      }
       if (launching.cancelReason && !worker.turns.activeTurnId) {
         await this.#abandonLaunch(launching);
         return;
@@ -1854,6 +1944,52 @@ export class SessionWorkerManager {
     return persisted ?? undefined;
   }
 
+  #knownPendingTurnSettings(threadId: string): PendingTurnSettings | null {
+    if (this.#sessionPendingTurnSettings.has(threadId)) {
+      return this.#sessionPendingTurnSettings.get(threadId) ?? null;
+    }
+    const persisted = this.#store.sessionPendingTurnSettings(threadId);
+    this.#sessionPendingTurnSettings.set(threadId, persisted);
+    return persisted;
+  }
+
+  /**
+   * 每次更新都换一个新对象，启动流程靠对象身份判断送出的那份是否已被后来的选择取代。
+   * 还没有 desired setting 的会话，补行时按这个 Worker 的 effective 状态写，不凭空写成关。
+   */
+  #updatePendingTurnSettings(
+    threadId: string,
+    worker: SessionWorker,
+    update: (pending: PendingTurnSettings) => PendingTurnSettings,
+  ): void {
+    const current = this.#knownPendingTurnSettings(threadId);
+    const next = update({ ...current });
+    const stored = hasPendingTurnSettings(next) ? next : null;
+    if (!current && !stored) return;
+    this.#store.setSessionPendingTurnSettings(
+      threadId,
+      stored,
+      this.#knownDesiredFullAccess(threadId) ?? worker.fullAccessEnabled,
+      this.#now(),
+    );
+    this.#sessionPendingTurnSettings.set(threadId, stored);
+  }
+
+  #clearSubmittedTurnSettings(
+    threadId: string,
+    worker: SessionWorker,
+    submitted: PendingTurnSettings,
+  ): void {
+    if (this.#sessionPendingTurnSettings.get(threadId) !== submitted) return;
+    this.#store.setSessionPendingTurnSettings(
+      threadId,
+      null,
+      this.#knownDesiredFullAccess(threadId) ?? worker.fullAccessEnabled,
+      this.#now(),
+    );
+    this.#sessionPendingTurnSettings.set(threadId, null);
+  }
+
   #recordDesiredFullAccess(threadId: string, enabled: boolean): boolean {
     this.#sessionDesiredFullAccess.set(threadId, enabled);
     this.#store.setSessionDesiredFullAccess(threadId, enabled, this.#now());
@@ -1954,6 +2090,7 @@ export class SessionWorkerManager {
         console.error(`关闭空会话 Worker 失败：${errorMessage(error)}`);
       });
       this.#sessionDesiredFullAccess.delete(threadId);
+      this.#sessionPendingTurnSettings.delete(threadId);
       this.#schedule();
     })());
   }

@@ -18,6 +18,7 @@ import {
   pickRestrictedProfile,
   type PermissionProfileSummary,
 } from "../app-server/permissions.ts";
+import type { PendingTurnSettings } from "../app-server/turn-settings.ts";
 
 export type CommandOption = {
   id: string;
@@ -51,6 +52,7 @@ export type CommandMessageLine = string | {
 };
 
 const THREAD_HISTORY_PAGE_SIZE = 100;
+const NEXT_TURN_LINE = "当前这一轮不受影响，下一条消息开始生效。";
 export type RewindOutcome = "reverted" | "already_reverted" | "stale";
 
 /**
@@ -83,22 +85,28 @@ export class CommandRunner {
     this.#unsubscribe();
   }
 
-  async options(command: CommandName): Promise<CommandOptions> {
+  /** `pending` 是会话运行中选定、下一轮才生效的设置；菜单优先把它标成选中项。 */
+  async options(
+    command: CommandName,
+    pending: PendingTurnSettings | null = null,
+  ): Promise<CommandOptions> {
     if (command === "model") {
       const models = await listModels(this.#transport);
+      const selectedModel = pending?.model?.id ?? this.#runtime.model;
+      const selectedEffort = pending?.model ? pending.model.effort : this.#runtime.reasoningEffort;
       return {
         title: "选择模型",
         items: models.map((model) => ({
           id: model.id,
           label: model.displayName,
-          selected: model.id === this.#runtime.model,
+          selected: model.id === selectedModel,
           description: model.description ||
             `默认思考强度：${model.defaultReasoningEffort || "自动"}`,
           items: model.supportedReasoningEfforts.map((effort) => ({
             id: effort.reasoningEffort,
             label: effort.reasoningEffort,
-            selected: model.id === this.#runtime.model &&
-              effort.reasoningEffort === this.#runtime.reasoningEffort,
+            selected: model.id === selectedModel &&
+              effort.reasoningEffort === selectedEffort,
             description: [
               effort.description,
               effort.reasoningEffort === model.defaultReasoningEffort ? "模型默认" : "",
@@ -110,12 +118,13 @@ export class CommandRunner {
 
     if (command === "permissions") {
       const profiles = await this.#listPermissionProfiles();
+      const selectedProfile = pending?.permissions ?? this.#runtime.activePermissionProfile?.id;
       return {
         title: "选择权限",
         items: profiles.map((profile) => ({
           id: profile.id,
           label: permissionLabel(profile.id),
-          selected: profile.id === this.#runtime.activePermissionProfile?.id,
+          selected: profile.id === selectedProfile,
           description: profile.description || permissionDescription(profile.id),
           disabled: !profile.allowed,
           danger: isFullAccessProfile(profile.id),
@@ -127,17 +136,7 @@ export class CommandRunner {
   }
 
   async setModel(modelId: string, effort?: string | null): Promise<CommandMessage> {
-    const model = (await listModels(this.#transport)).find((candidate) => candidate.id === modelId);
-    if (!model) {
-      throw new PublicError("这个模型不在当前 Codex 返回的可用列表中。");
-    }
-    if (
-      effort &&
-      !model.supportedReasoningEfforts.some((option) => option.reasoningEffort === effort)
-    ) {
-      throw new PublicError("这个模型不支持所选思考强度。");
-    }
-    const selectedEffort = effort || model.defaultReasoningEffort || null;
+    const { model, effort: selectedEffort } = await this.#resolveModel(modelId, effort);
     await this.#updateSettings({
       model: model.id,
       effort: selectedEffort,
@@ -147,19 +146,28 @@ export class CommandRunner {
     return {
       kind: "message",
       title: "模型已切换",
-      lines: [
-        `模型：${model.displayName}`,
-        `思考强度：${selectedEffort || "自动"}`,
-      ],
+      lines: modelLines(model.displayName, selectedEffort),
+    };
+  }
+
+  /** 运行中选模型：只按当前列表校验，不碰 Codex；由调用方存成下一轮的设置。 */
+  async stageModel(
+    modelId: string,
+    effort?: string | null,
+  ): Promise<{ model: { id: string; effort: string | null }; message: CommandMessage }> {
+    const { model, effort: selectedEffort } = await this.#resolveModel(modelId, effort);
+    return {
+      model: { id: model.id, effort: selectedEffort },
+      message: {
+        kind: "message",
+        title: "模型将在下一轮生效",
+        lines: [...modelLines(model.displayName, selectedEffort), NEXT_TURN_LINE],
+      },
     };
   }
 
   async setPermissions(profileId: string): Promise<CommandMessage> {
-    const profile = (await this.#listPermissionProfiles())
-      .find((candidate) => candidate.id === profileId);
-    if (!profile || !profile.allowed) {
-      throw new PublicError("这个权限选项当前不可用。");
-    }
+    const profile = await this.#resolvePermissionProfile(profileId);
     const settingsRevision = this.#settingsRevision;
     await this.#updateSettings(permissionSettings(profile.id));
     // 通知到了就用它算出的结构化结果，只有没等到才退回认名字。
@@ -172,6 +180,29 @@ export class CommandRunner {
       title: "权限已更新",
       lines: [permissionLabel(profile.id), profile.description || permissionDescription(profile.id)],
       fullAccessEnabled: this.#fullAccessEnabled,
+    };
+  }
+
+  /**
+   * 运行中选权限：只校验，不碰 Codex。`fullAccess` 是按名字认的预期，下一轮生效后
+   * 以 `thread/settings/updated` 的结构化沙箱策略为准。
+   */
+  async stagePermissions(
+    profileId: string,
+  ): Promise<{ permissions: string; fullAccess: boolean; message: CommandMessage }> {
+    const profile = await this.#resolvePermissionProfile(profileId);
+    return {
+      permissions: profile.id,
+      fullAccess: isFullAccessProfile(profile.id),
+      message: {
+        kind: "message",
+        title: "权限将在下一轮生效",
+        lines: [
+          permissionLabel(profile.id),
+          profile.description || permissionDescription(profile.id),
+          NEXT_TURN_LINE,
+        ],
+      },
     };
   }
 
@@ -346,6 +377,29 @@ export class CommandRunner {
     return "reverted";
   }
 
+  async #resolveModel(modelId: string, effort?: string | null) {
+    const model = (await listModels(this.#transport)).find((candidate) => candidate.id === modelId);
+    if (!model) {
+      throw new PublicError("这个模型不在当前 Codex 返回的可用列表中。");
+    }
+    if (
+      effort &&
+      !model.supportedReasoningEfforts.some((option) => option.reasoningEffort === effort)
+    ) {
+      throw new PublicError("这个模型不支持所选思考强度。");
+    }
+    return { model, effort: effort || model.defaultReasoningEffort || null };
+  }
+
+  async #resolvePermissionProfile(profileId: string): Promise<PermissionProfileSummary> {
+    const profile = (await this.#listPermissionProfiles())
+      .find((candidate) => candidate.id === profileId);
+    if (!profile || !profile.allowed) {
+      throw new PublicError("这个权限选项当前不可用。");
+    }
+    return profile;
+  }
+
   #listPermissionProfiles(): Promise<PermissionProfileSummary[]> {
     return listPermissionProfiles(this.#transport, this.#runtime.cwd);
   }
@@ -380,6 +434,10 @@ export class CommandRunner {
       : null;
     this.#fullAccessEnabled = runtimeUsesFullAccess(this.#runtime);
   }
+}
+
+function modelLines(displayName: string, effort: string | null): string[] {
+  return [`模型：${displayName}`, `思考强度：${effort || "自动"}`];
 }
 
 function turnIds(turns: unknown[]): string[] {

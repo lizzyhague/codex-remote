@@ -295,25 +295,128 @@ test("auto-approves an execution request for an offline Full access turn", async
   worker.complete("completed");
 });
 
-test("refuses a permission change while the session has an active task", async (context) => {
+test("stages model and permission changes during an active task for the next turn", async (context) => {
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    fullAccess: true,
+    persistedDesiredFullAccess: true,
+  });
+  fixture.manager.start();
+  const first = await fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "还在执行");
+  const running = await fixture.waitForWorker("thread-1");
+
+  const permission = await fixture.manager.runCommand(
+    "project-1",
+    "thread-1",
+    "permission-1",
+    "permissions",
+    ":workspace",
+    null,
+    null,
+  );
+  const model = await fixture.manager.runCommand(
+    "project-1",
+    "thread-1",
+    "model-1",
+    "model",
+    "next-model",
+    "high",
+    null,
+  );
+  assert.equal(permission.title, "权限将在下一轮生效");
+  assert.equal(model.title, "模型将在下一轮生效");
+  // 正在跑的这一轮不受影响。
+  assert.equal(running.setPermissionsCalls, 0);
+  assert.equal(running.fullAccessEnabled, true);
+  assert.deepEqual(fixture.store.sessionPendingTurnSettings("thread-1"), {
+    permissions: ":workspace",
+    model: { id: "next-model", effort: "high" },
+  });
+  assert.equal(fixture.store.sessionDesiredFullAccess("thread-1"), false);
+
+  running.complete("completed");
+  await waitFor(() => fixture.store.require(first.taskId).status === "completed");
+  await waitFor(() => fixture.workers.every((worker) => worker.closeCount > 0));
+
+  const second = await fixture.manager.enqueueMessage("project-1", "thread-1", "message-2", "下一轮");
+  assert.equal(fixture.store.require(second.taskId).permissionMode, "manual");
+  await waitFor(() => fixture.workers.length === 2 && fixture.workers[1]!.started);
+  const next = fixture.workers[1]!;
+  assert.deepEqual(next.startedSettings, {
+    model: "next-model",
+    effort: "high",
+    permissions: ":workspace",
+    approvalPolicy: "on-request",
+  });
+  assert.equal(fixture.store.sessionPendingTurnSettings("thread-1"), null);
+  next.complete("completed");
+  await waitFor(() => fixture.store.require(second.taskId).status === "completed");
+  await waitFor(() => next.closeCount > 0);
+
+  await fixture.manager.enqueueMessage("project-1", "thread-1", "message-3", "再下一轮");
+  await waitFor(() => fixture.workers.length === 3 && fixture.workers[2]!.started);
+  assert.deepEqual(fixture.workers[2]!.startedSettings, {});
+});
+
+test("keeps a newer staged choice made after the next turn was submitted", async (context) => {
+  let releaseStart!: () => void;
+  const startGate = new Promise<void>((resolve) => {
+    releaseStart = resolve;
+  });
+  let startCount = 0;
+  const fixture = await managerFixture(context, {
+    offlineGraceMs: 10,
+    beforeStartTurn: async () => {
+      startCount += 1;
+      if (startCount === 2) await startGate;
+    },
+  });
+  context.after(() => releaseStart());
+  fixture.manager.start();
+  const first = await fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "第一轮");
+  const running = await fixture.waitForWorker("thread-1");
+  await fixture.manager.runCommand(
+    "project-1", "thread-1", "permission-1", "permissions", ":read-only", null, null,
+  );
+  running.complete("completed");
+  await waitFor(() => fixture.store.require(first.taskId).status === "completed");
+  await waitFor(() => running.closeCount > 0);
+
+  await fixture.manager.enqueueMessage("project-1", "thread-1", "message-2", "第二轮");
+  await waitFor(() => startCount === 2);
+  // 第二轮已经送出 `:read-only`，Codex 还没确认时用户又选了一次。
+  await fixture.manager.runCommand(
+    "project-1", "thread-1", "permission-2", "permissions", ":workspace", null, null,
+  );
+  releaseStart();
+  await waitFor(() => fixture.workers[1]?.started === true);
+  assert.equal(fixture.workers[1]!.startedSettings?.permissions, ":read-only");
+  assert.deepEqual(fixture.store.sessionPendingTurnSettings("thread-1"), {
+    permissions: ":workspace",
+  });
+});
+
+test("an idle permission change drops the staged permission but keeps a staged model", async (context) => {
   const fixture = await managerFixture(context, { offlineGraceMs: 10 });
   fixture.manager.start();
-  await fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "还在执行");
-  await fixture.waitForWorker("thread-1");
-
-  await assert.rejects(
-    fixture.manager.runCommand(
-      "project-1",
-      "thread-1",
-      "permission-1",
-      "permissions",
-      ":full-access",
-      null,
-      null,
-    ),
-    (error: unknown) => error instanceof WorkerManagerError &&
-      error.code === "task_already_running",
+  const first = await fixture.manager.enqueueMessage("project-1", "thread-1", "message-1", "第一轮");
+  const running = await fixture.waitForWorker("thread-1");
+  await fixture.manager.runCommand(
+    "project-1", "thread-1", "permission-1", "permissions", ":read-only", null, null,
   );
+  await fixture.manager.runCommand(
+    "project-1", "thread-1", "model-1", "model", "next-model", null, null,
+  );
+  running.complete("completed");
+  await waitFor(() => fixture.store.require(first.taskId).status === "completed");
+  await waitFor(() => running.closeCount > 0);
+
+  await fixture.manager.runCommand(
+    "project-1", "thread-1", "permission-2", "permissions", ":workspace", null, null,
+  );
+  assert.deepEqual(fixture.store.sessionPendingTurnSettings("thread-1"), {
+    model: { id: "next-model", effort: null },
+  });
 });
 
 test("serializes task admission after a concurrent permission change in both directions", async (context) => {
@@ -2522,6 +2625,8 @@ class FakeWorker {
   readonly interactions;
   started = false;
   startedAttachments: Array<{ path: string }> = [];
+  startedSettings: Record<string, unknown> | null = null;
+  setPermissionsCalls = 0;
   startTurnCalls = 0;
   compactCalls = 0;
   interruptCount = 0;
@@ -2614,8 +2719,18 @@ class FakeWorker {
           fullAccessEnabled: this.#fullAccess,
         };
       },
+      stagePermissions: async (profileId: string) => ({
+        permissions: profileId,
+        fullAccess: profileId === ":full-access",
+        message: { kind: "message" as const, title: "权限将在下一轮生效", lines: [] },
+      }),
+      stageModel: async (modelId: string, effort?: string | null) => ({
+        model: { id: modelId, effort: effort ?? null },
+        message: { kind: "message" as const, title: "模型将在下一轮生效", lines: [] },
+      }),
       setPermissions: async (profileId: string) => {
         await this.#beforeSetPermissions?.(profileId);
+        this.setPermissionsCalls += 1;
         this.#fullAccess = profileId === ":full-access";
         return {
           kind: "message" as const,
@@ -2646,7 +2761,11 @@ class FakeWorker {
         return thisOwner.#activeTurnId;
       },
       setAttachmentMappings: () => {},
-      startTextTurn: async (_text: string, attachments: Array<{ path: string }> = []) => {
+      startTextTurn: async (
+        _text: string,
+        attachments: Array<{ path: string }> = [],
+        settings: Record<string, unknown> = {},
+      ) => {
         thisOwner.#starting = true;
         try {
           if (thisOwner.#pendingInterrupt) {
@@ -2657,6 +2776,7 @@ class FakeWorker {
           thisOwner.startTurnCalls += 1;
           thisOwner.started = true;
           thisOwner.startedAttachments = attachments;
+          thisOwner.startedSettings = settings;
           thisOwner.#activeTurnId = "native-turn-1";
           thisOwner.#stream({
             type: "turn_started",

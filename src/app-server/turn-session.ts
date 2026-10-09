@@ -14,6 +14,7 @@ import {
   type MessageAttachment,
 } from "../attachments/private-paths.ts";
 import type { AppServerMessageListener, JsonObject } from "./client.ts";
+import type { TurnSettingsOverride } from "./turn-settings.ts";
 import {
   publicRawToolView,
   publicToolView,
@@ -185,7 +186,12 @@ export class CodexTurnSession {
     this.#attachmentMappings = [...mappings];
   }
 
-  async startTextTurn(text: string, attachments: CodexTurnAttachment[] = []): Promise<string> {
+  /** `settings` 是会话运行中选定、这一轮起生效的模型与权限覆盖。 */
+  async startTextTurn(
+    text: string,
+    attachments: CodexTurnAttachment[] = [],
+    settings: TurnSettingsOverride = {},
+  ): Promise<string> {
     if (this.#activeTurnId || this.#starting) {
       throw new Error("这个会话已有任务正在运行。");
     }
@@ -220,6 +226,7 @@ export class CodexTurnSession {
       const params: TurnStartParams = {
         threadId: this.#threadId,
         input,
+        ...settings,
       };
       if (this.#pendingInterrupt) {
         this.#resolveStartingInterrupt(true);

@@ -200,6 +200,38 @@ test("builds dynamic model and permission menus", async () => {
   runner.dispose();
 });
 
+test("stages model and permission choices without touching Codex", async () => {
+  const transport = new FakeTransport();
+  const runner = createRunner(transport);
+
+  const model = await runner.stageModel("gpt-test", null);
+  assert.deepEqual(model.model, { id: "gpt-test", effort: "medium" });
+  assert.equal(model.message.title, "模型将在下一轮生效");
+  const permission = await runner.stagePermissions(":read-only");
+  assert.equal(permission.permissions, ":read-only");
+  assert.equal(permission.fullAccess, false);
+  await assert.rejects(runner.stagePermissions(":full-access"), /当前不可用/);
+  await assert.rejects(runner.stageModel("missing", null), /不在当前 Codex 返回的可用列表/);
+  assert.equal(
+    transport.requests.some((request) => request.method === "thread/settings/update"),
+    false,
+  );
+
+  // 菜单优先把待生效的选择标成选中项。
+  const permissions = await runner.options("permissions", { permissions: ":read-only" });
+  assert.deepEqual(
+    permissions.items.filter((item) => item.selected).map((item) => item.id),
+    [":read-only"],
+  );
+  const models = await runner.options("model", { model: { id: "gpt-test", effort: "high" } });
+  assert.equal(models.items[0]?.selected, true);
+  assert.deepEqual(
+    models.items[0]?.items?.filter((item) => item.selected).map((item) => item.id),
+    ["high"],
+  );
+  runner.dispose();
+});
+
 test("runs all five commands through app-server methods", async () => {
   const transport = new FakeTransport();
   const runner = createRunner(transport);

@@ -189,8 +189,8 @@ npm run codex:protocol
 
 `npm run codex:types` 用当前安装的 Codex CLI，在隔离的 `CODEX_HOME` 中按 manifest 记录的
 experimental 选择重新生成并逐字节比较真正被业务 import 的
-`src/generated/`。当前生成结果不包含生成器的完整 experimental surface；这与运行时为已采用方法
-设置 `experimentalApi: true` 是两个独立边界。`npm run codex:protocol` 会连接当前安装版本的真实 App Server，只做
+`src/generated/`。当前生成结果包含生成器的完整 experimental surface，与运行时为已采用方法
+设置的 `experimentalApi: true` 对应；两者仍是两个独立边界。`npm run codex:protocol` 会连接当前安装版本的真实 App Server，只做
 experimental 初始化和只读协议查询，不创建 thread，也不调用模型。这两项和
 `npm run typecheck && npm test` 一起构成无需模型的协议升级检查。
 

@@ -47,8 +47,8 @@ Node 直接跑 TypeScript，没有构建步骤。重启会断开浏览器连接�
 [`codex-protocol.json`](../codex-protocol.json) 记录项目最近完整验证过的 Codex CLI 版本、业务
 实际 import 的输出目录 `src/generated/`，以及生成器是否包含完整 experimental surface。
 版本号是已验证事实，不是运行时限制；用户可以自行更新 Codex CLI，Codex Remote 不会因版本
-不同而拒绝启动或检查协议。当前生成选择为 false；运行时仍为已采用的方法设置
-`experimentalApi: true`，两者不是同一个开关。不要在 README、运维命令或 generated 文件里
+不同而拒绝启动或检查协议。当前生成选择为 true，与运行时为已采用的方法设置的
+`experimentalApi: true` 对应；两者仍是两个开关，升级时分别审查。不要在 README、运维命令或 generated 文件里
 另维护一份已验证版本号。
 
 在不被运行中服务读取的隔离工作树或分支里升级：

@@ -3469,10 +3469,14 @@ function updateControls() {
     ? "快捷操作执行中，可以继续写"
     : "在浏览器里写好，再发送给 Codex";
   const controlsDisabled = !connected || !hasSession || busy || navigationBusy || state.selectionMode;
+  // 模型和权限在回复进行中也能改，后端记下后从下一轮开始生效。
+  const pickersDisabled = !connected || !hasSession || state.commandBusy || navigationBusy ||
+    state.selectionMode;
   elements.commandMenuButton.disabled = controlsDisabled;
-  elements.modelPickerButton.disabled = controlsDisabled;
-  elements.permissionPickerButton.disabled = controlsDisabled;
-  if (controlsDisabled) { closeComposerPicker(); slashCommands.close(); }
+  elements.modelPickerButton.disabled = pickersDisabled;
+  elements.permissionPickerButton.disabled = pickersDisabled;
+  if (pickersDisabled) closeComposerPicker();
+  if (controlsDisabled) slashCommands.close();
   if (state.stopping) {
     elements.taskButton.textContent = "停止中";
     elements.taskButton.classList.toggle("primary", false);
@@ -4220,7 +4224,7 @@ async function refreshPickerLabels() {
       const kind = command === "model" ? "model" : "permission";
       composerPickers[kind].label.textContent = label;
       composerPickers[kind].button.title = label;
-    } catch { /* 会话忙碌时后端可能拒绝查询，下次打开时重新读取。 */ }
+    } catch { /* 任务正在启动或收尾时后端会拒绝查询，下次打开时重新读取。 */ }
   }));
 }
 
