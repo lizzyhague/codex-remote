@@ -1678,6 +1678,7 @@ test("does not replay an interrupted turn after rewind removed it", async (conte
   let workerCreations = 0;
   const interruptedTurn = {
     id: "native-turn-1",
+    rootTurnId: null,
     items: [],
     itemsView: "summary",
     status: "interrupted",

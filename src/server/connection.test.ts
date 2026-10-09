@@ -400,6 +400,7 @@ function managedLoading(
 function completedTurn(id: string): OpenedSession["turns"][number] {
   return {
     id,
+    rootTurnId: null,
     items: [],
     itemsView: "full",
     status: "completed",

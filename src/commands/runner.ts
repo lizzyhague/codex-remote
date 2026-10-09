@@ -1,8 +1,6 @@
 import type { AppServerMessageListener, JsonObject } from "../app-server/client.ts";
 import type { AppServerTransport } from "../app-server/turn-session.ts";
-import type { ThreadReadResponse } from "../generated/v2/ThreadReadResponse.ts";
 import type { ThreadRevertResponse } from "../generated/v2/ThreadRevertResponse.ts";
-import type { ThreadRollbackResponse } from "../generated/v2/ThreadRollbackResponse.ts";
 import type { ThreadTurnsListResponse } from "../generated/v2/ThreadTurnsListResponse.ts";
 import type { SessionRuntime } from "../sessions/service.ts";
 import type { CommandName } from "./catalog.ts";
@@ -291,46 +289,10 @@ export class CommandRunner {
    * 已经消失就当作完成；仍在但不再是最后一轮则拒绝，绝不改退新的最后一轮。
    */
   async rewind(targetTurnId: string): Promise<RewindOutcome> {
-    if (this.#runtime.historyMode === "paginated") {
-      return this.#rewindPaginated(targetTurnId);
+    if (this.#runtime.historyMode !== "paginated") {
+      throw new PublicError("这个会话使用旧版历史格式，新版 Codex 不支持回退。");
     }
 
-    const current = asObject(await this.#transport.request<ThreadReadResponse>(
-      "thread/read",
-      { threadId: this.#threadId, includeTurns: true },
-    ));
-    const currentThread = asObject(current?.thread);
-    if (
-      !currentThread ||
-      currentThread.id !== this.#threadId ||
-      !Array.isArray(currentThread.turns)
-    ) {
-      throw new Error("Codex 返回了无法识别的会话历史。");
-    }
-    const currentTurnIds = turnIds(currentThread.turns);
-    if (currentTurnIds.at(-1) !== targetTurnId) {
-      return currentTurnIds.includes(targetTurnId) ? "stale" : "already_reverted";
-    }
-
-    const response = asObject(await this.#transport.request<ThreadRollbackResponse>(
-      "thread/rollback",
-      {
-        threadId: this.#threadId,
-        numTurns: 1,
-      },
-    ));
-    const thread = asObject(response?.thread);
-    if (
-      !thread ||
-      thread.id !== this.#threadId ||
-      !Array.isArray(thread.turns)
-    ) {
-      throw new Error("Codex 返回了无法识别的回退结果。");
-    }
-    return "reverted";
-  }
-
-  async #rewindPaginated(targetTurnId: string): Promise<RewindOutcome> {
     let cursor: string | null = null;
     const seenCursors = new Set<string>();
     let firstPage = true;

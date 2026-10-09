@@ -4,6 +4,7 @@ import test from "node:test";
 import type { AppServerMessageListener, JsonObject } from "../app-server/client.ts";
 import type { AppServerTransport } from "../app-server/turn-session.ts";
 import type { ThreadHistoryMode } from "../generated/v2/ThreadHistoryMode.ts";
+import { PublicError } from "../shared/public-error.ts";
 import { COMMAND_CATALOG } from "./catalog.ts";
 import { CommandRunner } from "./runner.ts";
 
@@ -19,10 +20,6 @@ class FakeTransport implements AppServerTransport {
   paginatedTurns = [
     completedTurn("paginated-kept"),
     completedTurn("paginated-removed"),
-  ];
-  legacyTurns = [
-    completedTurn("legacy-kept"),
-    completedTurn("legacy-removed"),
   ];
   reverted = false;
 
@@ -56,23 +53,6 @@ class FakeTransport implements AppServerTransport {
           },
         ],
         nextCursor: null,
-      } as Result;
-    }
-    if (method === "thread/read") {
-      return {
-        thread: {
-          id: "thread-1",
-          turns: this.legacyTurns,
-        },
-      } as Result;
-    }
-    if (method === "thread/rollback") {
-      this.legacyTurns = this.legacyTurns.slice(0, -1);
-      return {
-        thread: {
-          id: "thread-1",
-          turns: this.legacyTurns,
-        },
       } as Result;
     }
     if (method === "thread/turns/list") {
@@ -138,7 +118,7 @@ class FakeTransport implements AppServerTransport {
 
 function createRunner(
   transport: FakeTransport,
-  historyMode: ThreadHistoryMode = "legacy",
+  historyMode: ThreadHistoryMode = "paginated",
   runtime: Partial<{
     sandboxPolicy: unknown;
     activePermissionProfile: { id: string; extends: string | null } | null;
@@ -232,7 +212,7 @@ test("stages model and permission choices without touching Codex", async () => {
   runner.dispose();
 });
 
-test("runs all five commands through app-server methods", async () => {
+test("runs settings, rename and compact commands through app-server methods", async () => {
   const transport = new FakeTransport();
   const runner = createRunner(transport);
 
@@ -253,16 +233,11 @@ test("runs all five commands through app-server methods", async () => {
   assert.equal((await runner.rename("测试会话")).sessionName, "测试会话");
 
   assert.equal(await runner.compact(), null);
-  assert.equal(await runner.rewind("legacy-removed"), "reverted");
 
   const methods = transport.requests.map((request) => request.method);
   assert.ok(methods.includes("thread/settings/update"));
   assert.ok(methods.includes("thread/name/set"));
   assert.ok(methods.includes("thread/compact/start"));
-  assert.deepEqual(transport.requests.find((request) => request.method === "thread/rollback"), {
-    method: "thread/rollback",
-    params: { threadId: "thread-1", numTurns: 1 },
-  });
   assert.equal(methods.includes("turn/start"), false);
   assert.deepEqual(
     transport.requests.find((request) => request.method === "thread/settings/update"),
@@ -295,13 +270,26 @@ test("rewinds only the named latest paginated turn and treats a retry as complet
   runner.dispose();
 });
 
+test("rejects rewind for legacy history without sending requests", async () => {
+  const transport = new FakeTransport();
+  const runner = createRunner(transport, "legacy");
+
+  await assert.rejects(
+    runner.rewind("legacy-last"),
+    (error: unknown) => error instanceof PublicError &&
+      error.message === "这个会话使用旧版历史格式，新版 Codex 不支持回退。",
+  );
+  assert.deepEqual(transport.requests, []);
+  runner.dispose();
+});
+
 test("refuses to rewind a target that is still present but no longer latest", async () => {
   const transport = new FakeTransport();
   const runner = createRunner(transport);
 
-  assert.equal(await runner.rewind("legacy-kept"), "stale");
+  assert.equal(await runner.rewind("paginated-kept"), "stale");
   assert.equal(
-    transport.requests.filter((request) => request.method === "thread/rollback").length,
+    transport.requests.filter((request) => request.method === "thread/revert").length,
     0,
   );
   runner.dispose();

@@ -288,6 +288,7 @@ test("reload uses a stable turn error while preserving paths in message text", (
 function turn(id: string, items: ThreadItem[]): Turn {
   return {
     id,
+    rootTurnId: null,
     items,
     itemsView: "full",
     status: "completed",
