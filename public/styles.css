@@ -582,6 +582,7 @@ button.app-settings-button svg {
 .application-settings-row select {
   width: auto;
   min-width: 7.5rem;
+  max-width: min(65%, 22rem);
   padding: 0.45rem 0.65rem;
   background: #0f1116;
   color: #fff;
@@ -605,8 +606,16 @@ button.app-settings-button svg {
   anchor-name: --info-developer-instructions;
 }
 
+.field-info[popovertarget="info-model-defaults"] {
+  anchor-name: --info-model-defaults;
+}
+
 #info-developer-instructions {
   position-anchor: --info-developer-instructions;
+}
+
+#info-model-defaults {
+  position-anchor: --info-model-defaults;
 }
 
 .field-info {

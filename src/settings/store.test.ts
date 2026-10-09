@@ -18,34 +18,68 @@ async function fixture(context: TestContext) {
   return path.join(directory, "state", "settings.json");
 }
 
-test("defaults to an empty developerInstructions value when the file is missing", async (context) => {
+const DEFAULTS = {
+  developerInstructions: "",
+  defaultModel: null,
+  defaultReasoningEffort: null,
+};
+
+test("defaults to Codex-owned model settings when the file is missing", async (context) => {
   const filePath = await fixture(context);
   const store = await ApplicationSettingsStore.open(filePath);
-  assert.deepEqual(store.get(), { developerInstructions: "" });
+  assert.deepEqual(store.get(), DEFAULTS);
   await assert.rejects(readFile(filePath));
 });
 
-test("persists developerInstructions atomically and reloads them", async (context) => {
+test("persists full settings atomically and applies partial updates", async (context) => {
   const filePath = await fixture(context);
   const store = await ApplicationSettingsStore.open(filePath);
-  const saved = await store.update("始终用中文回复。");
-  assert.deepEqual(saved, { developerInstructions: "始终用中文回复。" });
-  assert.deepEqual(store.get(), { developerInstructions: "始终用中文回复。" });
+  const saved = await store.update({ developerInstructions: "始终用中文回复。" });
+  assert.deepEqual(saved, { ...DEFAULTS, developerInstructions: "始终用中文回复。" });
+
+  await store.update({
+    defaultModel: "gpt-test",
+    defaultReasoningEffort: "high",
+  });
+  assert.deepEqual(store.get(), {
+    developerInstructions: "始终用中文回复。",
+    defaultModel: "gpt-test",
+    defaultReasoningEffort: "high",
+  });
 
   const file = JSON.parse(await readFile(filePath, "utf8")) as {
     version: number;
     developerInstructions: string;
+    defaultModel: string | null;
+    defaultReasoningEffort: string | null;
   };
   assert.equal(file.version, 1);
   assert.equal(file.developerInstructions, "始终用中文回复。");
+  assert.equal(file.defaultModel, "gpt-test");
+  assert.equal(file.defaultReasoningEffort, "high");
   assert.equal((await stat(filePath)).mode & 0o777, 0o600);
 
   const reloaded = await ApplicationSettingsStore.open(filePath);
-  assert.deepEqual(reloaded.get(), { developerInstructions: "始终用中文回复。" });
+  assert.deepEqual(reloaded.get(), store.get());
 
-  await reloaded.update("");
+  await reloaded.update({ developerInstructions: "" });
   assert.deepEqual((await ApplicationSettingsStore.open(filePath)).get(), {
     developerInstructions: "",
+    defaultModel: "gpt-test",
+    defaultReasoningEffort: "high",
+  });
+});
+
+test("loads legacy version 1 settings without model fields", async (context) => {
+  const filePath = await fixture(context);
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, JSON.stringify({
+    version: 1,
+    developerInstructions: "旧指令",
+  }));
+  assert.deepEqual((await ApplicationSettingsStore.open(filePath)).get(), {
+    ...DEFAULTS,
+    developerInstructions: "旧指令",
   });
 });
 
@@ -53,11 +87,21 @@ test("rejects values over the character limit and malformed files", async (conte
   const filePath = await fixture(context);
   const store = await ApplicationSettingsStore.open(filePath);
   await assert.rejects(
-    () => store.update("字".repeat(MAX_DEVELOPER_INSTRUCTIONS_LENGTH + 1)),
+    () => store.update({
+      developerInstructions: "字".repeat(MAX_DEVELOPER_INSTRUCTIONS_LENGTH + 1),
+    }),
     (error: unknown) =>
       error instanceof ApplicationSettingsError && error.code === "invalid_field",
   );
-  assert.deepEqual(store.get(), { developerInstructions: "" });
+  await assert.rejects(
+    () => store.update({ defaultModel: "gpt-test" }),
+    /必须一起保存/u,
+  );
+  await assert.rejects(
+    () => store.update({ defaultModel: null, defaultReasoningEffort: "high" }),
+    /思考强度也必须跟随/u,
+  );
+  assert.deepEqual(store.get(), DEFAULTS);
 
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, JSON.stringify({ version: 1, developerInstructions: 12 }));
@@ -65,37 +109,6 @@ test("rejects values over the character limit and malformed files", async (conte
     () => ApplicationSettingsStore.open(filePath),
     /格式不正确/u,
   );
-});
-
-test("notifies listeners only when the stored value changes", async (context) => {
-  const filePath = await fixture(context);
-  const store = await ApplicationSettingsStore.open(filePath);
-  const received: string[] = [];
-  const stop = store.onChange((settings) => {
-    received.push(settings.developerInstructions);
-  });
-  await store.update("第一版");
-  await store.update("第一版");
-  await store.update("第二版");
-  stop();
-  await store.update("第三版");
-  assert.deepEqual(received, ["第一版", "第二版"]);
-});
-
-test("a throwing listener does not reject the update or block later listeners", async (context) => {
-  const filePath = await fixture(context);
-  const store = await ApplicationSettingsStore.open(filePath);
-  const received: string[] = [];
-  context.mock.method(console, "error", () => {});
-  store.onChange(() => {
-    throw new Error("stale browser");
-  });
-  store.onChange((settings) => {
-    received.push(settings.developerInstructions);
-  });
-  await assert.doesNotReject(() => store.update("第一版"));
-  assert.deepEqual(store.get(), { developerInstructions: "第一版" });
-  assert.deepEqual(received, ["第一版"]);
 });
 
 test("keeps settings beside the trash file unless an explicit settings path is set", () => {
@@ -111,23 +124,23 @@ test("keeps settings beside the trash file unless an explicit settings path is s
   }), "/var/state/codex-remote/settings.json");
 });
 
-test("a failed save keeps the previous value, notifies nobody, and leaves no temporary file", async (context) => {
+test("a failed save keeps the previous value and leaves no temporary file", async (context) => {
   const filePath = await fixture(context);
   const store = await ApplicationSettingsStore.open(filePath);
-  await store.update("旧指令");
-  const notified: string[] = [];
-  store.onChange((settings) => notified.push(settings.developerInstructions));
+  await store.update({ developerInstructions: "旧指令" });
 
   for (const stage of ["file-write", "directory-sync"] as const) {
     const faults = injectFsFaults(context, { fail: { [stage]: 1 } });
-    await assert.rejects(store.update("新指令"), new RegExp(`injected ${stage} failure`, "u"));
+    await assert.rejects(
+      store.update({ developerInstructions: "新指令" }),
+      new RegExp(`injected ${stage} failure`, "u"),
+    );
     faults.heal();
     context.mock.restoreAll();
-    assert.deepEqual(store.get(), { developerInstructions: "旧指令" });
+    assert.deepEqual(store.get(), { ...DEFAULTS, developerInstructions: "旧指令" });
     assert.deepEqual(await temporaryFiles(path.dirname(filePath)), []);
   }
-  assert.deepEqual(notified, []);
 
-  await store.update("新指令");
-  assert.deepEqual(notified, ["新指令"]);
+  await store.update({ developerInstructions: "新指令" });
+  assert.deepEqual(store.get(), { ...DEFAULTS, developerInstructions: "新指令" });
 });

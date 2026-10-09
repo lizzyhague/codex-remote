@@ -51,10 +51,31 @@ class FakeSocket implements BrowserSocket {
   }
 }
 
-/** 只用来读账号额度；会话和任务都不经过它。 */
+/** 目录 App Server；会话和任务都不经过它。 */
 class FakeTransport implements AppServerTransport {
-  async request<Result>(): Promise<Result> {
-    throw new Error("测试不应通过目录 App Server 发请求。");
+  readonly requests: Array<{ method: string; params: unknown }> = [];
+  beforeModels: (() => Promise<void>) | null = null;
+
+  async request<Result>(method: string, params: unknown): Promise<Result> {
+    this.requests.push({ method, params });
+    if (method === "model/list") {
+      if (this.beforeModels) await this.beforeModels();
+      return {
+        data: [{
+          id: "gpt-test",
+          displayName: "GPT Test",
+          description: "测试模型",
+          isDefault: true,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [
+            { reasoningEffort: "medium", description: "平衡" },
+            { reasoningEffort: "high", description: "深入" },
+          ],
+        }],
+        nextCursor: null,
+      } as Result;
+    }
+    throw new Error(`测试不应通过目录 App Server 发 ${method} 请求。`);
   }
 
   onNotification(_listener: AppServerMessageListener): () => void {
@@ -1057,7 +1078,7 @@ test("disconnecting does not wait for an in-flight request or let it reattach la
   assert.equal(workers.attached.has("phone"), false, "迟到的恢复结果不能挂回死连接");
 });
 
-test("reads and updates backend settings and notifies other browsers", async (context) => {
+test("reads and updates backend settings without pushing into other browsers", async (context) => {
   const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-connection-"));
   context.after(() => rm(directory, { recursive: true, force: true }));
   const settings = await ApplicationSettingsStore.open(path.join(directory, "settings.json"));
@@ -1075,21 +1096,55 @@ test("reads and updates backend settings and notifies other browsers", async (co
 
   first.receiveText(request("settings.get", "get-1"));
   await first.whenIdle();
-  assert.equal(data(firstSocket.last("response")).developerInstructions, "");
+  assert.deepEqual(data(firstSocket.last("response")), {
+    developerInstructions: "",
+    defaultModel: null,
+    defaultReasoningEffort: null,
+  });
 
   first.receiveText(request("settings.update", "update-1", {
     developerInstructions: "额外说明",
   }));
   await first.whenIdle();
   assert.equal(data(firstSocket.last("response")).developerInstructions, "额外说明");
-  assert.equal(
-    secondSocket.events("settings.updated").at(-1)?.developerInstructions,
-    "额外说明",
-  );
+  assert.deepEqual(secondSocket.events("settings.updated"), []);
+
+  first.receiveText(request("settings.update", "update-2", {
+    defaultModel: "gpt-test",
+    defaultReasoningEffort: "high",
+  }));
+  await first.whenIdle();
+  assert.deepEqual(data(firstSocket.last("response")), {
+    developerInstructions: "额外说明",
+    defaultModel: "gpt-test",
+    defaultReasoningEffort: "high",
+  });
 
   second.receiveText(request("settings.get", "get-2"));
   await second.whenIdle();
-  assert.equal(data(secondSocket.last("response")).developerInstructions, "额外说明");
+  assert.deepEqual(data(secondSocket.last("response")), {
+    developerInstructions: "额外说明",
+    defaultModel: "gpt-test",
+    defaultReasoningEffort: "high",
+  });
+
+  second.receiveText(request("settings.models", "models-1"));
+  await second.whenIdle();
+  assert.deepEqual(data(secondSocket.last("response")), [{
+    id: "gpt-test",
+    displayName: "GPT Test",
+    description: "测试模型",
+    isDefault: true,
+    defaultReasoningEffort: "medium",
+    supportedReasoningEfforts: [
+      { reasoningEffort: "medium", description: "平衡" },
+      { reasoningEffort: "high", description: "深入" },
+    ],
+  }]);
+  assert.deepEqual((services.turnTransport as FakeTransport).requests, [{
+    method: "model/list",
+    params: { cursor: null, limit: 100, includeHidden: false },
+  }]);
 });
 
 test("rejects settings requests when the backend has no settings store", async (context) => {
@@ -1103,6 +1158,49 @@ test("rejects settings requests when the backend has no settings store", async (
   const response = socket.last("response")!;
   assert.equal(response.ok, false);
   assert.equal((response.error as JsonObject).code, "settings_unavailable");
+});
+
+test("a slow model catalog does not block saving other settings", async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-connection-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const settings = await ApplicationSettingsStore.open(path.join(directory, "settings.json"));
+  const { services } = setup();
+  services.settings = settings;
+  const transport = services.turnTransport as FakeTransport;
+  let releaseModels!: () => void;
+  let reportModelsStarted!: () => void;
+  const modelsStarted = new Promise<void>((resolve) => {
+    reportModelsStarted = resolve;
+  });
+  const modelsGate = new Promise<void>((resolve) => {
+    releaseModels = resolve;
+  });
+  transport.beforeModels = async () => {
+    reportModelsStarted();
+    await modelsGate;
+  };
+  const socket = new FakeSocket();
+  const connection = new BrowserConnection("phone", socket, services);
+  context.after(() => connection.disconnect());
+
+  connection.receiveText(request("settings.models", "models-slow"));
+  await modelsStarted;
+  connection.receiveText(request("settings.update", "update-fast", {
+    developerInstructions: "不等模型列表",
+  }));
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (socket.messages.some((message) => message.requestId === "update-fast")) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  const updateResponse = socket.messages.find((message) => message.requestId === "update-fast");
+  const modelsFinishedBeforeSave = socket.messages.some(
+    (message) => message.requestId === "models-slow",
+  );
+  releaseModels();
+  await connection.whenIdle();
+  assert.equal(updateResponse?.ok, true);
+  assert.equal(modelsFinishedBeforeSave, false);
+  assert.equal(socket.messages.find((message) => message.requestId === "models-slow")?.ok, true);
 });
 
 test("only explicit business errors keep their message at the request boundary", (context) => {

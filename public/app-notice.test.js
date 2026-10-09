@@ -49,7 +49,6 @@ function eventHarness() {
     publicAttachments: () => [],
     userMessageKey: (text, attachments) => JSON.stringify([text, attachments.map((a) => a.id)]),
     addMessage: () => ({}),
-    applySettingsUpdated() {},
     resetCurrentSession() {},
     showEmpty() {},
     loadSessions() {},

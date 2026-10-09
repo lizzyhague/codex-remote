@@ -1,5 +1,9 @@
 import { isCommandName, type CommandName } from "../commands/catalog.ts";
-import { MAX_DEVELOPER_INSTRUCTIONS_LENGTH } from "../settings/store.ts";
+import {
+  MAX_DEVELOPER_INSTRUCTIONS_LENGTH,
+  MAX_MODEL_ID_LENGTH,
+  MAX_REASONING_EFFORT_LENGTH,
+} from "../settings/store.ts";
 import { isObject } from "../shared/json.ts";
 
 export type BrowserSessionView = "active" | "archived" | "trash";
@@ -69,10 +73,13 @@ export type BrowserRequest =
   }
   | ({ type: "session.metrics"; requestId: string } & BrowserSessionTarget)
   | { type: "settings.get"; requestId: string }
+  | { type: "settings.models"; requestId: string }
   | {
     type: "settings.update";
     requestId: string;
-    developerInstructions: string;
+    developerInstructions?: string;
+    defaultModel?: string | null;
+    defaultReasoningEffort?: string | null;
   }
   | ({ type: "history.older"; requestId: string } & BrowserSessionTarget)
   | { type: "commands.list"; requestId: string }
@@ -180,12 +187,51 @@ export function parseBrowserRequest(source: string): BrowserRequest {
       return { type: "session.metrics", requestId, ...requireSessionTarget(value, requestId) };
     case "settings.get":
       return { type: "settings.get", requestId };
-    case "settings.update":
-      return {
+    case "settings.models":
+      return { type: "settings.models", requestId };
+    case "settings.update": {
+      const update: Extract<BrowserRequest, { type: "settings.update" }> = {
         type: "settings.update",
         requestId,
-        developerInstructions: requireDeveloperInstructions(value.developerInstructions, requestId),
       };
+      if (Object.hasOwn(value, "developerInstructions")) {
+        update.developerInstructions = requireDeveloperInstructions(
+          value.developerInstructions,
+          requestId,
+        );
+      }
+      const hasModel = Object.hasOwn(value, "defaultModel");
+      const hasEffort = Object.hasOwn(value, "defaultReasoningEffort");
+      if (hasModel !== hasEffort) {
+        throw new ProtocolError(
+          "invalid_field",
+          "默认模型和默认思考强度必须一起保存。",
+          requestId,
+        );
+      }
+      if (hasModel && hasEffort) {
+        update.defaultModel = requireNullableString(
+          value.defaultModel,
+          "默认模型",
+          requestId,
+          MAX_MODEL_ID_LENGTH,
+        );
+        update.defaultReasoningEffort = requireNullableString(
+          value.defaultReasoningEffort,
+          "默认思考强度",
+          requestId,
+          MAX_REASONING_EFFORT_LENGTH,
+        );
+        if (update.defaultModel === null && update.defaultReasoningEffort !== null) {
+          throw new ProtocolError(
+            "invalid_field",
+            "跟随 Codex 默认模型时，思考强度也必须跟随 Codex 默认。",
+            requestId,
+          );
+        }
+      }
+      return update;
+    }
     case "projects.list":
       return { type: "projects.list", requestId };
     case "sessions.list":
@@ -460,6 +506,16 @@ function requireDeveloperInstructions(value: unknown, requestId: string): string
     );
   }
   return value;
+}
+
+function requireNullableString(
+  value: unknown,
+  label: string,
+  requestId: string,
+  maxLength: number,
+): string | null {
+  if (value === null) return null;
+  return requireString(value, label, requestId, maxLength);
 }
 
 function requireBoolean(value: unknown, label: string, requestId: string): boolean {

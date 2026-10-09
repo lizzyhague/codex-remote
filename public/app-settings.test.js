@@ -85,12 +85,25 @@ test("developer instructions sit in the app-settings dialog with companion field
     .map((match) => match[1].replace(/<[^>]+>/gu, ""));
   assert.deepEqual(paragraphs, [
     "这段内容由 Codex Remote 后端保存。连到同一后端的设备共用这一份；不同后端之间不会同步。",
+    "设置窗口打开时读取一次后端内容；要查看其他设备后来保存的内容，请关闭后重新打开。",
     "新建或重新载入会话时，会通过 Codex App Server 的 developerInstructions 注入。",
     "Developer 指令的优先级高于用户消息。",
     "它不会替换 Codex 自带的基础指令，也不能用来控制完整的系统提示词。",
     "留空时只使用 Codex Remote 内置的 Developer 指令。改动不会影响已经在运行的任务。",
   ]);
   assert.doesNotMatch(appDialog, /baseInstructions/u);
+});
+
+test("new-session model defaults explain their backend scope and lifecycle", () => {
+  assert.match(appDialog, />新会话默认值</u);
+  assert.match(appDialog, /id="default-model-select"/u);
+  assert.match(appDialog, /id="default-reasoning-effort-select"/u);
+  assert.match(appDialog, />默认模型</u);
+  assert.match(appDialog, />默认思考强度</u);
+  assert.match(appDialog, /它们只在新建会话时使用/u);
+  assert.match(appDialog, /会话里临时切换也不会写回这里/u);
+  assert.match(appDialog, /「跟随 Codex 默认」不会固定当前默认值/u);
+  assert.match(appDialog, /id="model-defaults-status"[^>]*aria-live="polite"/u);
 });
 
 test("the save row sits outside the scrolling area and the dialog body is the only scroller", () => {
@@ -119,30 +132,41 @@ test("ⓘ is declarative, does not wrap the textarea, and hides when closed", ()
   );
   assert.match(styles, /\.application-settings-body\s*\{[^}]*anchor-name:\s*--application-settings-body;/su);
   assert.match(styles, /\.field-info-popover:not\(:popover-open\)\s*\{\s*display:\s*none;/su);
-  assert.doesNotMatch(appDialog, /<label class="[^"]*"[^>]*>[\s\S]*field-info[\s\S]*developer-instructions-input/u);
+  const developerStart = appDialog.indexOf("developer-instructions-info-button");
+  const developerSection = appDialog.slice(developerStart, appDialog.indexOf("</section>", developerStart));
+  assert.doesNotMatch(developerSection, /<label class="[^"]*"[^>]*>[\s\S]*field-info[\s\S]*developer-instructions-input/u);
 });
 
-test("opening reloads backend settings; events skip an open dirty form", () => {
+test("opening reloads backend settings and models without accepting pushed changes", () => {
   assert.match(app, /request\("settings\.get"\)/u);
-  assert.match(app, /request\("settings\.update", \{\s*developerInstructions:/u);
+  assert.match(app, /request\("settings\.models"\)/u);
+  assert.match(app, /request\("settings\.update", \{\s*developerInstructions:[\s\S]*defaultModel:[\s\S]*defaultReasoningEffort:/u);
   assert.match(app, /async function openAppSettings\(\)/u);
-  assert.match(app, /function applySettingsUpdated\(/u);
-  assert.match(app, /preserveForm = dialogOpen && \(state\.appSettingsBusy \|\| developerInstructionsDirty\(\)\)/u);
-  assert.match(app, /if \(dialogOpen && !preserveForm\)/u);
-  assert.match(app, /case "settings\.updated":/u);
+  assert.doesNotMatch(app, /function applySettingsUpdated\(/u);
+  assert.doesNotMatch(app, /case "settings\.updated":/u);
   const open = app.slice(
     app.indexOf("async function openAppSettings()"),
     app.indexOf("function closeAppSettings()"),
   );
-  assert.match(open, /await loadDeveloperInstructions\(\)/u);
-  assert.ok(open.indexOf("await loadDeveloperInstructions()") < open.indexOf("showModal()"));
+  assert.match(open, /const settings = loadBackendSettings\(generation\)/u);
+  assert.match(open, /const models = loadSettingsModels\(generation\)/u);
+  assert.match(open, /await settings/u);
+  assert.ok(open.indexOf("loadBackendSettings(generation)") < open.indexOf("loadSettingsModels(generation)"));
+  assert.ok(open.indexOf("await settings") < open.indexOf("showModal()"));
   assert.match(open, /if \(!elements\.appSettingsDialog\.open\) elements\.appSettingsDialog\.showModal\(\)/u);
   const load = app.slice(
-    app.indexOf("async function loadDeveloperInstructions()"),
+    app.indexOf("async function loadBackendSettings("),
     app.indexOf("async function saveAppSettings()"),
   );
-  assert.match(load, /catch \(error\) \{\s*setAppSettingsStatus\(errorMessage\(error\), "error"\);/su);
+  assert.match(load, /request\("settings\.models"\)/u);
   assert.ok(load.indexOf("elements.developerInstructionsInput.value = value") < load.indexOf("} catch"));
+});
+
+test("model and effort controls preserve unavailable settings and move effort with model", () => {
+  assert.match(app, /label: ready \? `\$\{model\}（当前不可用）`/u);
+  assert.match(app, /label: ready \? `\$\{effort\}（当前不可用）`/u);
+  assert.match(app, /原先的思考强度不适用于这个模型，已改为跟随模型默认。/u);
+  assert.match(app, /model === null \|\| !selectedModel/u);
 });
 
 test("save disables controls, closes on success, and leaves errors in the dialog", () => {

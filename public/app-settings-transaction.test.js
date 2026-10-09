@@ -31,9 +31,11 @@ class FakeElement {
     this.disabled = false;
     this.open = false;
     this.textContent = "";
+    this.children = [];
   }
   addEventListener(name, listener) { this.listeners[name] = listener; }
   querySelectorAll() { return []; }
+  replaceChildren(...children) { this.children = children; }
 }
 
 /** 2026-01-15T12:00:00Z：上海 20:00，东京 21:00，纽约 07:00。 */
@@ -76,9 +78,19 @@ function harness({ stored = SHANGHAI } = {}) {
       displayTimezone: loadDisplayTimezonePreference(localStorage),
       displayTimezoneDraft: null,
       developerInstructions: "",
+      defaultModel: null,
+      defaultReasoningEffort: null,
+      defaultModelDraft: null,
+      defaultReasoningEffortDraft: null,
+      settingsModels: [],
+      settingsModelsState: "idle",
+      settingsModelsError: "",
+      modelDefaultsMessage: "",
+      appSettingsLoadGeneration: 0,
       appSettingsBusy: false,
     },
     elements,
+    document: { createElement: () => new FakeElement() },
     window: { addEventListener: (name, listener) => { windowListeners[name] = listener; } },
     request(type, payload = {}) {
       requests.push({ type, ...payload });
@@ -107,8 +119,16 @@ function harness({ stored = SHANGHAI } = {}) {
     respond(result) {
       responders.push(() => (result instanceof Error ? Promise.reject(result) : Promise.resolve(result)));
     },
-    async open() {
-      this.respond({ developerInstructions: "" });
+    async open({
+      models = [],
+      settings = {
+        developerInstructions: "",
+        defaultModel: null,
+        defaultReasoningEffort: null,
+      },
+    } = {}) {
+      this.respond(settings);
+      this.respond(models);
       elements.appSettingsButton.listeners.click();
       await tick();
       assert.equal(dialog.open, true);
@@ -173,6 +193,86 @@ test("save commits the timezone draft together with the backend settings", async
   assert.deepEqual(h.stored(), { followDevice: false, cityTimeZone: "America/New_York" });
   assert.match(h.shown, /07:00/u, "closing after save does not roll back the committed zone");
   assert.equal(h.context.state.displayTimezoneDraft, null);
+});
+
+test("an unavailable saved model and effort stay visible", async () => {
+  const h = harness();
+  await h.open({
+    settings: {
+      developerInstructions: "",
+      defaultModel: "gpt-retired",
+      defaultReasoningEffort: "ultra",
+    },
+  });
+
+  assert.equal(h.elements.defaultModelSelect.value, "gpt-retired");
+  assert.equal(h.elements.defaultReasoningEffortSelect.value, "ultra");
+  assert.equal(
+    h.elements.defaultModelSelect.children.find((option) => option.value === "gpt-retired")?.textContent,
+    "gpt-retired（当前不可用）",
+  );
+  assert.equal(
+    h.elements.defaultReasoningEffortSelect.children.find((option) => option.value === "ultra")?.textContent,
+    "ultra（当前不可用）",
+  );
+});
+
+test("changing models resets an unsupported effort to that model's default", async () => {
+  const h = harness();
+  await h.open({
+    models: [
+      {
+        id: "gpt-a",
+        displayName: "GPT A",
+        defaultReasoningEffort: "high",
+        supportedReasoningEfforts: [{ reasoningEffort: "high" }],
+      },
+      {
+        id: "gpt-b",
+        displayName: "GPT B",
+        defaultReasoningEffort: "low",
+        supportedReasoningEfforts: [{ reasoningEffort: "low" }],
+      },
+    ],
+    settings: {
+      developerInstructions: "",
+      defaultModel: "gpt-a",
+      defaultReasoningEffort: "high",
+    },
+  });
+
+  h.elements.defaultModelSelect.value = "gpt-b";
+  h.elements.defaultModelSelect.listeners.change();
+  assert.equal(h.context.state.defaultModelDraft, "gpt-b");
+  assert.equal(h.context.state.defaultReasoningEffortDraft, null);
+  assert.match(h.elements.modelDefaultsStatus.textContent, /已改为跟随模型默认/u);
+
+  h.elements.defaultModelSelect.value = "";
+  h.elements.defaultModelSelect.listeners.change();
+  assert.equal(h.elements.defaultReasoningEffortSelect.disabled, true);
+  assert.equal(h.elements.defaultReasoningEffortSelect.children.length, 1);
+  assert.equal(h.elements.defaultReasoningEffortSelect.children[0].textContent, "跟随 Codex 默认");
+});
+
+test("a failed model list does not clear saved defaults when other settings are saved", async () => {
+  const h = harness();
+  const settings = {
+    developerInstructions: "旧指令",
+    defaultModel: "gpt-saved",
+    defaultReasoningEffort: "high",
+  };
+  await h.open({ models: new Error("列表失败"), settings });
+  h.elements.developerInstructionsInput.value = "新指令";
+  h.respond({ ...settings, developerInstructions: "新指令" });
+  h.elements.appSettingsForm.listeners.submit({ preventDefault() {} });
+  await tick();
+
+  assert.deepEqual(h.requests.at(-1), {
+    type: "settings.update",
+    developerInstructions: "新指令",
+    defaultModel: "gpt-saved",
+    defaultReasoningEffort: "high",
+  });
 });
 
 test("a failed save keeps the dialog and draft; cancelling afterwards still rolls back", async () => {

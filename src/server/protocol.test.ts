@@ -208,6 +208,13 @@ test("parses the small stable browser protocol", () => {
     requestId: "settings-1",
   });
   assert.deepEqual(parseBrowserRequest(JSON.stringify({
+    type: "settings.models",
+    requestId: "settings-models",
+  })), {
+    type: "settings.models",
+    requestId: "settings-models",
+  });
+  assert.deepEqual(parseBrowserRequest(JSON.stringify({
     type: "settings.update",
     requestId: "settings-2",
     developerInstructions: "",
@@ -220,10 +227,14 @@ test("parses the small stable browser protocol", () => {
     type: "settings.update",
     requestId: "settings-3",
     developerInstructions: "始终用中文回复。",
+    defaultModel: "gpt-test",
+    defaultReasoningEffort: "high",
   })), {
     type: "settings.update",
     requestId: "settings-3",
     developerInstructions: "始终用中文回复。",
+    defaultModel: "gpt-test",
+    defaultReasoningEffort: "high",
   });
 });
 
@@ -298,7 +309,17 @@ test("rejects arbitrary paths and unknown operations", () => {
   assert.throws(
     () => parseBrowserRequest(JSON.stringify({
       type: "settings.update",
-      requestId: "settings-missing",
+      requestId: "settings-unpaired",
+      defaultModel: "gpt-test",
+    })),
+    (error: unknown) => error instanceof ProtocolError && error.code === "invalid_field",
+  );
+  assert.throws(
+    () => parseBrowserRequest(JSON.stringify({
+      type: "settings.update",
+      requestId: "settings-invalid-default",
+      defaultModel: null,
+      defaultReasoningEffort: "high",
     })),
     (error: unknown) => error instanceof ProtocolError && error.code === "invalid_field",
   );

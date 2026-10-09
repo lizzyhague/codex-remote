@@ -270,11 +270,16 @@ export class CodexSessionService {
 
   async start(projectId: string): Promise<OpenedSession> {
     const project = await this.#projects.resolve(projectId);
+    const settings = this.#settings?.get();
     const params: ThreadStartParams = {
       cwd: project.path,
       ephemeral: false,
       serviceName: "codex_remote",
       developerInstructions: this.#developerInstructions(),
+      ...(settings?.defaultModel ? { model: settings.defaultModel } : {}),
+      ...(settings?.defaultReasoningEffort
+        ? { config: { model_reasoning_effort: settings.defaultReasoningEffort } }
+        : {}),
     };
     const response = await this.#transport.request<ThreadStartResponse>(
       "thread/start",

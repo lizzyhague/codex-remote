@@ -186,7 +186,7 @@ test("starts a persistent session with a catalog-resolved cwd", async (context) 
 
 test("injects saved developerInstructions on start and resume", async (context) => {
   const { catalog, project, trash, settings } = await createFixture(context);
-  await settings.update("始终用中文回复。");
+  await settings.update({ developerInstructions: "始终用中文回复。" });
   const transport = new FakeTransport();
   const service = new CodexSessionService(transport, catalog, trash, { settings });
   const expected = `${CODEX_REMOTE_DEVELOPER_INSTRUCTIONS}\n\n始终用中文回复。`;
@@ -214,7 +214,7 @@ test("injects saved developerInstructions on start and resume", async (context) 
   );
   assert.equal("baseInstructions" in (resume?.params as object), false);
 
-  await settings.update("   ");
+  await settings.update({ developerInstructions: "   " });
   transport.results.push({ thread: thread("thread-blank", project) });
   await service.start("workspace/alpha");
   assert.equal(
@@ -222,6 +222,49 @@ test("injects saved developerInstructions on start and resume", async (context) 
       .developerInstructions,
     CODEX_REMOTE_DEVELOPER_INSTRUCTIONS,
   );
+});
+
+test("uses saved model defaults only when starting a new session", async (context) => {
+  const { catalog, project, trash, settings } = await createFixture(context);
+  await settings.update({
+    defaultModel: "gpt-test",
+    defaultReasoningEffort: "high",
+  });
+  const transport = new FakeTransport();
+  const service = new CodexSessionService(transport, catalog, trash, { settings });
+
+  transport.results.push({
+    thread: thread("thread-new", project),
+    model: "gpt-test",
+    reasoningEffort: "high",
+  });
+  await service.start("workspace/alpha");
+  assert.deepEqual(transport.requests[0], {
+    method: "thread/start",
+    params: {
+      cwd: project,
+      ephemeral: false,
+      serviceName: "codex_remote",
+      developerInstructions: CODEX_REMOTE_DEVELOPER_INSTRUCTIONS,
+      model: "gpt-test",
+      config: { model_reasoning_effort: "high" },
+    },
+  });
+
+  transport.results.push(
+    { thread: thread("thread-old", project) },
+    { thread: thread("thread-old", project) },
+  );
+  await service.resume("workspace/alpha", "thread-old");
+  const resume = transport.requests.find((request) => request.method === "thread/resume");
+  assert.deepEqual(resume, {
+    method: "thread/resume",
+    params: {
+      threadId: "thread-old",
+      cwd: project,
+      developerInstructions: CODEX_REMOTE_DEVELOPER_INSTRUCTIONS,
+    },
+  });
 });
 
 test("checks ownership before resuming and returns stored turns", async (context) => {

@@ -127,7 +127,7 @@ thread 与完整历史的权威；下面的文件不包含那些原生 thread，
 | --- | --- | --- |
 | `CODEX_REMOTE_STATE_FILE` | 回收站登记：thread ID、项目 ID、删除时间、恢复目标、移入 / 恢复 / 永久删除阶段 | 低 |
 | `CODEX_REMOTE_MARKS_FILE` | 钉住会话记录；未设置时与回收站同目录的 `marks.json` | 低 |
-| `CODEX_REMOTE_SETTINGS_FILE` | 应用设置 JSON：当前是附加 Developer 指令；未设置时与回收站同目录的 `settings.json` | 中，按用户指令对待 |
+| `CODEX_REMOTE_SETTINGS_FILE` | 应用设置 JSON：附加 Developer 指令、新会话默认模型与思考强度；未设置时与回收站同目录的 `settings.json` | 中，按用户指令对待 |
 | `CODEX_REMOTE_WORK_STATE_FILE` | Worker SQLite：已接受消息、任务状态、脱敏事件、工具输出 | 高，按对话数据对待 |
 | Worker 状态目录下的 `attachment-index/` | 会话附件显示索引：附件 ID、原名和本机真实路径 | 高，按本机路径与附件元数据对待 |
 

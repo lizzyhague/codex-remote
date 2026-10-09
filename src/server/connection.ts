@@ -31,11 +31,11 @@ import {
 } from "../workers/manager.ts";
 import {
   ApplicationSettingsError,
-  type ApplicationSettings,
   type ApplicationSettingsStore,
 } from "../settings/store.ts";
 import { isPublicError, PublicError } from "../shared/public-error.ts";
 import { redactHostPaths } from "../attachments/path-redaction.ts";
+import { listModels } from "../app-server/models.ts";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -91,17 +91,20 @@ export class BrowserRequestError extends PublicError {
   }
 }
 
-/** 一个浏览器 WebSocket 的状态机。所有收到的请求按顺序处理，避免竞态。 */
+/**
+ * 一个浏览器 WebSocket 的状态机。会改变会话或设置的请求按顺序处理，避免竞态；
+ * 独立的模型目录读取并行执行，不能挡住设置保存。
+ */
 export class BrowserConnection {
   readonly #id: string;
   readonly #socket: BrowserSocket;
   readonly #services: BrowserConnectionServices;
   readonly #unsubscribeSessionChanges: () => void;
   readonly #unsubscribeWorkerEvents: () => void;
-  readonly #unsubscribeSettings: () => void;
   #authenticated = true;
   #disconnected = false;
   #queue: Promise<void> = Promise.resolve();
+  readonly #backgroundRequests = new Set<Promise<void>>();
   #disconnectPromise: Promise<void> | null = null;
   #projectId: string | null = null;
   #sessionId: string | null = null;
@@ -131,9 +134,6 @@ export class BrowserConnection {
     this.#unsubscribeWorkerEvents = services.workers.onEvent((event) => {
       this.#handleWorkerEvent(event);
     });
-    this.#unsubscribeSettings = services.settings?.onChange((settings) => {
-      this.#handleSettingsChange(settings);
-    }) ?? (() => {});
     services.workers.clientAuthenticated(this.#id);
   }
 
@@ -145,30 +145,6 @@ export class BrowserConnection {
     if (this.#disconnected) {
       return;
     }
-    this.#queue = this.#queue.then(() => this.#process(source)).catch((error: unknown) => {
-      this.#send({
-        type: "error",
-        requestId: null,
-        error: { code: "internal_error", message: publicErrorMessage(error) },
-      });
-    });
-  }
-
-  whenIdle(): Promise<void> {
-    return this.#queue;
-  }
-
-  disconnect(): Promise<void> {
-    if (this.#disconnectPromise) {
-      return this.#disconnectPromise;
-    }
-    this.#disconnected = true;
-    this.#authenticated = false;
-    this.#disconnectPromise = this.#handleDisconnect();
-    return this.#disconnectPromise;
-  }
-
-  async #process(source: string): Promise<void> {
     let request: BrowserRequest;
     try {
       request = parseBrowserRequest(source);
@@ -181,9 +157,52 @@ export class BrowserConnection {
         });
         return;
       }
-      throw error;
+      this.#send({
+        type: "error",
+        requestId: null,
+        error: { code: "internal_error", message: publicErrorMessage(error) },
+      });
+      return;
     }
 
+    if (request.type === "settings.models") {
+      const operation = this.#process(request, false).catch((error: unknown) => {
+        this.#send({
+          type: "error",
+          requestId: null,
+          error: { code: "internal_error", message: publicErrorMessage(error) },
+        });
+      });
+      this.#backgroundRequests.add(operation);
+      void operation.finally(() => this.#backgroundRequests.delete(operation));
+      return;
+    }
+
+    this.#queue = this.#queue.then(() => this.#process(request)).catch((error: unknown) => {
+      this.#send({
+        type: "error",
+        requestId: null,
+        error: { code: "internal_error", message: publicErrorMessage(error) },
+      });
+    });
+  }
+
+  async whenIdle(): Promise<void> {
+    await this.#queue;
+    await Promise.all([...this.#backgroundRequests]);
+  }
+
+  disconnect(): Promise<void> {
+    if (this.#disconnectPromise) {
+      return this.#disconnectPromise;
+    }
+    this.#disconnected = true;
+    this.#authenticated = false;
+    this.#disconnectPromise = this.#handleDisconnect();
+    return this.#disconnectPromise;
+  }
+
+  async #process(request: BrowserRequest, flushDeferredEvents = true): Promise<void> {
     try {
       const data = await this.#dispatch(request);
       this.#send({ type: "response", requestId: request.requestId, ok: true, data });
@@ -194,7 +213,7 @@ export class BrowserConnection {
         : "request_failed";
       this.#sendFailure(request.requestId, code, publicErrorMessage(error));
     } finally {
-      this.#flushDeferredEvents();
+      if (flushDeferredEvents) this.#flushDeferredEvents();
     }
   }
 
@@ -251,8 +270,13 @@ export class BrowserConnection {
       }
       case "settings.get":
         return this.#requireSettings().get();
-      case "settings.update":
-        return this.#requireSettings().update(request.developerInstructions);
+      case "settings.models":
+        this.#requireSettings();
+        return listModels(this.#services.turnTransport);
+      case "settings.update": {
+        const { type: _type, requestId: _requestId, ...patch } = request;
+        return this.#requireSettings().update(patch);
+      }
       case "session.metrics": {
         const { sessionId } = this.#requireSessionTarget(request);
         return {
@@ -521,17 +545,6 @@ export class BrowserConnection {
     );
   }
 
-  #handleSettingsChange(settings: ApplicationSettings): void {
-    if (!this.#authenticated) return;
-    this.#send({
-      type: "event",
-      event: {
-        type: "settings.updated",
-        developerInstructions: settings.developerInstructions,
-      },
-    });
-  }
-
   #requireSettings(): ApplicationSettingsStore {
     if (!this.#services.settings) {
       throw new BrowserRequestError("settings_unavailable", "当前后端没有启用应用设置。");
@@ -595,7 +608,6 @@ export class BrowserConnection {
   async #handleDisconnect(): Promise<void> {
     this.#unsubscribeSessionChanges();
     this.#unsubscribeWorkerEvents();
-    this.#unsubscribeSettings();
     // 在线状态属于 WebSocket 生命周期，不能被某个没有返回的业务请求扣住。
     // 已经收到的请求仍可在队列里完成，但 #openSession 不会让它重新挂载。
     this.#services.workers.clientDisconnected(this.#id);

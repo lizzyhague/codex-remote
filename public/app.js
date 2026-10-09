@@ -78,6 +78,10 @@ const elements = {
   appSettingsCancelButton: byId("app-settings-cancel-button"),
   appSettingsSaveButton: byId("app-settings-save-button"),
   appSettingsStatus: byId("app-settings-status"),
+  defaultModelSelect: byId("default-model-select"),
+  defaultReasoningEffortSelect: byId("default-reasoning-effort-select"),
+  modelDefaultsInfoButton: byId("model-defaults-info-button"),
+  modelDefaultsStatus: byId("model-defaults-status"),
   developerInstructionsInput: byId("developer-instructions-input"),
   developerInstructionsInfoButton: byId("developer-instructions-info-button"),
   followDeviceTimezoneInput: byId("follow-device-timezone-input"),
@@ -176,6 +180,15 @@ const state = {
   displayTimezone: loadDisplayTimezonePreference(),
   displayTimezoneDraft: null,
   developerInstructions: "",
+  defaultModel: null,
+  defaultReasoningEffort: null,
+  defaultModelDraft: null,
+  defaultReasoningEffortDraft: null,
+  settingsModels: [],
+  settingsModelsState: "idle",
+  settingsModelsError: "",
+  modelDefaultsMessage: "",
+  appSettingsLoadGeneration: 0,
   appSettingsBusy: false,
   mobileSidebarOpen: false,
   running: false,
@@ -275,6 +288,28 @@ elements.appSettingsDialog.addEventListener("close", () => {
 });
 elements.followDeviceTimezoneInput.addEventListener("change", previewDisplayTimezonePreference);
 elements.displayTimezoneCitySelect.addEventListener("change", previewDisplayTimezonePreference);
+elements.defaultModelSelect.addEventListener("change", () => {
+  const nextModel = elements.defaultModelSelect.value || null;
+  const selected = state.settingsModels.find((model) => model.id === nextModel);
+  const effort = state.defaultReasoningEffortDraft;
+  const effortStillSupported = !effort || selected?.supportedReasoningEfforts.some(
+    (option) => option.reasoningEffort === effort,
+  );
+  state.defaultModelDraft = nextModel;
+  state.modelDefaultsMessage = "";
+  if (nextModel === null) {
+    state.defaultReasoningEffortDraft = null;
+  } else if (!effortStillSupported) {
+    state.defaultReasoningEffortDraft = null;
+    state.modelDefaultsMessage = "原先的思考强度不适用于这个模型，已改为跟随模型默认。";
+  }
+  renderModelDefaults();
+});
+elements.defaultReasoningEffortSelect.addEventListener("change", () => {
+  state.defaultReasoningEffortDraft = elements.defaultReasoningEffortSelect.value || null;
+  state.modelDefaultsMessage = "";
+  renderModelDefaults();
+});
 window.addEventListener("storage", (event) => {
   if (event.key !== DISPLAY_TIMEZONE_KEY) return;
   applyStoredDisplayTimezone();
@@ -2022,9 +2057,6 @@ function handleServerEvent(event, replay = false) {
       showThinking("正在启动 Codex");
       updateControls();
       break;
-    case "settings.updated":
-      applySettingsUpdated(event);
-      break;
     case "sessions.changed":
       cancelRemovedOpenIntent(event);
       if (event.closedSessionId === state.sessionId) {
@@ -3604,11 +3636,20 @@ function formatDate(value) {
 
 async function openAppSettings() {
   if (state.appSettingsBusy) return;
+  const generation = ++state.appSettingsLoadGeneration;
   discardDisplayTimezoneDraft();
   syncAppSettingsForm();
   setAppSettingsStatus("");
-  await loadDeveloperInstructions();
+  state.settingsModelsState = "loading";
+  state.settingsModelsError = "";
+  state.modelDefaultsMessage = "";
+  renderModelDefaults();
+  const settings = loadBackendSettings(generation);
+  const models = loadSettingsModels(generation);
+  await settings;
+  if (generation !== state.appSettingsLoadGeneration) return;
   if (!elements.appSettingsDialog.open) elements.appSettingsDialog.showModal();
+  void models;
 }
 
 function closeAppSettings() {
@@ -3631,30 +3672,127 @@ function syncAppSettingsForm() {
   elements.displayTimezoneCitySelect.disabled = prefs.followDevice || state.appSettingsBusy;
 }
 
-function developerInstructionsDirty() {
-  return elements.developerInstructionsInput.value !== state.developerInstructions;
-}
-
-function applySettingsUpdated(event) {
-  const value = typeof event.developerInstructions === "string" ? event.developerInstructions : "";
-  const dialogOpen = elements.appSettingsDialog.open;
-  const preserveForm = dialogOpen && (state.appSettingsBusy || developerInstructionsDirty());
-  state.developerInstructions = value;
-  if (dialogOpen && !preserveForm) {
-    elements.developerInstructionsInput.value = value;
-  }
-}
-
-async function loadDeveloperInstructions() {
+async function loadBackendSettings(generation) {
   try {
     const data = await request("settings.get");
+    if (generation !== state.appSettingsLoadGeneration) return;
     const value = typeof data?.developerInstructions === "string" ? data.developerInstructions : "";
     state.developerInstructions = value;
+    state.defaultModel = typeof data?.defaultModel === "string" ? data.defaultModel : null;
+    state.defaultReasoningEffort = typeof data?.defaultReasoningEffort === "string"
+      ? data.defaultReasoningEffort
+      : null;
+    state.defaultModelDraft = state.defaultModel;
+    state.defaultReasoningEffortDraft = state.defaultReasoningEffort;
     elements.developerInstructionsInput.value = value;
+    renderModelDefaults();
     setAppSettingsStatus("");
   } catch (error) {
+    if (generation !== state.appSettingsLoadGeneration) return;
     setAppSettingsStatus(errorMessage(error), "error");
   }
+}
+
+async function loadSettingsModels(generation) {
+  try {
+    const data = await request("settings.models");
+    if (generation !== state.appSettingsLoadGeneration) return;
+    if (!Array.isArray(data)) throw new Error("主机返回了无法识别的模型列表。");
+    state.settingsModels = data.flatMap((model) => {
+      if (
+        !model || typeof model.id !== "string" || !model.id ||
+        typeof model.displayName !== "string" || !Array.isArray(model.supportedReasoningEfforts)
+      ) return [];
+      return [{
+        id: model.id,
+        displayName: model.displayName,
+        defaultReasoningEffort: typeof model.defaultReasoningEffort === "string"
+          ? model.defaultReasoningEffort
+          : "",
+        supportedReasoningEfforts: model.supportedReasoningEfforts.flatMap((option) =>
+          option && typeof option.reasoningEffort === "string"
+            ? [{ reasoningEffort: option.reasoningEffort }]
+            : []
+        ),
+      }];
+    });
+    state.settingsModelsState = "ready";
+    state.settingsModelsError = "";
+  } catch (error) {
+    if (generation !== state.appSettingsLoadGeneration) return;
+    state.settingsModels = [];
+    state.settingsModelsState = "error";
+    state.settingsModelsError = errorMessage(error);
+  }
+  renderModelDefaults();
+}
+
+function renderModelDefaults() {
+  const model = state.defaultModelDraft;
+  const effort = state.defaultReasoningEffortDraft;
+  const ready = state.settingsModelsState === "ready";
+  const selectedModel = ready
+    ? state.settingsModels.find((candidate) => candidate.id === model)
+    : null;
+  const modelOptions = [{ value: "", label: "跟随 Codex 默认" }];
+  if (model && !selectedModel) {
+    modelOptions.push({
+      value: model,
+      label: ready ? `${model}（当前不可用）` : `${model}（已保存）`,
+    });
+  }
+  if (ready) {
+    modelOptions.push(...state.settingsModels.map((candidate) => ({
+      value: candidate.id,
+      label: candidate.displayName,
+    })));
+  }
+  replaceSelectOptions(elements.defaultModelSelect, modelOptions, model ?? "");
+
+  const effortOptions = [{
+    value: "",
+    label: model === null ? "跟随 Codex 默认" : "跟随模型默认",
+  }];
+  if (model && effort && !selectedModel?.supportedReasoningEfforts.some(
+    (option) => option.reasoningEffort === effort,
+  )) {
+    effortOptions.push({
+      value: effort,
+      label: ready ? `${effort}（当前不可用）` : `${effort}（已保存）`,
+    });
+  }
+  if (selectedModel) {
+    effortOptions.push(...selectedModel.supportedReasoningEfforts.map((option) => ({
+      value: option.reasoningEffort,
+      label: option.reasoningEffort === selectedModel.defaultReasoningEffort
+        ? `${option.reasoningEffort}（模型当前默认）`
+        : option.reasoningEffort,
+    })));
+  }
+  replaceSelectOptions(elements.defaultReasoningEffortSelect, effortOptions, effort ?? "");
+
+  elements.defaultModelSelect.disabled = state.appSettingsBusy || !ready;
+  elements.defaultReasoningEffortSelect.disabled = state.appSettingsBusy ||
+    !ready || model === null || !selectedModel;
+  elements.modelDefaultsStatus.textContent = state.modelDefaultsMessage ||
+    (state.settingsModelsState === "loading"
+      ? "正在读取可用模型……"
+      : state.settingsModelsState === "error"
+      ? `可用模型暂时无法读取：${state.settingsModelsError}`
+      : model && !selectedModel
+      ? "已保存的模型当前不在可用列表中；保存其他设置不会清除它。"
+      : "只影响之后新建的会话；旧会话和会话内的临时选择不变。");
+}
+
+function replaceSelectOptions(select, options, selectedValue) {
+  const nodes = options.map(({ value, label }) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    return option;
+  });
+  select.replaceChildren(...nodes);
+  select.value = selectedValue;
 }
 
 async function saveAppSettings() {
@@ -3665,9 +3803,17 @@ async function saveAppSettings() {
   try {
     const data = await request("settings.update", {
       developerInstructions: elements.developerInstructionsInput.value,
+      defaultModel: state.defaultModelDraft,
+      defaultReasoningEffort: state.defaultReasoningEffortDraft,
     });
     const value = typeof data?.developerInstructions === "string" ? data.developerInstructions : "";
     state.developerInstructions = value;
+    state.defaultModel = typeof data?.defaultModel === "string" ? data.defaultModel : null;
+    state.defaultReasoningEffort = typeof data?.defaultReasoningEffort === "string"
+      ? data.defaultReasoningEffort
+      : null;
+    state.defaultModelDraft = state.defaultModel;
+    state.defaultReasoningEffortDraft = state.defaultReasoningEffort;
     elements.developerInstructionsInput.value = value;
     commitDisplayTimezoneDraft();
     elements.appSettingsDialog.close();
@@ -3689,10 +3835,12 @@ function updateAppSettingsControls() {
   const disabled = state.appSettingsBusy;
   elements.developerInstructionsInput.disabled = disabled;
   elements.developerInstructionsInfoButton.disabled = disabled;
+  elements.modelDefaultsInfoButton.disabled = disabled;
   elements.appSettingsCancelButton.disabled = disabled;
   elements.appSettingsCloseButton.disabled = disabled;
   elements.appSettingsSaveButton.disabled = disabled;
   syncAppSettingsForm();
+  renderModelDefaults();
 }
 
 function displayedTimezone() {

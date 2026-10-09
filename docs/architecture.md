@@ -24,7 +24,7 @@ Codex Remote 是单用户自托管的 PWA，用来在手机或电脑上控制主
 | `src/approvals` | 接收 App Server 的审批请求并转给浏览器 |
 | `src/commands` | 斜杠命令目录与执行 |
 | `src/projects` | 项目白名单解析 |
-| `src/settings` | 后端全局应用设置（当前是附加 Developer 指令） |
+| `src/settings` | 后端全局应用设置（Developer 指令、新会话默认模型与思考强度） |
 | `src/shared-upload` | 独立项目 `ai-remote-upload` 的薄客户端 |
 | `src/platform` | 平台差异（可用内存读取等） |
 | `src/generated` | 由 Codex CLI 协议生成的类型，与具体 Codex 版本绑定 |
@@ -33,9 +33,15 @@ Codex Remote 是单用户自托管的 PWA，用来在手机或电脑上控制主
 侧栏顶部的应用设置里，显示时区只保存在这台浏览器（默认上海，可跟随设备），
 用来换算页面上的最后回复时间、用量重置时间和命令回执里的时间，不改变服务器时间戳。
 对话框里改时区会先预览，随“保存”一起生效；取消、关闭或 Escape 会恢复原来的时区。
-附加 Developer 指令由后端写成 `settings.json`，同一 Codex Remote 后端上的已登录设备共用；
-不同后端实例之间不同步。它在新建或重新载入会话时通过 App Server 的
-`developerInstructions` 注入，不会改已经在运行的任务。
+附加 Developer 指令、新会话默认模型和思考强度由后端写成 `settings.json`，同一
+Codex Remote 后端上的已登录设备共用，不同后端实例之间不同步。设置窗口每次打开时读取
+后端内容，保持打开期间不接收其他设备后来保存的设置；多处先后保存时，最后保存的内容生效。
+
+默认模型和思考强度只用于之后新建的会话；重新打开旧会话不会覆盖它原来的选择，会话内的
+临时切换也不会写回全局设置。「跟随 Codex 默认」不会固定 Codex 当前选中的具体值。选择具体
+模型后才能选择它支持的思考强度，也可以让强度跟随该模型自己的默认值。附加 Developer 指令
+则在新建或重新载入会话时通过 App Server 的 `developerInstructions` 注入，不会改已经在
+运行的任务。
 
 Codex 自己是原生会话和完整历史的权威存储。Node 这边额外保存已接受的消息、任务
 状态、脱敏后的浏览器事件、权限模式、中断原因，以及会话附件显示索引，用来支撑

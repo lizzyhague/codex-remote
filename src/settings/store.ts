@@ -9,14 +9,26 @@ import { isObject } from "../shared/json.ts";
 import { PublicError } from "../shared/public-error.ts";
 
 export const MAX_DEVELOPER_INSTRUCTIONS_LENGTH = 131_072;
+export const MAX_MODEL_ID_LENGTH = 256;
+export const MAX_REASONING_EFFORT_LENGTH = 64;
 
 export type ApplicationSettings = {
   developerInstructions: string;
+  defaultModel: string | null;
+  defaultReasoningEffort: string | null;
+};
+
+export type ApplicationSettingsPatch = {
+  developerInstructions?: string;
+  defaultModel?: string | null;
+  defaultReasoningEffort?: string | null;
 };
 
 type SettingsFile = {
   version: 1;
   developerInstructions: string;
+  defaultModel: string | null;
+  defaultReasoningEffort: string | null;
 };
 
 export class ApplicationSettingsError extends PublicError {
@@ -38,18 +50,21 @@ export function resolveSettingsStatePath(
 }
 
 export function defaultApplicationSettings(): ApplicationSettings {
-  return { developerInstructions: "" };
+  return {
+    developerInstructions: "",
+    defaultModel: null,
+    defaultReasoningEffort: null,
+  };
 }
 
 /**
  * 后端全局应用设置。与回收站、钉住名单同目录，原子覆盖、属主读写。
- * 当前只有附加 Developer 指令；空字符串表示不追加用户内容。
+ * 空 Developer 指令表示不追加用户内容；空模型和强度表示沿用 Codex 默认。
  */
 export class ApplicationSettingsStore {
   readonly #filePath: string;
   #settings: ApplicationSettings;
   #writeQueue: Promise<void> = Promise.resolve();
-  readonly #listeners = new Set<(settings: ApplicationSettings) => void>();
 
   private constructor(filePath: string, settings: ApplicationSettings) {
     this.#filePath = filePath;
@@ -70,40 +85,32 @@ export class ApplicationSettingsStore {
   }
 
   get(): ApplicationSettings {
-    return { developerInstructions: this.#settings.developerInstructions };
+    return { ...this.#settings };
   }
 
-  onChange(listener: (settings: ApplicationSettings) => void): () => void {
-    this.#listeners.add(listener);
-    return () => this.#listeners.delete(listener);
-  }
-
-  async update(developerInstructions: string): Promise<ApplicationSettings> {
-    const normalized = normalizeDeveloperInstructions(developerInstructions);
+  async update(patch: ApplicationSettingsPatch): Promise<ApplicationSettings> {
+    const normalized = normalizeSettingsPatch(patch);
     const operation = this.#writeQueue.then(() => this.#write(normalized));
     this.#writeQueue = operation.then(() => {}, () => {});
     return operation;
   }
 
-  async #write(developerInstructions: string): Promise<ApplicationSettings> {
-    if (this.#settings.developerInstructions === developerInstructions) {
+  async #write(patch: ApplicationSettingsPatch): Promise<ApplicationSettings> {
+    const next: ApplicationSettings = { ...this.#settings, ...patch };
+    if (
+      next.developerInstructions === this.#settings.developerInstructions &&
+      next.defaultModel === this.#settings.defaultModel &&
+      next.defaultReasoningEffort === this.#settings.defaultReasoningEffort
+    ) {
       return this.get();
     }
     const snapshot: SettingsFile = {
       version: 1,
-      developerInstructions,
+      ...next,
     };
     await writeJsonAtomically(this.#filePath, snapshot);
-    this.#settings = { developerInstructions };
-    const next = this.get();
-    for (const listener of this.#listeners) {
-      try {
-        listener(next);
-      } catch (error) {
-        console.error(`应用设置变更通知失败：${error instanceof Error ? error.message : error}`);
-      }
-    }
-    return next;
+    this.#settings = next;
+    return this.get();
   }
 }
 
@@ -120,11 +127,78 @@ export function normalizeDeveloperInstructions(value: string): string {
   return value;
 }
 
+function normalizeSettingsPatch(patch: ApplicationSettingsPatch): ApplicationSettingsPatch {
+  if (!isObject(patch)) {
+    throw new ApplicationSettingsError("invalid_field", "应用设置更新格式不正确。");
+  }
+  const normalized: ApplicationSettingsPatch = {};
+  if (patch.developerInstructions !== undefined) {
+    normalized.developerInstructions = normalizeDeveloperInstructions(patch.developerInstructions);
+  }
+  const hasModel = patch.defaultModel !== undefined;
+  const hasEffort = patch.defaultReasoningEffort !== undefined;
+  if (hasModel !== hasEffort) {
+    throw new ApplicationSettingsError("invalid_field", "默认模型和默认思考强度必须一起保存。");
+  }
+  if (hasModel && hasEffort) {
+    const defaultModel = normalizeNullableString(
+      patch.defaultModel,
+      "默认模型",
+      MAX_MODEL_ID_LENGTH,
+    );
+    const defaultReasoningEffort = normalizeNullableString(
+      patch.defaultReasoningEffort,
+      "默认思考强度",
+      MAX_REASONING_EFFORT_LENGTH,
+    );
+    if (defaultModel === null && defaultReasoningEffort !== null) {
+      throw new ApplicationSettingsError(
+        "invalid_field",
+        "跟随 Codex 默认模型时，思考强度也必须跟随 Codex 默认。",
+      );
+    }
+    normalized.defaultModel = defaultModel;
+    normalized.defaultReasoningEffort = defaultReasoningEffort;
+  }
+  return normalized;
+}
+
+function normalizeNullableString(
+  value: unknown,
+  label: string,
+  maxLength: number,
+): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string") {
+    throw new ApplicationSettingsError("invalid_field", `${label}必须是字符串或 null。`);
+  }
+  const normalized = value.trim();
+  if (!normalized || normalized.length > maxLength) {
+    throw new ApplicationSettingsError("invalid_field", `${label}不能为空或过长。`);
+  }
+  return normalized;
+}
+
 function parseSettings(raw: unknown, filePath: string): ApplicationSettings {
   if (!isObject(raw) || raw.version !== 1 || typeof raw.developerInstructions !== "string") {
     throw new Error(`设置文件格式不正确：${filePath}`);
   }
+  const defaultModel = raw.defaultModel === undefined
+    ? null
+    : normalizeNullableString(raw.defaultModel, "默认模型", MAX_MODEL_ID_LENGTH);
+  const defaultReasoningEffort = raw.defaultReasoningEffort === undefined
+    ? null
+    : normalizeNullableString(
+      raw.defaultReasoningEffort,
+      "默认思考强度",
+      MAX_REASONING_EFFORT_LENGTH,
+    );
+  if (defaultModel === null && defaultReasoningEffort !== null) {
+    throw new Error(`设置文件格式不正确：${filePath}`);
+  }
   return {
     developerInstructions: normalizeDeveloperInstructions(raw.developerInstructions),
+    defaultModel,
+    defaultReasoningEffort,
   };
 }

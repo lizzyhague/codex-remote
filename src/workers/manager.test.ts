@@ -682,7 +682,7 @@ test("passes application settings into session workers without mutating an activ
   const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-manager-settings-"));
   context.after(() => rm(directory, { recursive: true, force: true }));
   const settings = await ApplicationSettingsStore.open(path.join(directory, "settings.json"));
-  await settings.update("始终用中文回复。");
+  await settings.update({ developerInstructions: "始终用中文回复。" });
   const fixture = await managerFixture(context, {
     offlineGraceMs: 5,
     settings,

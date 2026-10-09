@@ -8,6 +8,7 @@ import type { SessionRuntime } from "../sessions/service.ts";
 import type { CommandName } from "./catalog.ts";
 import { asObject } from "../shared/json.ts";
 import { PublicError } from "../shared/public-error.ts";
+import { listModels } from "../app-server/models.ts";
 
 export type CommandOption = {
   id: string;
@@ -75,7 +76,7 @@ export class CommandRunner {
 
   async options(command: CommandName): Promise<CommandOptions> {
     if (command === "model") {
-      const models = await this.#listModels();
+      const models = await listModels(this.#transport);
       return {
         title: "选择模型",
         items: models.map((model) => ({
@@ -117,7 +118,7 @@ export class CommandRunner {
   }
 
   async setModel(modelId: string, effort?: string | null): Promise<CommandMessage> {
-    const model = (await this.#listModels()).find((candidate) => candidate.id === modelId);
+    const model = (await listModels(this.#transport)).find((candidate) => candidate.id === modelId);
     if (!model) {
       throw new PublicError("这个模型不在当前 Codex 返回的可用列表中。");
     }
@@ -336,48 +337,6 @@ export class CommandRunner {
     return "reverted";
   }
 
-  async #listModels(): Promise<ModelSummary[]> {
-    const result: ModelSummary[] = [];
-    let cursor: string | null = null;
-    do {
-      const response = asObject(await this.#transport.request("model/list", {
-        cursor,
-        limit: 100,
-        includeHidden: false,
-      }));
-      if (!response || !Array.isArray(response.data)) {
-        throw new Error("Codex 返回了无法识别的模型列表。");
-      }
-      for (const value of response.data) {
-        const model = asObject(value);
-        if (!model || typeof model.id !== "string") continue;
-        result.push({
-          id: model.id,
-          displayName: typeof model.displayName === "string" ? model.displayName : model.id,
-          description: typeof model.description === "string" ? model.description : "",
-          defaultReasoningEffort: typeof model.defaultReasoningEffort === "string"
-            ? model.defaultReasoningEffort
-            : "",
-          supportedReasoningEfforts: Array.isArray(model.supportedReasoningEfforts)
-            ? model.supportedReasoningEfforts.flatMap((value) => {
-              const option = asObject(value);
-              return option && typeof option.reasoningEffort === "string"
-                ? [{
-                  reasoningEffort: option.reasoningEffort,
-                  description: typeof option.description === "string"
-                    ? option.description
-                    : "",
-                }]
-                : [];
-            })
-            : [],
-        });
-      }
-      cursor = typeof response.nextCursor === "string" ? response.nextCursor : null;
-    } while (cursor && result.length < 400);
-    return result;
-  }
-
   async #listPermissionProfiles(): Promise<PermissionProfileSummary[]> {
     const response = asObject(await this.#transport.request("permissionProfile/list", {
       cursor: null,
@@ -429,19 +388,6 @@ export class CommandRunner {
     this.#fullAccessEnabled = runtimeUsesFullAccess(this.#runtime);
   }
 }
-
-type ModelSummary = {
-  id: string;
-  displayName: string;
-  description: string;
-  defaultReasoningEffort: string;
-  supportedReasoningEfforts: ReasoningEffortSummary[];
-};
-
-type ReasoningEffortSummary = {
-  reasoningEffort: string;
-  description: string;
-};
 
 type PermissionProfileSummary = {
   id: string;
