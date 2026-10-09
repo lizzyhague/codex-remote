@@ -86,6 +86,11 @@ function harness({ stored = SHANGHAI } = {}) {
       settingsModelsState: "idle",
       settingsModelsError: "",
       modelDefaultsMessage: "",
+      defaultPermissions: null,
+      defaultPermissionsDraft: null,
+      settingsPermissions: [],
+      settingsPermissionsState: "idle",
+      settingsPermissionsError: "",
       appSettingsLoadGeneration: 0,
       appSettingsBusy: false,
     },
@@ -121,14 +126,17 @@ function harness({ stored = SHANGHAI } = {}) {
     },
     async open({
       models = [],
+      permissions = [],
       settings = {
         developerInstructions: "",
         defaultModel: null,
         defaultReasoningEffort: null,
+        defaultPermissions: null,
       },
     } = {}) {
       this.respond(settings);
       this.respond(models);
+      this.respond(permissions);
       elements.appSettingsButton.listeners.click();
       await tick();
       assert.equal(dialog.open, true);
@@ -272,7 +280,76 @@ test("a failed model list does not clear saved defaults when other settings are 
     developerInstructions: "新指令",
     defaultModel: "gpt-saved",
     defaultReasoningEffort: "high",
+    defaultPermissions: null,
   });
+});
+
+const PERMISSION_OPTIONS = [
+  { id: ":read-only", label: "只读", description: "只读说明", allowed: true, fullAccess: false },
+  { id: ":workspace", label: "自动（可修改项目）", description: "项目说明", allowed: true, fullAccess: false },
+  { id: ":danger-full-access", label: "完全访问", description: "完全访问说明", allowed: true, fullAccess: true },
+  { id: ":blocked", label: ":blocked", description: "", allowed: false, fullAccess: false },
+];
+
+test("default permissions list allowed profiles and save the chosen one", async () => {
+  const h = harness();
+  await h.open({ permissions: PERMISSION_OPTIONS });
+
+  assert.deepEqual(
+    h.elements.defaultPermissionsSelect.children.map((option) => option.value),
+    ["", ":read-only", ":workspace", ":danger-full-access"],
+  );
+  assert.equal(h.elements.defaultPermissionsSelect.disabled, false);
+
+  h.elements.defaultPermissionsSelect.value = ":danger-full-access";
+  h.elements.defaultPermissionsSelect.listeners.change();
+  assert.equal(h.elements.defaultPermissionsStatus.textContent, "完全访问说明");
+  h.respond({
+    developerInstructions: "",
+    defaultModel: null,
+    defaultReasoningEffort: null,
+    defaultPermissions: ":danger-full-access",
+  });
+  h.elements.appSettingsForm.listeners.submit({ preventDefault() {} });
+  await tick();
+
+  assert.equal(h.requests.at(-1).defaultPermissions, ":danger-full-access");
+  assert.equal(h.context.state.defaultPermissions, ":danger-full-access");
+});
+
+test("an unavailable saved permission stays visible and a failed list keeps it on save", async () => {
+  const unavailable = harness();
+  await unavailable.open({
+    permissions: PERMISSION_OPTIONS,
+    settings: {
+      developerInstructions: "",
+      defaultModel: null,
+      defaultReasoningEffort: null,
+      defaultPermissions: ":blocked",
+    },
+  });
+  assert.equal(unavailable.elements.defaultPermissionsSelect.value, ":blocked");
+  assert.equal(
+    unavailable.elements.defaultPermissionsSelect.children.find((option) => option.value === ":blocked")
+      ?.textContent,
+    ":blocked（当前不可用）",
+  );
+
+  const failed = harness();
+  const settings = {
+    developerInstructions: "",
+    defaultModel: null,
+    defaultReasoningEffort: null,
+    defaultPermissions: ":danger-full-access",
+  };
+  await failed.open({ permissions: new Error("权限列表失败"), settings });
+  assert.equal(failed.elements.defaultPermissionsSelect.disabled, true);
+  assert.match(failed.elements.defaultPermissionsStatus.textContent, /权限列表失败/u);
+  failed.elements.developerInstructionsInput.value = "新指令";
+  failed.respond({ ...settings, developerInstructions: "新指令" });
+  failed.elements.appSettingsForm.listeners.submit({ preventDefault() {} });
+  await tick();
+  assert.equal(failed.requests.at(-1).defaultPermissions, ":danger-full-access");
 });
 
 test("a failed save keeps the dialog and draft; cancelling afterwards still rolls back", async () => {

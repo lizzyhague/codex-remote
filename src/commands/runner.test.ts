@@ -210,6 +210,14 @@ test("runs all five commands through app-server methods", async () => {
   const permissionsResult = await runner.setPermissions(":read-only");
   assert.equal(permissionsResult.title, "权限已更新");
   assert.equal(permissionsResult.fullAccessEnabled, false);
+  // 受限方案明确带上“需要时询问”，config.toml 写了 never 也能弹出批准卡。
+  assert.deepEqual(
+    transport.requests.filter((request) => request.method === "thread/settings/update").at(-1),
+    {
+      method: "thread/settings/update",
+      params: { threadId: "thread-1", permissions: ":read-only", approvalPolicy: "on-request" },
+    },
+  );
   assert.equal((await runner.rename("测试会话")).sessionName, "测试会话");
 
   assert.equal(await runner.compact(), null);
@@ -307,11 +315,11 @@ test("toggles Full access for only the current thread and restores defaults", as
   assert.deepEqual(updates, [
     {
       method: "thread/settings/update",
-      params: { threadId: "thread-1", permissions: ":full-access" },
+      params: { threadId: "thread-1", permissions: ":full-access", approvalPolicy: "never" },
     },
     {
       method: "thread/settings/update",
-      params: { threadId: "thread-1", permissions: ":workspace" },
+      params: { threadId: "thread-1", permissions: ":workspace", approvalPolicy: "on-request" },
     },
   ]);
   runner.dispose();

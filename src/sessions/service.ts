@@ -32,6 +32,7 @@ import {
   SessionDeletionCoordinator,
 } from "./deletion-coordinator.ts";
 import type { ApplicationSettingsStore } from "../settings/store.ts";
+import { permissionSettings } from "../app-server/permissions.ts";
 import { isObject } from "../shared/json.ts";
 import { isPublicError, PublicError } from "../shared/public-error.ts";
 
@@ -126,6 +127,8 @@ export type OpenedSession = {
   turns: Thread["turns"];
   activeTurnId: string | null;
   runtime: SessionRuntime;
+  /** 新建时没能用上全局默认设置的说明；只在 `start()` 退回默认时出现。 */
+  settingsNotice?: string;
 };
 
 /** 只在后端保存的当前会话运行设置；cwd 不会通过浏览器历史接口泄露。 */
@@ -281,13 +284,35 @@ export class CodexSessionService {
         ? { config: { model_reasoning_effort: settings.defaultReasoningEffort } }
         : {}),
     };
-    const response = await this.#transport.request<ThreadStartResponse>(
-      "thread/start",
-      params,
-    );
+    let settingsNotice: string | null = null;
+    let response: ThreadStartResponse;
+    if (settings?.defaultPermissions) {
+      // 生成的类型早于 `permissions` 字段；0.159.2 实测 thread/start 接受它。
+      const withPermissions = {
+        ...params,
+        ...permissionSettings(settings.defaultPermissions),
+      } as ThreadStartParams;
+      try {
+        response = await this.#transport.request<ThreadStartResponse>(
+          "thread/start",
+          withPermissions,
+        );
+      } catch (error) {
+        if (!isUnknownPermissionProfileError(error)) throw error;
+        console.warn(
+          `默认权限方案不可用，改用 Codex 默认权限新建会话：${settings.defaultPermissions}：` +
+            (error instanceof Error ? error.message : String(error)),
+        );
+        settingsNotice = "设置里的默认权限当前不可用，这次新会话改用了 Codex 默认权限。";
+        response = await this.#transport.request<ThreadStartResponse>("thread/start", params);
+      }
+    } else {
+      response = await this.#transport.request<ThreadStartResponse>("thread/start", params);
+    }
     assertOpenedThreadResponse(response);
     await assertThreadBelongsToProject(response.thread, project.path);
-    return toOpenedSession(response, projectId, this.isMarked(response.thread.id));
+    const opened = toOpenedSession(response, projectId, this.isMarked(response.thread.id));
+    return settingsNotice ? { ...opened, settingsNotice } : opened;
   }
 
   async resume(projectId: string, threadId: string): Promise<OpenedSession> {
@@ -870,6 +895,17 @@ export class CodexSessionService {
     await assertThreadBelongsToProject(response.thread, projectPath);
     return response.thread;
   }
+}
+
+/**
+ * Codex 拒绝未知权限方案时只给通用的 -32600 和一句说明，没有结构化字段可认，
+ * 只能按 0.159.2 实测的措辞匹配：
+ * `failed to load configuration: default_permissions refers to unknown built-in profile`。
+ * 认不出来的错误照原样抛出，不退回默认。
+ */
+export function isUnknownPermissionProfileError(error: unknown): boolean {
+  return error instanceof AppServerRpcError &&
+    /default_permissions refers to unknown/u.test(error.message);
 }
 
 function toOpenedSession(

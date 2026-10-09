@@ -80,6 +80,8 @@ const elements = {
   appSettingsStatus: byId("app-settings-status"),
   defaultModelSelect: byId("default-model-select"),
   defaultReasoningEffortSelect: byId("default-reasoning-effort-select"),
+  defaultPermissionsSelect: byId("default-permissions-select"),
+  defaultPermissionsStatus: byId("default-permissions-status"),
   modelDefaultsInfoButton: byId("model-defaults-info-button"),
   modelDefaultsStatus: byId("model-defaults-status"),
   developerInstructionsInput: byId("developer-instructions-input"),
@@ -188,6 +190,11 @@ const state = {
   settingsModelsState: "idle",
   settingsModelsError: "",
   modelDefaultsMessage: "",
+  defaultPermissions: null,
+  defaultPermissionsDraft: null,
+  settingsPermissions: [],
+  settingsPermissionsState: "idle",
+  settingsPermissionsError: "",
   appSettingsLoadGeneration: 0,
   appSettingsBusy: false,
   mobileSidebarOpen: false,
@@ -309,6 +316,10 @@ elements.defaultReasoningEffortSelect.addEventListener("change", () => {
   state.defaultReasoningEffortDraft = elements.defaultReasoningEffortSelect.value || null;
   state.modelDefaultsMessage = "";
   renderModelDefaults();
+});
+elements.defaultPermissionsSelect.addEventListener("change", () => {
+  state.defaultPermissionsDraft = elements.defaultPermissionsSelect.value || null;
+  renderPermissionDefaults();
 });
 window.addEventListener("storage", (event) => {
   if (event.key !== DISPLAY_TIMEZONE_KEY) return;
@@ -825,6 +836,7 @@ async function startSession() {
       tone: "warning",
       key: "host-memory-degraded",
     });
+    if (opened.settingsNotice) showNotice(opened.settingsNotice, TEMPORARY_WARNING);
   } catch (error) {
     if (generation !== state.openGeneration) return;
     showNotice(errorMessage(error), TEMPORARY_ERROR);
@@ -3643,13 +3655,18 @@ async function openAppSettings() {
   state.settingsModelsState = "loading";
   state.settingsModelsError = "";
   state.modelDefaultsMessage = "";
+  state.settingsPermissionsState = "loading";
+  state.settingsPermissionsError = "";
   renderModelDefaults();
+  renderPermissionDefaults();
   const settings = loadBackendSettings(generation);
   const models = loadSettingsModels(generation);
+  const permissions = loadSettingsPermissions(generation);
   await settings;
   if (generation !== state.appSettingsLoadGeneration) return;
   if (!elements.appSettingsDialog.open) elements.appSettingsDialog.showModal();
   void models;
+  void permissions;
 }
 
 function closeAppSettings() {
@@ -3684,8 +3701,13 @@ async function loadBackendSettings(generation) {
       : null;
     state.defaultModelDraft = state.defaultModel;
     state.defaultReasoningEffortDraft = state.defaultReasoningEffort;
+    state.defaultPermissions = typeof data?.defaultPermissions === "string"
+      ? data.defaultPermissions
+      : null;
+    state.defaultPermissionsDraft = state.defaultPermissions;
     elements.developerInstructionsInput.value = value;
     renderModelDefaults();
+    renderPermissionDefaults();
     setAppSettingsStatus("");
   } catch (error) {
     if (generation !== state.appSettingsLoadGeneration) return;
@@ -3784,6 +3806,62 @@ function renderModelDefaults() {
       : "只影响之后新建的会话；旧会话和会话内的临时选择不变。");
 }
 
+async function loadSettingsPermissions(generation) {
+  try {
+    const data = await request("settings.permissions");
+    if (generation !== state.appSettingsLoadGeneration) return;
+    if (!Array.isArray(data)) throw new Error("主机返回了无法识别的权限列表。");
+    state.settingsPermissions = data.flatMap((profile) =>
+      profile && typeof profile.id === "string" && profile.id &&
+        typeof profile.label === "string" && profile.allowed === true
+        ? [{
+          id: profile.id,
+          label: profile.label,
+          description: typeof profile.description === "string" ? profile.description : "",
+        }]
+        : []
+    );
+    state.settingsPermissionsState = "ready";
+    state.settingsPermissionsError = "";
+  } catch (error) {
+    if (generation !== state.appSettingsLoadGeneration) return;
+    state.settingsPermissions = [];
+    state.settingsPermissionsState = "error";
+    state.settingsPermissionsError = errorMessage(error);
+  }
+  renderPermissionDefaults();
+}
+
+function renderPermissionDefaults() {
+  const selected = state.defaultPermissionsDraft;
+  const ready = state.settingsPermissionsState === "ready";
+  const profile = ready
+    ? state.settingsPermissions.find((candidate) => candidate.id === selected)
+    : null;
+  const options = [{ value: "", label: "跟随 Codex 默认" }];
+  if (selected && !profile) {
+    options.push({
+      value: selected,
+      label: ready ? `${selected}（当前不可用）` : `${selected}（已保存）`,
+    });
+  }
+  if (ready) {
+    options.push(...state.settingsPermissions.map((candidate) => ({
+      value: candidate.id,
+      label: candidate.label,
+    })));
+  }
+  replaceSelectOptions(elements.defaultPermissionsSelect, options, selected ?? "");
+  elements.defaultPermissionsSelect.disabled = state.appSettingsBusy || !ready;
+  elements.defaultPermissionsStatus.textContent = state.settingsPermissionsState === "loading"
+    ? "正在读取可用权限……"
+    : state.settingsPermissionsState === "error"
+    ? `可用权限暂时无法读取：${state.settingsPermissionsError}`
+    : selected && !profile
+    ? "已保存的权限当前不可用；保存其他设置不会清除它。"
+    : profile?.description || "不指定权限，新会话按这台主机的 Codex 配置。";
+}
+
 function replaceSelectOptions(select, options, selectedValue) {
   const nodes = options.map(({ value, label }) => {
     const option = document.createElement("option");
@@ -3805,6 +3883,7 @@ async function saveAppSettings() {
       developerInstructions: elements.developerInstructionsInput.value,
       defaultModel: state.defaultModelDraft,
       defaultReasoningEffort: state.defaultReasoningEffortDraft,
+      defaultPermissions: state.defaultPermissionsDraft,
     });
     const value = typeof data?.developerInstructions === "string" ? data.developerInstructions : "";
     state.developerInstructions = value;
@@ -3814,6 +3893,10 @@ async function saveAppSettings() {
       : null;
     state.defaultModelDraft = state.defaultModel;
     state.defaultReasoningEffortDraft = state.defaultReasoningEffort;
+    state.defaultPermissions = typeof data?.defaultPermissions === "string"
+      ? data.defaultPermissions
+      : null;
+    state.defaultPermissionsDraft = state.defaultPermissions;
     elements.developerInstructionsInput.value = value;
     commitDisplayTimezoneDraft();
     elements.appSettingsDialog.close();
@@ -3841,6 +3924,7 @@ function updateAppSettingsControls() {
   elements.appSettingsSaveButton.disabled = disabled;
   syncAppSettingsForm();
   renderModelDefaults();
+  renderPermissionDefaults();
 }
 
 function displayedTimezone() {

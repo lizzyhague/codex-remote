@@ -22,6 +22,7 @@ const DEFAULTS = {
   developerInstructions: "",
   defaultModel: null,
   defaultReasoningEffort: null,
+  defaultPermissions: null,
 };
 
 test("defaults to Codex-owned model settings when the file is missing", async (context) => {
@@ -45,18 +46,25 @@ test("persists full settings atomically and applies partial updates", async (con
     developerInstructions: "始终用中文回复。",
     defaultModel: "gpt-test",
     defaultReasoningEffort: "high",
+    defaultPermissions: null,
   });
+
+  await store.update({ defaultPermissions: ":danger-full-access" });
+  assert.equal(store.get().defaultPermissions, ":danger-full-access");
+  assert.equal(store.get().defaultModel, "gpt-test", "a permissions patch leaves the model alone");
 
   const file = JSON.parse(await readFile(filePath, "utf8")) as {
     version: number;
     developerInstructions: string;
     defaultModel: string | null;
     defaultReasoningEffort: string | null;
+    defaultPermissions: string | null;
   };
   assert.equal(file.version, 1);
   assert.equal(file.developerInstructions, "始终用中文回复。");
   assert.equal(file.defaultModel, "gpt-test");
   assert.equal(file.defaultReasoningEffort, "high");
+  assert.equal(file.defaultPermissions, ":danger-full-access");
   assert.equal((await stat(filePath)).mode & 0o777, 0o600);
 
   const reloaded = await ApplicationSettingsStore.open(filePath);
@@ -67,10 +75,14 @@ test("persists full settings atomically and applies partial updates", async (con
     developerInstructions: "",
     defaultModel: "gpt-test",
     defaultReasoningEffort: "high",
+    defaultPermissions: ":danger-full-access",
   });
+
+  await reloaded.update({ defaultPermissions: null });
+  assert.equal((await ApplicationSettingsStore.open(filePath)).get().defaultPermissions, null);
 });
 
-test("loads legacy version 1 settings without model fields", async (context) => {
+test("loads legacy version 1 settings without model or permission fields", async (context) => {
   const filePath = await fixture(context);
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, JSON.stringify({
@@ -100,6 +112,14 @@ test("rejects values over the character limit and malformed files", async (conte
   await assert.rejects(
     () => store.update({ defaultModel: null, defaultReasoningEffort: "high" }),
     /思考强度也必须跟随/u,
+  );
+  await assert.rejects(
+    () => store.update({ defaultPermissions: "" }),
+    /默认权限不能为空/u,
+  );
+  await assert.rejects(
+    () => store.update({ defaultPermissions: 1 as unknown as string }),
+    /默认权限必须是字符串/u,
   );
   assert.deepEqual(store.get(), DEFAULTS);
 

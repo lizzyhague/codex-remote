@@ -75,6 +75,15 @@ class FakeTransport implements AppServerTransport {
         nextCursor: null,
       } as Result;
     }
+    if (method === "permissionProfile/list") {
+      return {
+        data: [
+          { id: ":workspace", description: null, allowed: true },
+          { id: ":danger-full-access", description: null, allowed: true },
+        ],
+        nextCursor: null,
+      } as Result;
+    }
     throw new Error(`测试不应通过目录 App Server 发 ${method} 请求。`);
   }
 
@@ -149,9 +158,14 @@ class FakeWorkers {
     this.attached.delete(clientId);
   }
 
+  /** 下一次 startSession 带回的默认设置退回说明。 */
+  startSettingsNotice: string | null = null;
+
   async startSession(projectId: string): Promise<ManagedSessionOpen> {
     this.#record("startSession", projectId);
-    return this.#open(`session-${this.#nextSession++}`);
+    const opened = this.#open(`session-${this.#nextSession++}`);
+    if (!this.startSettingsNotice) return opened;
+    return { ...opened, settingsNotice: this.startSettingsNotice } as ManagedSessionOpen;
   }
 
   async resumeSession(projectId: string, sessionId: string): Promise<ManagedSessionOpen> {
@@ -423,6 +437,22 @@ async function openSession(
   }));
   await connection.whenIdle();
 }
+
+test("passes the default-settings fallback notice back on session start", async (context) => {
+  const { workers, services } = setup();
+  const socket = new FakeSocket();
+  const connection = new BrowserConnection("phone", socket, services);
+  context.after(() => connection.disconnect());
+
+  connection.receiveText(request("session.start", "start-1", { projectId: "projects/demo" }));
+  await connection.whenIdle();
+  assert.equal("settingsNotice" in data(socket.last("response")), false);
+
+  workers.startSettingsNotice = "设置里的默认权限当前不可用，这次新会话改用了 Codex 默认权限。";
+  connection.receiveText(request("session.start", "start-2", { projectId: "projects/demo" }));
+  await connection.whenIdle();
+  assert.equal(data(socket.last("response")).settingsNotice, workers.startSettingsNotice);
+});
 
 function data(message: JsonObject | undefined): JsonObject {
   assert.ok(message, "缺少响应");
@@ -1100,6 +1130,7 @@ test("reads and updates backend settings without pushing into other browsers", a
     developerInstructions: "",
     defaultModel: null,
     defaultReasoningEffort: null,
+    defaultPermissions: null,
   });
 
   first.receiveText(request("settings.update", "update-1", {
@@ -1112,12 +1143,14 @@ test("reads and updates backend settings without pushing into other browsers", a
   first.receiveText(request("settings.update", "update-2", {
     defaultModel: "gpt-test",
     defaultReasoningEffort: "high",
+    defaultPermissions: ":danger-full-access",
   }));
   await first.whenIdle();
   assert.deepEqual(data(firstSocket.last("response")), {
     developerInstructions: "额外说明",
     defaultModel: "gpt-test",
     defaultReasoningEffort: "high",
+    defaultPermissions: ":danger-full-access",
   });
 
   second.receiveText(request("settings.get", "get-2"));
@@ -1126,6 +1159,7 @@ test("reads and updates backend settings without pushing into other browsers", a
     developerInstructions: "额外说明",
     defaultModel: "gpt-test",
     defaultReasoningEffort: "high",
+    defaultPermissions: ":danger-full-access",
   });
 
   second.receiveText(request("settings.models", "models-1"));
@@ -1141,10 +1175,34 @@ test("reads and updates backend settings without pushing into other browsers", a
       { reasoningEffort: "high", description: "深入" },
     ],
   }]);
-  assert.deepEqual((services.turnTransport as FakeTransport).requests, [{
-    method: "model/list",
-    params: { cursor: null, limit: 100, includeHidden: false },
-  }]);
+  second.receiveText(request("settings.permissions", "permissions-1"));
+  await second.whenIdle();
+  assert.deepEqual(data(secondSocket.last("response")), [
+    {
+      id: ":workspace",
+      description: "可在项目目录内工作，超出范围或敏感操作仍会询问。",
+      allowed: true,
+      label: "自动（可修改项目）",
+      fullAccess: false,
+    },
+    {
+      id: ":danger-full-access",
+      description: "可以不受沙箱限制地操作主机，并且不再询问批准；请谨慎选择。",
+      allowed: true,
+      label: "完全访问",
+      fullAccess: true,
+    },
+  ]);
+  assert.deepEqual((services.turnTransport as FakeTransport).requests, [
+    {
+      method: "model/list",
+      params: { cursor: null, limit: 100, includeHidden: false },
+    },
+    {
+      method: "permissionProfile/list",
+      params: { cursor: null, limit: 100 },
+    },
+  ]);
 });
 
 test("rejects settings requests when the backend has no settings store", async (context) => {

@@ -2,6 +2,7 @@ import { isCommandName, type CommandName } from "../commands/catalog.ts";
 import {
   MAX_DEVELOPER_INSTRUCTIONS_LENGTH,
   MAX_MODEL_ID_LENGTH,
+  MAX_PERMISSION_PROFILE_LENGTH,
   MAX_REASONING_EFFORT_LENGTH,
 } from "../settings/store.ts";
 import { isObject } from "../shared/json.ts";
@@ -74,12 +75,14 @@ export type BrowserRequest =
   | ({ type: "session.metrics"; requestId: string } & BrowserSessionTarget)
   | { type: "settings.get"; requestId: string }
   | { type: "settings.models"; requestId: string }
+  | { type: "settings.permissions"; requestId: string }
   | {
     type: "settings.update";
     requestId: string;
     developerInstructions?: string;
     defaultModel?: string | null;
     defaultReasoningEffort?: string | null;
+    defaultPermissions?: string | null;
   }
   | ({ type: "history.older"; requestId: string } & BrowserSessionTarget)
   | { type: "commands.list"; requestId: string }
@@ -189,6 +192,8 @@ export function parseBrowserRequest(source: string): BrowserRequest {
       return { type: "settings.get", requestId };
     case "settings.models":
       return { type: "settings.models", requestId };
+    case "settings.permissions":
+      return { type: "settings.permissions", requestId };
     case "settings.update": {
       const update: Extract<BrowserRequest, { type: "settings.update" }> = {
         type: "settings.update",
@@ -229,6 +234,14 @@ export function parseBrowserRequest(source: string): BrowserRequest {
             requestId,
           );
         }
+      }
+      if (Object.hasOwn(value, "defaultPermissions")) {
+        update.defaultPermissions = requireNullableString(
+          value.defaultPermissions,
+          "默认权限",
+          requestId,
+          MAX_PERMISSION_PROFILE_LENGTH,
+        );
       }
       return update;
     }

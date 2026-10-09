@@ -104,6 +104,10 @@ test("new-session model defaults explain their backend scope and lifecycle", () 
   assert.match(appDialog, /会话里临时切换也不会写回这里/u);
   assert.match(appDialog, /「跟随 Codex 默认」不会固定当前默认值/u);
   assert.match(appDialog, /id="model-defaults-status"[^>]*aria-live="polite"/u);
+  assert.match(appDialog, /id="default-permissions-select"/u);
+  assert.match(appDialog, />默认权限</u);
+  assert.match(appDialog, /完全访问不受沙箱限制，也不再询问批准/u);
+  assert.match(appDialog, /id="default-permissions-status"[^>]*aria-live="polite"/u);
 });
 
 test("the save row sits outside the scrolling area and the dialog body is the only scroller", () => {

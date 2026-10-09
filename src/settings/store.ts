@@ -11,17 +11,21 @@ import { PublicError } from "../shared/public-error.ts";
 export const MAX_DEVELOPER_INSTRUCTIONS_LENGTH = 131_072;
 export const MAX_MODEL_ID_LENGTH = 256;
 export const MAX_REASONING_EFFORT_LENGTH = 64;
+export const MAX_PERMISSION_PROFILE_LENGTH = 256;
 
 export type ApplicationSettings = {
   developerInstructions: string;
   defaultModel: string | null;
   defaultReasoningEffort: string | null;
+  /** 新建会话的权限方案 id；`null` 表示不指定，沿用 Codex 默认。 */
+  defaultPermissions: string | null;
 };
 
 export type ApplicationSettingsPatch = {
   developerInstructions?: string;
   defaultModel?: string | null;
   defaultReasoningEffort?: string | null;
+  defaultPermissions?: string | null;
 };
 
 type SettingsFile = {
@@ -29,6 +33,7 @@ type SettingsFile = {
   developerInstructions: string;
   defaultModel: string | null;
   defaultReasoningEffort: string | null;
+  defaultPermissions: string | null;
 };
 
 export class ApplicationSettingsError extends PublicError {
@@ -54,12 +59,13 @@ export function defaultApplicationSettings(): ApplicationSettings {
     developerInstructions: "",
     defaultModel: null,
     defaultReasoningEffort: null,
+    defaultPermissions: null,
   };
 }
 
 /**
  * 后端全局应用设置。与回收站、钉住名单同目录，原子覆盖、属主读写。
- * 空 Developer 指令表示不追加用户内容；空模型和强度表示沿用 Codex 默认。
+ * 空 Developer 指令表示不追加用户内容；空模型、强度和权限表示沿用 Codex 默认。
  */
 export class ApplicationSettingsStore {
   readonly #filePath: string;
@@ -100,7 +106,8 @@ export class ApplicationSettingsStore {
     if (
       next.developerInstructions === this.#settings.developerInstructions &&
       next.defaultModel === this.#settings.defaultModel &&
-      next.defaultReasoningEffort === this.#settings.defaultReasoningEffort
+      next.defaultReasoningEffort === this.#settings.defaultReasoningEffort &&
+      next.defaultPermissions === this.#settings.defaultPermissions
     ) {
       return this.get();
     }
@@ -160,6 +167,13 @@ function normalizeSettingsPatch(patch: ApplicationSettingsPatch): ApplicationSet
     normalized.defaultModel = defaultModel;
     normalized.defaultReasoningEffort = defaultReasoningEffort;
   }
+  if (patch.defaultPermissions !== undefined) {
+    normalized.defaultPermissions = normalizeNullableString(
+      patch.defaultPermissions,
+      "默认权限",
+      MAX_PERMISSION_PROFILE_LENGTH,
+    );
+  }
   return normalized;
 }
 
@@ -196,9 +210,13 @@ function parseSettings(raw: unknown, filePath: string): ApplicationSettings {
   if (defaultModel === null && defaultReasoningEffort !== null) {
     throw new Error(`设置文件格式不正确：${filePath}`);
   }
+  const defaultPermissions = raw.defaultPermissions === undefined
+    ? null
+    : normalizeNullableString(raw.defaultPermissions, "默认权限", MAX_PERMISSION_PROFILE_LENGTH);
   return {
     developerInstructions: normalizeDeveloperInstructions(raw.developerInstructions),
     defaultModel,
     defaultReasoningEffort,
+    defaultPermissions,
   };
 }

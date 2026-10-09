@@ -236,6 +236,31 @@ test("parses the small stable browser protocol", () => {
     defaultModel: "gpt-test",
     defaultReasoningEffort: "high",
   });
+  assert.deepEqual(parseBrowserRequest(JSON.stringify({
+    type: "settings.permissions",
+    requestId: "settings-permissions",
+  })), {
+    type: "settings.permissions",
+    requestId: "settings-permissions",
+  });
+  assert.deepEqual(parseBrowserRequest(JSON.stringify({
+    type: "settings.update",
+    requestId: "settings-4",
+    defaultPermissions: ":danger-full-access",
+  })), {
+    type: "settings.update",
+    requestId: "settings-4",
+    defaultPermissions: ":danger-full-access",
+  });
+  assert.deepEqual(parseBrowserRequest(JSON.stringify({
+    type: "settings.update",
+    requestId: "settings-5",
+    defaultPermissions: null,
+  })), {
+    type: "settings.update",
+    requestId: "settings-5",
+    defaultPermissions: null,
+  });
 });
 
 test("rejects arbitrary paths and unknown operations", () => {
@@ -320,6 +345,14 @@ test("rejects arbitrary paths and unknown operations", () => {
       requestId: "settings-invalid-default",
       defaultModel: null,
       defaultReasoningEffort: "high",
+    })),
+    (error: unknown) => error instanceof ProtocolError && error.code === "invalid_field",
+  );
+  assert.throws(
+    () => parseBrowserRequest(JSON.stringify({
+      type: "settings.update",
+      requestId: "settings-invalid-permissions",
+      defaultPermissions: 1,
     })),
     (error: unknown) => error instanceof ProtocolError && error.code === "invalid_field",
   );

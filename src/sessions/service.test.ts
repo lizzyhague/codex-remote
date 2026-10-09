@@ -267,6 +267,73 @@ test("uses saved model defaults only when starting a new session", async (contex
   });
 });
 
+test("starts new sessions with the saved permissions paired with an approval policy", async (context) => {
+  const { catalog, project, trash, settings } = await createFixture(context);
+  const transport = new FakeTransport();
+  const service = new CodexSessionService(transport, catalog, trash, { settings });
+  const base = {
+    cwd: project,
+    ephemeral: false,
+    serviceName: "codex_remote",
+    developerInstructions: CODEX_REMOTE_DEVELOPER_INSTRUCTIONS,
+  };
+
+  await settings.update({ defaultPermissions: ":danger-full-access" });
+  transport.results.push({ thread: thread("thread-full", project) });
+  const full = await service.start("workspace/alpha");
+  assert.equal(full.settingsNotice, undefined);
+  assert.deepEqual(transport.requests.at(-1), {
+    method: "thread/start",
+    params: { ...base, permissions: ":danger-full-access", approvalPolicy: "never" },
+  });
+
+  await settings.update({ defaultPermissions: ":workspace" });
+  transport.results.push({ thread: thread("thread-workspace", project) });
+  await service.start("workspace/alpha");
+  assert.deepEqual(transport.requests.at(-1), {
+    method: "thread/start",
+    params: { ...base, permissions: ":workspace", approvalPolicy: "on-request" },
+  });
+
+  transport.results.push(
+    { thread: thread("thread-old", project) },
+    { thread: thread("thread-old", project) },
+  );
+  await service.resume("workspace/alpha", "thread-old");
+  const resume = transport.requests.at(-1)?.params as Record<string, unknown>;
+  assert.equal("permissions" in resume, false);
+  assert.equal("approvalPolicy" in resume, false);
+});
+
+test("falls back to Codex default permissions only when Codex rejects the profile", async (context) => {
+  const { catalog, project, trash, settings } = await createFixture(context);
+  await settings.update({ defaultPermissions: ":gone" });
+  const transport = new FakeTransport();
+  const service = new CodexSessionService(transport, catalog, trash, { settings });
+  const warn = context.mock.method(console, "warn", () => {});
+
+  transport.results.push(
+    new AppServerRpcError({
+      code: -32600,
+      message:
+        "failed to load configuration: default_permissions refers to unknown built-in profile `:gone`",
+    }),
+    { thread: thread("thread-fallback", project) },
+  );
+  const opened = await service.start("workspace/alpha");
+  assert.match(opened.settingsNotice ?? "", /默认权限当前不可用/u);
+  assert.equal(warn.mock.callCount(), 1);
+  const retry = transport.requests.at(-1)?.params as Record<string, unknown>;
+  assert.equal("permissions" in retry, false);
+  assert.equal("approvalPolicy" in retry, false);
+  assert.equal(settings.get().defaultPermissions, ":gone", "the saved setting is kept");
+
+  transport.results.push(new AppServerRpcError({ code: -32603, message: "not logged in" }));
+  const before = transport.requests.length;
+  await assert.rejects(service.start("workspace/alpha"), /not logged in/u);
+  assert.equal(transport.requests.length, before + 1, "other failures are not retried");
+});
+
 test("checks ownership before resuming and returns stored turns", async (context) => {
   const { catalog, project, trash } = await createFixture(context);
   const transport = new FakeTransport();

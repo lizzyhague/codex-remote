@@ -184,9 +184,10 @@
               <h3 class="application-settings-title">新会话默认值<button id="model-defaults-info-button" type="button" class="field-info" popovertarget="info-model-defaults" aria-label="关于新会话默认值的说明">i</button></h3>
             </div>
             <div id="info-model-defaults" class="field-info-popover" popover>
-              <p>默认模型和思考强度由 Codex Remote 后端保存，连到同一后端的设备共用。</p>
+              <p>默认模型、思考强度和权限由 Codex Remote 后端保存，连到同一后端的设备共用。</p>
               <p>它们只在新建会话时使用。打开旧会话不会改变原来的选择，会话里临时切换也不会写回这里。</p>
               <p>「跟随 Codex 默认」不会固定当前默认值；以后 Codex 的默认值变化时，新会话会跟着变化。</p>
+              <p>权限与 Codex 桌面端一致：完全访问不受沙箱限制，也不再询问批准；其他权限遇到越界或敏感操作时会询问。默认权限不可用时，这次新会话改用 Codex 默认权限并给出提示。</p>
               <p>设置窗口打开时读取一次后端内容；要查看其他设备后来保存的内容，请关闭后重新打开。</p>
             </div>
             <label class="application-settings-row" for="default-model-select">
@@ -202,6 +203,13 @@
               </select>
             </label>
             <p id="model-defaults-status" class="field-help" aria-live="polite">正在读取可用模型……</p>
+            <label class="application-settings-row" for="default-permissions-select">
+              <span>默认权限</span>
+              <select id="default-permissions-select" disabled>
+                <option value="">正在加载……</option>
+              </select>
+            </label>
+            <p id="default-permissions-status" class="field-help" aria-live="polite">正在读取可用权限……</p>
           </section>
           <section class="application-settings-section">
             <div class="application-settings-section-head">

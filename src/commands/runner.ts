@@ -9,6 +9,15 @@ import type { CommandName } from "./catalog.ts";
 import { asObject } from "../shared/json.ts";
 import { PublicError } from "../shared/public-error.ts";
 import { listModels } from "../app-server/models.ts";
+import {
+  isFullAccessProfile,
+  listPermissionProfiles,
+  permissionDescription,
+  permissionLabel,
+  permissionSettings,
+  pickRestrictedProfile,
+  type PermissionProfileSummary,
+} from "../app-server/permissions.ts";
 
 export type CommandOption = {
   id: string;
@@ -152,7 +161,7 @@ export class CommandRunner {
       throw new PublicError("这个权限选项当前不可用。");
     }
     const settingsRevision = this.#settingsRevision;
-    await this.#updateSettings({ permissions: profile.id });
+    await this.#updateSettings(permissionSettings(profile.id));
     // 通知到了就用它算出的结构化结果，只有没等到才退回认名字。
     if (this.#settingsRevision === settingsRevision) {
       this.#runtime.activePermissionProfile = { id: profile.id, extends: null };
@@ -177,7 +186,7 @@ export class CommandRunner {
         throw new PublicError("当前 Codex 没有提供可用的受限权限，无法关闭 Full access。");
       }
       const settingsRevision = this.#settingsRevision;
-      await this.#updateSettings({ permissions: profile.id });
+      await this.#updateSettings(permissionSettings(profile.id));
       if (this.#settingsRevision === settingsRevision) {
         this.#runtime.activePermissionProfile = { id: profile.id, extends: null };
         this.#fullAccessEnabled = isFullAccessProfile(profile.id);
@@ -208,7 +217,7 @@ export class CommandRunner {
       throw new PublicError("当前 Codex 没有提供可用的 Full access 权限。");
     }
     const settingsRevision = this.#settingsRevision;
-    await this.#updateSettings({ permissions: profile.id });
+    await this.#updateSettings(permissionSettings(profile.id));
     if (this.#settingsRevision === settingsRevision) {
       this.#runtime.activePermissionProfile = { id: profile.id, extends: null };
       this.#fullAccessEnabled = true;
@@ -337,24 +346,8 @@ export class CommandRunner {
     return "reverted";
   }
 
-  async #listPermissionProfiles(): Promise<PermissionProfileSummary[]> {
-    const response = asObject(await this.#transport.request("permissionProfile/list", {
-      cursor: null,
-      limit: 100,
-      cwd: this.#runtime.cwd,
-    }));
-    if (!response || !Array.isArray(response.data)) {
-      throw new Error("Codex 返回了无法识别的权限列表。");
-    }
-    return response.data.flatMap((value) => {
-      const profile = asObject(value);
-      if (!profile || typeof profile.id !== "string") return [];
-      return [{
-        id: profile.id,
-        description: typeof profile.description === "string" ? profile.description : "",
-        allowed: profile.allowed === true,
-      }];
-    });
+  #listPermissionProfiles(): Promise<PermissionProfileSummary[]> {
+    return listPermissionProfiles(this.#transport, this.#runtime.cwd);
   }
 
   async #updateSettings(settings: JsonObject): Promise<void> {
@@ -389,47 +382,11 @@ export class CommandRunner {
   }
 }
 
-type PermissionProfileSummary = {
-  id: string;
-  description: string;
-  allowed: boolean;
-};
-
 function turnIds(turns: unknown[]): string[] {
   return turns.flatMap((turn) => {
     const id = asObject(turn)?.id;
     return typeof id === "string" ? [id] : [];
   });
-}
-
-function permissionLabel(id: string): string {
-  if (isFullAccessProfile(id)) return "完全访问";
-  const normalized = id.toLowerCase();
-  if (normalized.includes("read")) return "只读";
-  if (normalized.includes("workspace") || normalized.includes("auto")) {
-    return "自动（可修改项目）";
-  }
-  return id;
-}
-
-function permissionDescription(id: string): string {
-  if (isFullAccessProfile(id)) return "可以不受沙箱限制地操作主机；请谨慎选择。";
-  const normalized = id.toLowerCase();
-  if (normalized.includes("read")) return "可以阅读和分析；修改文件或执行高权限操作前会受限。";
-  if (normalized.includes("workspace") || normalized.includes("auto")) {
-    return "可在项目目录内工作，超出范围或敏感操作仍会询问。";
-  }
-  return "由当前 Codex 配置提供的权限方案。";
-}
-
-/**
- * 权限方案只有 id、说明和是否可选，没有任何字段说明它意味着什么沙箱，所以挑方案
- * 时只能认名字。判断"当前是不是完全访问"要用 {@link runtimeUsesFullAccess}，
- * 那里有 App Server 给的结构化沙箱策略可用。
- */
-function isFullAccessProfile(id: string): boolean {
-  const normalized = id.toLowerCase();
-  return normalized.includes("full") || normalized.includes("danger");
 }
 
 /** `SandboxPolicy` 的判别值。参数侧用 `danger-full-access` 这种写法，一并归一。 */
@@ -462,22 +419,4 @@ function runtimeUsesFullAccess(runtime: SessionRuntime): boolean {
       `sandboxPolicy=${JSON.stringify(runtime.sandboxPolicy)} profile=${profileId || "(无)"}`,
   );
   return isFullAccessProfile(profileId);
-}
-
-/**
- * 关闭 Full access 时要落到的方案。`permissions: null` 会清成部署默认，而默认本身
- * 可能就是完全访问，且 App Server 对它不发 `thread/settings/updated`，客户端既关不掉
- * 也看不出来，所以改成显式切到一个受限方案。
- */
-function pickRestrictedProfile(
-  profiles: PermissionProfileSummary[],
-): PermissionProfileSummary | null {
-  const restricted = profiles.filter(
-    (profile) => profile.allowed && !isFullAccessProfile(profile.id),
-  );
-  const preferred = restricted.find((profile) => {
-    const normalized = profile.id.toLowerCase();
-    return normalized.includes("workspace") || normalized.includes("auto");
-  });
-  return preferred ?? restricted[0] ?? null;
 }

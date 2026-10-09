@@ -36,6 +36,7 @@ import {
 import { isPublicError, PublicError } from "../shared/public-error.ts";
 import { redactHostPaths } from "../attachments/path-redaction.ts";
 import { listModels } from "../app-server/models.ts";
+import { listPermissionOptions } from "../app-server/permissions.ts";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -165,7 +166,7 @@ export class BrowserConnection {
       return;
     }
 
-    if (request.type === "settings.models") {
+    if (request.type === "settings.models" || request.type === "settings.permissions") {
       const operation = this.#process(request, false).catch((error: unknown) => {
         this.#send({
           type: "error",
@@ -273,6 +274,9 @@ export class BrowserConnection {
       case "settings.models":
         this.#requireSettings();
         return listModels(this.#services.turnTransport);
+      case "settings.permissions":
+        this.#requireSettings();
+        return listPermissionOptions(this.#services.turnTransport);
       case "settings.update": {
         const { type: _type, requestId: _requestId, ...patch } = request;
         return this.#requireSettings().update(patch);
@@ -489,6 +493,7 @@ export class BrowserConnection {
       activeTaskId: managed.activeTaskId,
       controlsActiveTask: managed.controlsActiveTask,
       ...(managed.notice ? { notice: managed.notice } : {}),
+      ...(managed.settingsNotice ? { settingsNotice: managed.settingsNotice } : {}),
       replayEvents: managed.replayEvents.map((stored) => ({
         ...stored.event,
         sequence: stored.sequence,

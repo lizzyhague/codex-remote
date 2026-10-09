@@ -82,6 +82,8 @@ export type ManagedSessionReady = {
   opened: OpenedSession;
   /** 会话已经打开，但有需要转给浏览器的说明（目前只有内存读数降级）。 */
   notice?: string;
+  /** 新建时没能用上全局默认设置的说明。只随这次 start 返回，重新打开同一 Worker 不再带。 */
+  settingsNotice?: string;
   activeTaskId: string | null;
   controlsActiveTask: boolean;
   replayEvents: StoredWorkerEvent[];
@@ -448,6 +450,7 @@ export class SessionWorkerManager {
         controlsActiveTask: false,
         replayEvents: [],
         ...(gate.notice ? { notice: gate.notice } : {}),
+        ...(worker.opened.settingsNotice ? { settingsNotice: worker.opened.settingsNotice } : {}),
       };
     } finally {
       await this.#finishWorkerOperation(operation);
