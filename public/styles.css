@@ -209,7 +209,7 @@ button.small {
   min-width: 0;
   height: 100dvh;
   display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
   overflow: hidden;
   border-right: 1px solid var(--border);
   background: #151820;
@@ -265,9 +265,8 @@ button.small {
   gap: 0.3rem;
 }
 
-/* 必须写成 button.app-settings-button：button.small 的 padding 更具体，
-   不压过的话 34px 宽的键面左右还留着 0.65rem，16px 图标会往右溢。 */
-button.app-settings-button {
+/* 侧栏图标按钮共用方形键面和 16px 线条图标。 */
+button.icon-button {
   width: 34px;
   min-width: 34px;
   padding: 0;
@@ -276,7 +275,7 @@ button.app-settings-button {
   line-height: 0;
 }
 
-button.app-settings-button svg {
+button.icon-button svg {
   display: block;
   width: 16px;
   height: 16px;
@@ -294,6 +293,23 @@ button.app-settings-button svg {
 .project-controls button,
 .session-search input {
   width: 100%;
+}
+
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.project-row > label {
+  min-width: 0;
+  flex: 1;
+}
+
+.project-controls .create-icon-button {
+  width: 42px;
+  min-width: 42px;
+  min-height: 42px;
 }
 
 .project-controls select,
@@ -786,26 +802,6 @@ button.app-settings-button svg {
   border-width: 1px 0 0;
   border-radius: 0;
   color: var(--muted);
-}
-
-.session-destinations,
-.bulk-session-actions {
-  min-width: var(--sidebar-width);
-  padding: 0.6rem 0.75rem max(0.6rem, env(safe-area-inset-bottom));
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
-  border-top: 1px solid var(--border);
-  background: #151820;
-}
-
-.session-destinations button[data-active="true"] {
-  border-color: #6ee7b7;
-  color: var(--accent);
-}
-
-.bulk-session-actions button:only-child {
-  grid-column: 1 / -1;
 }
 
 .sidebar-open-button {
@@ -1566,9 +1562,7 @@ button:focus-visible {
   .session-list-heading,
   .selection-heading,
   .session-list,
-  .load-more-sessions,
-  .session-destinations,
-  .bulk-session-actions {
+  .load-more-sessions {
     min-width: min(88vw, 340px);
   }
 

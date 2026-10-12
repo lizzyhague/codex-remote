@@ -33,10 +33,16 @@ test("the gear sits to the left of collapse and does not overlay the app icon", 
     /app-settings-button/u,
   );
   const buttonRule = styles.slice(
-    styles.indexOf("button.app-settings-button {"),
-    styles.indexOf("}", styles.indexOf("button.app-settings-button {")),
+    styles.indexOf("button.icon-button {"),
+    styles.indexOf("}", styles.indexOf("button.icon-button {")),
   );
   assert.match(buttonRule, /padding:\s*0;/u);
+});
+
+test("the collapse action is a labelled left-chevron icon", () => {
+  assert.match(heading, /id="collapse-sidebar-button"[^>]*aria-label="收起会话列表"[^>]*title="收起会话列表"/u);
+  assert.match(heading, /id="collapse-sidebar-button"[\s\S]*?<path d="m15 18-6-6 6-6"\/>/u);
+  assert.doesNotMatch(app, /collapseSidebarButton\.textContent/u);
 });
 
 test("application settings keeps timezone controls and does not copy companion-only chrome", () => {
