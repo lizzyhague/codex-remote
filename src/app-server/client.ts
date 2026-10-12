@@ -1,5 +1,4 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createInterface } from "node:readline";
 
 import type { ClientNotification } from "../generated/ClientNotification.ts";
 import type { InitializeParams } from "../generated/InitializeParams.ts";
@@ -63,6 +62,7 @@ export class AppServerClient {
   #nextRequestId = 1;
   #closed = false;
   #stderrTail = "";
+  #stdoutBuffer = "";
   #unexpectedLines = 0;
 
   constructor(options: AppServerClientOptions = {}) {
@@ -88,8 +88,9 @@ export class AppServerClient {
       },
     );
 
-    const lines = createInterface({ input: this.#child.stdout });
-    lines.on("line", (line) => this.#handleLine(line));
+    // 不用 node:readline 拆行：它把 U+2028、U+2029 也当换行，而它们在 JSON 字符串里是合法字符。
+    this.#child.stdout.setEncoding("utf8");
+    this.#child.stdout.on("data", (chunk: string) => this.#onStdout(chunk));
 
     this.#child.stderr.setEncoding("utf8");
     this.#child.stderr.on("data", (chunk: string) => {
@@ -247,6 +248,17 @@ export class AppServerClient {
 
   #write(message: object): void {
     this.#child.stdin.write(`${JSON.stringify(message)}\n`);
+  }
+
+  #onStdout(chunk: string): void {
+    this.#stdoutBuffer += chunk;
+    let index: number;
+    while ((index = this.#stdoutBuffer.indexOf("\n")) >= 0) {
+      let line = this.#stdoutBuffer.slice(0, index);
+      this.#stdoutBuffer = this.#stdoutBuffer.slice(index + 1);
+      if (line.endsWith("\r")) line = line.slice(0, -1);
+      this.#handleLine(line);
+    }
   }
 
   #handleLine(line: string): void {
