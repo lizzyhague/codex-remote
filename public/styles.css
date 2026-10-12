@@ -302,22 +302,42 @@ button.icon-button svg {
 }
 
 .project-row > label {
+  position: relative;
   min-width: 0;
   flex: 1;
 }
 
+.directory-chevron {
+  position: absolute;
+  top: 50%;
+  right: 0.625rem;
+  width: 16px;
+  height: 16px;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
 .project-controls .create-icon-button {
-  width: 42px;
-  min-width: 42px;
-  min-height: 42px;
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
 }
 
 .project-controls select,
 .session-search input {
-  min-height: 42px;
+  min-height: 34px;
   padding: 0 0.7rem;
   background: #101319;
   color: #f3f4f6;
+}
+
+.project-controls select {
+  appearance: none;
+  padding-right: 2.3rem;
+}
+
+.session-search input {
+  font-size: 0.86rem;
 }
 
 .session-search {
@@ -426,7 +446,7 @@ button.icon-button svg {
 .session-item-title {
   color: #f3f4f6;
   font-size: 0.93rem;
-  font-weight: 650;
+  font-weight: 400;
 }
 
 .session-item-project,
@@ -819,10 +839,11 @@ button.icon-button svg {
 
 .sidebar-open-button {
   display: none;
-  width: 40px;
-  min-height: 38px;
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
   padding: 0;
-  font-size: 1.15rem;
+  font-size: 1rem;
 }
 
 .app-view[data-sidebar-collapsed="true"] .sidebar-open-button {
