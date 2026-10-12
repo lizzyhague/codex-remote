@@ -453,8 +453,8 @@ button.icon-button svg {
 .session-rename-trigger,
 .session-mark-trigger {
   align-self: center;
-  width: 38px;
-  min-height: 38px;
+  width: 34px;
+  min-height: 34px;
   padding: 0;
   display: grid;
   place-items: center;
@@ -467,8 +467,12 @@ button.icon-button svg {
   height: 17px;
 }
 
+.session-rename-trigger {
+  margin-right: 0.55rem;
+}
+
 .session-mark-trigger {
-  margin-right: 0.35rem;
+  margin-right: 0.75rem;
 }
 
 .session-mark-trigger[aria-pressed="true"] {
