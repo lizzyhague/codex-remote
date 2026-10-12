@@ -380,7 +380,7 @@ button.icon-button svg {
 .session-item {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: stretch;
   border-bottom: 1px solid rgb(52 57 70 / 58%);
 }
@@ -450,32 +450,41 @@ button.icon-button svg {
   border-top: 2px solid var(--accent);
 }
 
+.session-rename-trigger,
 .session-mark-trigger {
   align-self: center;
   width: 38px;
   min-height: 38px;
   padding: 0;
-  margin-right: 0.35rem;
   display: grid;
   place-items: center;
   color: var(--muted);
 }
 
+.session-rename-trigger .session-rename-icon,
 .session-mark-trigger .session-mark-icon {
   width: 17px;
   height: 17px;
+}
+
+.session-mark-trigger {
+  margin-right: 0.35rem;
 }
 
 .session-mark-trigger[aria-pressed="true"] {
   color: var(--accent);
 }
 
+.session-rename-trigger,
+.session-rename-trigger .session-rename-icon,
 .session-mark-trigger,
 .session-mark-trigger .session-mark-icon {
   transition: color 140ms ease;
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .session-rename-trigger,
+  .session-rename-trigger .session-rename-icon,
   .session-mark-trigger,
   .session-mark-trigger .session-mark-icon {
     transition: none;

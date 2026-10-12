@@ -147,6 +147,7 @@ function harness({ view = "active", selectionMode = false } = {}) {
       title.textContent = session.title || "新会话";
       container.append(title);
     },
+    createSessionRename: () => new FakeElement("button"),
     createSessionMark: () => new FakeElement("button"),
     mergeSessions: (existing, incoming) => [...existing, ...incoming],
     setNavigationBusy(busy) { context.state.navigationBusy = busy; },

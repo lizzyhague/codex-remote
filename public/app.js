@@ -1180,7 +1180,9 @@ function createSessionItem(session) {
       else closeMobileSidebar();
     });
   }
-  item.append(open, createSessionMark(session));
+  item.append(open);
+  if (state.sessionView === "active") item.append(createSessionRename(session));
+  item.append(createSessionMark(session));
   return item;
 }
 
@@ -1210,6 +1212,20 @@ function projectDirectoryName(projectId) {
   );
 }
 
+function createSessionRename(session) {
+  const button = document.createElement("button");
+  button.className = "session-rename-trigger quiet";
+  button.type = "button";
+  button.setAttribute("aria-label", `重命名 ${session.title || "新会话"}`);
+  button.title = "重命名";
+  button.append(sessionRenameIcon());
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openRenameDialog(session);
+  });
+  return button;
+}
+
 function createSessionMark(session) {
   const button = document.createElement("button");
   button.className = "session-mark-trigger quiet";
@@ -1229,6 +1245,22 @@ function createSessionMark(session) {
     if (!session.marked) openRenameDialog(session);
   });
   return button;
+}
+
+function sessionRenameIcon() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.8");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("session-rename-icon");
+  const pencil = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  pencil.setAttribute("d", "M4 20h4l11-11a2.8 2.8 0 0 0-4-4L4 16v4zM13.5 6.5l4 4");
+  svg.append(pencil);
+  return svg;
 }
 
 function sessionMarkIcon(pinned) {

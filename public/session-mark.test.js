@@ -11,9 +11,19 @@ const [html, app, styles] = await Promise.all([
 test("the session row uses a pin toggle instead of an overflow menu", () => {
   assert.doesNotMatch(app, /session-menu-trigger/u);
   assert.doesNotMatch(app, /选择并整理/u);
+  assert.match(app, /className = "session-rename-trigger quiet"/u);
   assert.match(app, /className = "session-mark-trigger quiet"/u);
   assert.match(app, /request\("session\.mark"/u);
   assert.match(app, /取消钉住/u);
+});
+
+test("only recent session rows show the rename button before the pin", () => {
+  const create = app.slice(
+    app.indexOf("function createSessionItem("),
+    app.indexOf("function appendSessionText("),
+  );
+  assert.match(create, /state\.sessionView === "active"\) item\.append\(createSessionRename\(session\)\)/u);
+  assert.ok(create.indexOf("createSessionRename(session)") < create.indexOf("createSessionMark(session)"));
 });
 
 test("recent sessions pin marked items above an untitled accent divider", () => {
