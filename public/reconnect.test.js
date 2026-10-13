@@ -394,7 +394,13 @@ test("sending is blocked during session restoration and while attachments are qu
 test("navigation and send controls stay disabled until restoration and uploads finish", async () => {
   const h = harness();
   const { context } = h;
-  const control = () => ({ value: "", classList: { toggle() {} }, querySelectorAll: () => [] });
+  const control = () => ({
+    value: "",
+    dataset: {},
+    classList: { toggle() {} },
+    querySelectorAll: () => [],
+    setAttribute() {},
+  });
   context.elements = new Proxy(context.elements, {
     get(target, key) { return target[key] ??= control(); },
   });

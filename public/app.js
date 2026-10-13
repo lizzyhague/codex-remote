@@ -46,6 +46,18 @@ const TEMPORARY_ERROR = Object.freeze({ lifetime: "temporary", tone: "error" });
 const CONNECTION_NOTICE_KEY = "connection";
 const RECOVERY_NOTICE_KEY = "recovery-storage";
 
+function measureScrollbarWidth() {
+  const probe = document.createElement("div");
+  probe.className = "scrollbar-measure";
+  probe.style.cssText = "position:absolute;width:100px;height:100px;overflow:scroll;visibility:hidden;";
+  document.body.append(probe);
+  const width = probe.offsetWidth - probe.clientWidth;
+  probe.remove();
+  return width;
+}
+
+document.documentElement.style.setProperty("--scrollbar-width", `${measureScrollbarWidth()}px`);
+
 const recoveryStore = new RecoveryStateStore(localStorage, {
   key: RECOVERY_KEY,
   legacy: {
@@ -2045,7 +2057,9 @@ async function stopTask() {
   const sessionId = state.sessionId;
   state.stopping = true;
   elements.taskButton.disabled = true;
-  elements.taskButton.textContent = "停止中";
+  elements.taskButton.dataset.action = "stop";
+  elements.taskButton.setAttribute("aria-label", "停止中");
+  elements.taskButton.title = "停止中";
   try {
     const result = await request("task.stop", { projectId, sessionId });
     if (result?.requested === false) {
@@ -3530,14 +3544,19 @@ function updateControls() {
   if (pickersDisabled) closeComposerPicker();
   if (controlsDisabled) slashCommands.close();
   if (state.stopping) {
-    elements.taskButton.textContent = "停止中";
+    elements.taskButton.dataset.action = "stop";
+    elements.taskButton.setAttribute("aria-label", "停止中");
+    elements.taskButton.title = "停止中";
     elements.taskButton.classList.toggle("primary", false);
-    elements.taskButton.classList.toggle("danger", true);
+    elements.taskButton.classList.toggle("danger", false);
     elements.taskButton.disabled = true;
   } else {
-    elements.taskButton.textContent = state.running ? "停止" : "发送";
+    const taskLabel = state.running ? "停止" : "发送";
+    elements.taskButton.dataset.action = state.running ? "stop" : "send";
+    elements.taskButton.setAttribute("aria-label", taskLabel);
+    elements.taskButton.title = taskLabel;
     elements.taskButton.classList.toggle("primary", !state.running);
-    elements.taskButton.classList.toggle("danger", state.running);
+    elements.taskButton.classList.toggle("danger", false);
     elements.taskButton.disabled = state.running
       ? !connected || !state.controlsTask || navigationBusy
       : !connected || !hasSession || state.commandBusy || uploading || navigationBusy ||

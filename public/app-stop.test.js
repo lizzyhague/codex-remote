@@ -8,11 +8,24 @@ function section(start, end) {
   return source.slice(source.indexOf(start), source.indexOf(end));
 }
 
+function taskButton(label = "停止") {
+  return {
+    disabled: false,
+    dataset: { action: label === "发送" ? "send" : "stop" },
+    title: label,
+    ariaLabel: label,
+    classList: { toggle() {} },
+    setAttribute(name, value) {
+      if (name === "aria-label") this.ariaLabel = value;
+    },
+  };
+}
+
 test("requested true keeps the stopping state until the task completes", async () => {
   const notices = [];
   const resumes = [];
   const requests = [];
-  const button = { disabled: false, textContent: "停止", classList: { toggle() {} } };
+  const button = taskButton();
   const context = vm.createContext({
     state: {
       running: true,
@@ -36,10 +49,15 @@ test("requested true keeps the stopping state until the task completes", async (
     showNotice: (message) => notices.push(message),
     updateControls() {
       if (context.state.stopping) {
-        button.textContent = "停止中";
+        button.dataset.action = "stop";
+        button.setAttribute("aria-label", "停止中");
+        button.title = "停止中";
         button.disabled = true;
       } else {
-        button.textContent = context.state.running ? "停止" : "发送";
+        const label = context.state.running ? "停止" : "发送";
+        button.dataset.action = context.state.running ? "stop" : "send";
+        button.setAttribute("aria-label", label);
+        button.title = label;
         button.disabled = false;
       }
     },
@@ -49,7 +67,9 @@ test("requested true keeps the stopping state until the task completes", async (
   await context.stopTask();
   assert.equal(context.state.stopping, true);
   assert.equal(context.state.running, true);
-  assert.equal(button.textContent, "停止中");
+  assert.equal(button.dataset.action, "stop");
+  assert.equal(button.ariaLabel, "停止中");
+  assert.equal(button.title, "停止中");
   assert.equal(notices.length, 0);
   assert.equal(resumes.length, 0);
   assert.deepEqual(JSON.parse(JSON.stringify(requests)), [{
@@ -73,7 +93,7 @@ test("requested false resyncs the session and does not clear running itself", as
     },
     TEMPORARY_WARNING: { lifetime: "temporary", tone: "warning" },
     TEMPORARY_ERROR: { lifetime: "temporary", tone: "error" },
-    elements: { taskButton: { disabled: false, textContent: "停止", classList: { toggle() {} } } },
+    elements: { taskButton: taskButton() },
     request: async () => ({ requested: false }),
     resumeSession: async (sessionId, options) => {
       resumes.push({ sessionId, options });
@@ -105,7 +125,7 @@ test("a failed stop request restores the button and keeps the task running", asy
     },
     TEMPORARY_WARNING: { lifetime: "temporary", tone: "warning" },
     TEMPORARY_ERROR: { lifetime: "temporary", tone: "error" },
-    elements: { taskButton: { disabled: false, textContent: "停止", classList: { toggle() {} } } },
+    elements: { taskButton: taskButton() },
     request: async () => {
       throw Object.assign(new Error("停止失败"), { code: "request_failed" });
     },
@@ -114,9 +134,12 @@ test("a failed stop request restores the button and keeps the task running", asy
     },
     showNotice: (message) => notices.push(message),
     updateControls() {
-      context.elements.taskButton.textContent = context.state.stopping
+      const label = context.state.stopping
         ? "停止中"
         : (context.state.running ? "停止" : "发送");
+      context.elements.taskButton.dataset.action = context.state.running ? "stop" : "send";
+      context.elements.taskButton.setAttribute("aria-label", label);
+      context.elements.taskButton.title = label;
       context.elements.taskButton.disabled = Boolean(context.state.stopping);
     },
     errorMessage: (error) => error.message,
@@ -125,7 +148,9 @@ test("a failed stop request restores the button and keeps the task running", asy
   await context.stopTask();
   assert.equal(context.state.stopping, false);
   assert.equal(context.state.running, true);
-  assert.equal(context.elements.taskButton.textContent, "停止");
+  assert.equal(context.elements.taskButton.dataset.action, "stop");
+  assert.equal(context.elements.taskButton.ariaLabel, "停止");
+  assert.equal(context.elements.taskButton.title, "停止");
   assert.equal(notices[0], "停止失败");
 });
 
@@ -144,7 +169,7 @@ test("a compaction past its instruction is refused without resyncing the session
     },
     TEMPORARY_WARNING: { lifetime: "temporary", tone: "warning" },
     TEMPORARY_ERROR: { lifetime: "temporary", tone: "error" },
-    elements: { taskButton: { disabled: false, textContent: "停止", classList: { toggle() {} } } },
+    elements: { taskButton: taskButton() },
     request: async () => ({ requested: false, reason: "compact_started" }),
     resumeSession: async (sessionId) => {
       resumes.push(sessionId);

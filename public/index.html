@@ -165,30 +165,35 @@
           <div id="composer-picker-menu" class="composer-picker-menu" role="listbox" hidden></div>
           <input id="attachment-input" class="visually-hidden" type="file" multiple tabindex="-1">
           <div id="attachment-list" class="attachment-list" aria-live="polite" hidden></div>
-          <textarea
-            id="message-input"
-            rows="1"
-            maxlength="524288"
-            placeholder="先选择或新建会话"
-            aria-label="消息"
-            disabled
-          ></textarea>
-          <div class="composer-actions">
-            <span class="composer-hint">电脑可按 Ctrl / ⌘ + Enter 发送</span>
-            <div class="composer-action-scroll" aria-label="快捷操作">
-              <button id="command-menu-button" class="quiet composer-shortcut command-menu-button" type="button" aria-label="更多操作" title="更多操作" aria-haspopup="listbox" aria-controls="slash-menu" aria-expanded="false" disabled>+</button>
-              <button id="model-picker-button" class="quiet composer-select-button" type="button" aria-haspopup="listbox" aria-controls="composer-picker-menu" aria-expanded="false" disabled>
-                <span class="composer-control-name">模型</span>
-                <span id="model-picker-label" class="composer-control-value">默认</span>
-                <svg class="composer-control-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>
-              </button>
-              <button id="permission-picker-button" class="quiet composer-select-button" type="button" aria-haspopup="listbox" aria-controls="composer-picker-menu" aria-expanded="false" disabled>
-                <span class="composer-control-name">权限</span>
-                <span id="permission-picker-label" class="composer-control-value">默认</span>
-                <svg class="composer-control-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>
+          <div class="composer-shell">
+            <textarea
+              id="message-input"
+              rows="1"
+              maxlength="524288"
+              placeholder="先选择或新建会话"
+              aria-label="消息"
+              disabled
+            ></textarea>
+            <div class="composer-actions">
+              <div class="composer-action-scroll" aria-label="快捷操作">
+                <button id="command-menu-button" class="quiet composer-shortcut" type="button" aria-label="更多操作" title="更多操作" aria-haspopup="listbox" aria-controls="slash-menu" aria-expanded="false" disabled>+</button>
+                <button id="model-picker-button" class="quiet composer-select-button" type="button" aria-haspopup="listbox" aria-controls="composer-picker-menu" aria-expanded="false" disabled>
+                  <span class="composer-control-name">模型</span>
+                  <span id="model-picker-label" class="composer-control-value">默认</span>
+                  <svg class="composer-control-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>
+                </button>
+                <button id="permission-picker-button" class="quiet composer-select-button" type="button" aria-haspopup="listbox" aria-controls="composer-picker-menu" aria-expanded="false" disabled>
+                  <span class="composer-control-name">权限</span>
+                  <span id="permission-picker-label" class="composer-control-value">默认</span>
+                  <svg class="composer-control-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>
+                </button>
+              </div>
+              <span class="composer-hint">电脑可按 Ctrl / ⌘ + Enter 发送</span>
+              <button id="task-button" class="primary task-button" type="submit" data-action="send" aria-label="发送" title="发送" disabled>
+                <svg class="task-send-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M8 3 4 7M8 3l4 4"/></svg>
+                <span class="task-stop-icon" aria-hidden="true"></span>
               </button>
             </div>
-            <button id="task-button" class="primary task-button" type="submit" disabled>发送</button>
           </div>
         </form>
       </section>
