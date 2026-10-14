@@ -47,6 +47,7 @@ const MAX_LIST_PAGES_PER_REQUEST = 10;
 /** 一次回收站请求最多读取多少条登记，避免搜索不命中时读遍整个回收站。 */
 const MAX_TRASH_READS_PER_REQUEST = 200;
 const VISIBLE_SOURCE_KINDS = ["cli", "vscode", "appServer"] as const;
+const CODEX_REMOTE_ORIGINATOR = "codex_remote";
 export const TRASH_RETENTION_SECONDS = 30 * 24 * 60 * 60;
 
 class SessionOperationError extends PublicError {
@@ -243,6 +244,7 @@ export class CodexSessionService {
       for (const thread of response.data) {
         // app-server 本身会按 cwd 过滤；这里再检查一次，守住白名单边界。
         if (
+          isCodexRemoteThread(thread) &&
           !this.#trash.has(thread.id) &&
           !markedIds.has(thread.id) &&
           await threadBelongsToProject(thread, project.path)
@@ -615,6 +617,7 @@ export class CodexSessionService {
       reads += 1;
       try {
         const thread = await this.#readOwnedThread(projectPath, entry.threadId);
+        if (!isCodexRemoteThread(thread)) continue;
         const summary = toSessionSummary(thread, projectId, this.#marks?.has(thread.id) ?? false);
         if (
           query &&
@@ -653,7 +656,7 @@ export class CodexSessionService {
         const params: ThreadReadParams = { threadId: entry.threadId, includeTurns: false };
         const response = await this.#transport.request<ThreadReadResponse>("thread/read", params);
         assertOpenedThreadResponse(response);
-        if (response.thread.id !== entry.threadId) continue;
+        if (response.thread.id !== entry.threadId || !isCodexRemoteThread(response.thread)) continue;
         const summary = toSessionSummary(response.thread, entry.projectId, true);
         if (
           query &&
@@ -931,6 +934,10 @@ function toOpenedSession(
       activePermissionProfile: experimental.activePermissionProfile ?? null,
     },
   };
+}
+
+function isCodexRemoteThread(thread: Thread): boolean {
+  return thread.originator === CODEX_REMOTE_ORIGINATOR;
 }
 
 function toSessionSummary(thread: Thread, projectId: string, marked: boolean): SessionSummary {

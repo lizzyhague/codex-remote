@@ -72,6 +72,7 @@ function thread(
     createdAt: 10,
     updatedAt: 20,
     cwd,
+    originator: "codex_remote",
     status: { type: "notLoaded" },
     turns: [],
     ...overrides,
@@ -149,6 +150,70 @@ test("lists only sessions in the selected allowlisted project", async (context) 
     transport.requests.filter((request) => request.method === "thread/turns/list").length,
     1,
   );
+});
+
+test("lists only sessions created by Codex Remote in every view", async (context) => {
+  const { catalog, project, trash, marks } = await createFixture(context);
+  const transport = new FakeTransport();
+  const service = new CodexSessionService(transport, catalog, trash, { marks });
+
+  transport.results.push(
+    {
+      data: [
+        thread("thread-remote", project),
+        thread("thread-lanting", project, { originator: "lanting" }),
+        thread("thread-cli", project, { originator: null }),
+      ],
+      nextCursor: null,
+    },
+    { data: [], nextCursor: null },
+  );
+  assert.deepEqual(
+    (await service.list("workspace/alpha")).sessions.map((session) => session.id),
+    ["thread-remote"],
+  );
+
+  transport.results.push(
+    {
+      data: [
+        thread("thread-remote-archived", project),
+        thread("thread-lanting-archived", project, { originator: "lanting" }),
+      ],
+      nextCursor: null,
+    },
+    { data: [], nextCursor: null },
+  );
+  assert.deepEqual(
+    (await service.list("workspace/alpha", { view: "archived" })).sessions.map((session) =>
+      session.id
+    ),
+    ["thread-remote-archived"],
+  );
+
+  await trash.put({
+    threadId: "thread-lanting-trash",
+    projectId: "workspace/alpha",
+    deletedAt: 100,
+    origin: "archived",
+    state: "trashed",
+  });
+  transport.results.push({
+    thread: thread("thread-lanting-trash", project, { originator: "lanting" }),
+  });
+  assert.deepEqual(
+    (await service.list("workspace/alpha", { view: "trash" })).sessions,
+    [],
+  );
+
+  await marks.put({ threadId: "thread-lanting-marked", projectId: "workspace/alpha" });
+  transport.results.push(
+    { data: [], nextCursor: null },
+    { data: [], nextCursor: null },
+    {
+      thread: thread("thread-lanting-marked", project, { originator: "lanting" }),
+    },
+  );
+  assert.deepEqual((await service.list("workspace/alpha")).marked, []);
 });
 
 test("composeDeveloperInstructions keeps the built-in text and appends nonblank custom copy", () => {
