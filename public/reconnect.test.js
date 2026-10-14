@@ -44,6 +44,7 @@ function harness() {
     location: { protocol: "https:", host: "example.com", search: "" },
     RECONNECT_DELAY_MS: 2500, REQUEST_TIMEOUT_MS: 15000, SESSION_LOADING_RETRY_MS: 1000,
     CONNECTION_NOTICE_KEY: "connection", TEMPORARY_WARNING: { tone: "warning" },
+    SESSION_ORGANIZING_BUSY_MESSAGE: "这个项目有正在执行的任务，暂时不能整理会话。",
     MAX_ATTACHMENT_BYTES: 25 * 1024 * 1024, MAX_MESSAGE_ATTACHMENTS: 100,
     PROJECT_KEY: "project", ATTACHMENT_DRAFTS_KEY: "drafts",
     state: {
@@ -405,16 +406,25 @@ test("navigation and send controls stay disabled until restoration and uploads f
     get(target, key) { return target[key] ??= control(); },
   });
   const sessionButton = { classList: { contains: () => true } };
+  const sessionCheckbox = {};
   context.elements.sessionList = {
     querySelectorAll: () => [{
-      dataset: { state: "idle" },
-      querySelectorAll: (selector) => selector === "button" ? [sessionButton] : [],
+      dataset: { state: "idle", selectable: "true" },
+      querySelectorAll: (selector) => selector === "button"
+        ? [sessionButton]
+        : selector === 'input[type="checkbox"]'
+        ? [sessionCheckbox]
+        : [],
     }],
   };
   context.document.getElementById = control;
   context.closeComposerPicker = () => {};
   context.visibleSessionSummaries = () => [];
-  context.selectableSessions = () => [];
+  context.sessionSelectable = () => true;
+  let selectionDisabled = null;
+  context.selectionBar = {
+    setDisabled(disabled, reason) { selectionDisabled = { disabled, reason }; },
+  };
   context.state.sessionView = "active";
   context.state.authenticated = true;
   vm.runInContext(section("function updateControls(", "function setNavigationBusy("), context);
@@ -430,4 +440,28 @@ test("navigation and send controls stay disabled until restoration and uploads f
   context.updateControls();
   assert.equal(context.elements.taskButton.disabled, false);
   assert.equal(sessionButton.disabled, false);
+
+  context.visibleSessionSummaries = () => [{ state: "active" }];
+  context.updateControls();
+  assert.equal(context.elements.selectSessionsButton.disabled, true);
+  assert.equal(
+    context.elements.selectSessionsButton.title,
+    "这个项目有正在执行的任务，暂时不能整理会话。",
+  );
+  assert.equal(sessionCheckbox.disabled, true);
+  assert.equal(sessionCheckbox.title, "这个项目有正在执行的任务，暂时不能整理会话。");
+  assert.deepEqual(selectionDisabled, {
+    disabled: true,
+    reason: "这个项目有正在执行的任务，暂时不能整理会话。",
+  });
+
+  context.visibleSessionSummaries = () => [];
+  context.state.running = true;
+  context.updateControls();
+  assert.equal(context.elements.selectSessionsButton.disabled, true);
+  assert.equal(sessionCheckbox.disabled, true);
+  assert.deepEqual(selectionDisabled, {
+    disabled: true,
+    reason: "这个项目有正在执行的任务，暂时不能整理会话。",
+  });
 });

@@ -84,6 +84,7 @@ test("serves health and requires a cookie before the WebSocket upgrade", async (
 
     for (const asset of [
       "/boot.js",
+      "/confirm-dialog.js",
       "/markdown.js",
       "/mcp-form.js",
       "/notice.js",
@@ -91,6 +92,7 @@ test("serves health and requires a cookie before the WebSocket upgrade", async (
       "/display-timezone.js",
       "/project-labels.js",
       "/recovery-state.js",
+      "/selection-bar.js",
     ]) {
       const response = await fetch("http://" + address.host + ":" + address.port + asset);
       assert.equal(response.status, 200, asset + " should be served");
@@ -675,6 +677,7 @@ const WEB_FILES = {
   "index.html": '<head><script type="module" src="/app.js"></script><link href="/styles.css" rel="stylesheet"></head>mark-A',
   "view.html": '<head><script type="module" src="/viewer.js"></script><link href="/viewer.css" rel="stylesheet"></head>',
   "app.js": 'import "./markdown.js"; window.__PWA_MARK__ = "A";',
+  "confirm-dialog.js": "// confirm dialog",
   "markdown.js": "// dependency-A",
   "styles.css": "body { color: red }",
   "viewer.js": 'import "./markdown.js";',
@@ -686,6 +689,7 @@ const WEB_FILES = {
   "display-timezone.js": "// tz",
   "project-labels.js": "// labels",
   "recovery-state.js": "// recovery",
+  "selection-bar.js": "// selection bar",
   "manifest.webmanifest": "{}",
   "icon.svg": "<svg></svg>",
   "icon-192.png": "fake png",

@@ -810,6 +810,56 @@ button.icon-button svg {
   line-height: 1.5;
 }
 
+.alert-dialog {
+  width: min(430px, calc(100vw - 1.5rem));
+  padding: 0;
+  color: #eceef2;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.alert-dialog::backdrop {
+  background: rgb(0 0 0 / 55%);
+}
+
+.alert-card {
+  padding: 1.15rem;
+}
+
+.alert-card h2,
+.alert-card p {
+  margin: 0;
+}
+
+.alert-card h2 {
+  font-size: 1.1rem;
+}
+
+.alert-card p {
+  margin-top: 0.7rem;
+  color: var(--muted);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.confirm-dialog-copy {
+  margin-top: 0.7rem;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.confirm-dialog-copy p {
+  margin: 0;
+}
+
+.alert-actions {
+  margin-top: 1rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
 .session-select-label {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

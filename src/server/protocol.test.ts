@@ -263,6 +263,31 @@ test("parses the small stable browser protocol", () => {
   });
 });
 
+test("allows at most 1000 session IDs in one protective batch", () => {
+  const sessionIds = Array.from({ length: 1_000 }, (_, index) => `session-${index}`);
+  const parsed = parseBrowserRequest(JSON.stringify({
+    type: "sessions.mutate",
+    requestId: "sessions-limit",
+    projectId: "projects/demo",
+    sessionIds,
+    action: "archive",
+  }));
+  assert.equal(parsed.type, "sessions.mutate");
+  if (parsed.type === "sessions.mutate") assert.equal(parsed.sessionIds.length, 1_000);
+
+  assert.throws(
+    () => parseBrowserRequest(JSON.stringify({
+      type: "sessions.mutate",
+      requestId: "sessions-over-limit",
+      projectId: "projects/demo",
+      sessionIds: [...sessionIds, "session-1000"],
+      action: "archive",
+    })),
+    (error: unknown) => error instanceof ProtocolError &&
+      error.code === "invalid_field" && /最多 1000 项/u.test(error.message),
+  );
+});
+
 test("rejects arbitrary paths and unknown operations", () => {
   assert.throws(
     () => parseBrowserRequest(JSON.stringify({

@@ -263,7 +263,7 @@ export function parseBrowserRequest(source: string): BrowserRequest {
         type: "sessions.mutate",
         requestId,
         projectId: requireString(value.projectId, "项目 ID", requestId, 1_024),
-        sessionIds: requireStringArray(value.sessionIds, "会话 ID", requestId, 100, 1_024),
+        sessionIds: requireStringArray(value.sessionIds, "会话 ID", requestId, 1_000, 1_024),
         action: requireSessionMutationAction(value.action, requestId),
       };
     case "session.start":

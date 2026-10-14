@@ -4,6 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 import { projectDisplayLabel } from "./project-labels.js";
+import { createSelectionBar } from "./selection-bar.js";
 
 const source = await readFile(new URL("./app.js", import.meta.url), "utf8");
 function section(start, end) {
@@ -34,7 +35,12 @@ class FakeElement {
     this.disabled = false;
     this.checked = false;
     this.value = "";
+    this.id = "";
+    this.title = "";
+    this.type = "";
+    this.className = "";
     this.parentElement = null;
+    this.classList = { toggle() {} };
   }
   append(...children) {
     for (const child of children) {
@@ -47,7 +53,9 @@ class FakeElement {
     this.append(...children);
   }
   setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return this.attributes[name] ?? null; }
   addEventListener(name, listener) { this.listeners[name] = listener; }
+  emit(name) { return this.listeners[name]?.(); }
   get text() {
     return [this.textContent, ...this.children.map((child) => child.text)].join(" ").trim();
   }
@@ -79,8 +87,7 @@ function harness({ view = "active", selectionMode = false } = {}) {
   const requests = [];
   const responders = [];
   const notices = [];
-  const actionNotices = [];
-  const confirms = [];
+  const confirmations = [];
   const storage = new Map();
   let confirmAnswer = true;
   let resets = 0;
@@ -100,6 +107,7 @@ function harness({ view = "active", selectionMode = false } = {}) {
     TEMPORARY_ERROR: { tone: "error" },
     TEMPORARY_WARNING: { tone: "warning" },
     TEMPORARY_INFO: { tone: "info" },
+    SESSION_ORGANIZING_BUSY_MESSAGE: "这个项目有正在执行的任务，暂时不能整理会话。",
     state: {
       generation: 1,
       authenticated: true,
@@ -114,17 +122,13 @@ function harness({ view = "active", selectionMode = false } = {}) {
       sessionLoading: false,
       sessionLoadError: null,
       sessionLoadGeneration: 0,
-      selectionMode,
-      selectedSessions: new Map(),
       navigationBusy: false,
+      running: false,
     },
     elements,
-    document: { createElement: (tagName) => new FakeElement(tagName) },
-    window: {
-      confirm(message) {
-        confirms.push(message);
-        return confirmAnswer;
-      },
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createElementNS: (_namespace, tagName) => new FakeElement(tagName),
     },
     request(type, payload = {}) {
       requests.push({ type, ...payload });
@@ -135,7 +139,6 @@ function harness({ view = "active", selectionMode = false } = {}) {
     stateGet: (key) => storage.get(key) ?? "",
     stateSet: (key, value) => storage.set(key, value),
     showNotice: (message, options) => notices.push({ message, options }),
-    showActionNotice: (message, label, action) => actionNotices.push({ message, label, action }),
     errorMessage: (error) => error.message,
     updateControls() {},
     updateConversationTitle() {
@@ -166,19 +169,64 @@ function harness({ view = "active", selectionMode = false } = {}) {
   });
   vm.runInContext([
     section("async function loadProjects(", "/** 页面发起一次新建或打开"),
-    section("function setSelectionMode(", "function appendSessionText("),
+    section("function setSessionView(", "function appendSessionText("),
     section("function visibleSessionSummaries(", "function mergeSessions("),
   ].join("\n"), context);
+  const views = {
+    active: { actions: [
+      { id: "archive", label: "归档", resultLabel: "归档", icon: "archive" },
+      { id: "trash-active", label: "删除", resultLabel: "删除", icon: "delete", danger: true, retention: true },
+    ] },
+    archived: { actions: [
+      { id: "unarchive", label: "取消归档", resultLabel: "取消归档", icon: "unarchive" },
+      { id: "trash-archived", label: "删除", resultLabel: "删除", icon: "delete", danger: true, retention: true },
+    ] },
+    trash: { actions: [
+      { id: "restore-trash", label: "恢复", resultLabel: "恢复", icon: "restore" },
+      { id: "delete-trash", label: "永久删除", resultLabel: "永久删除", icon: "purge", danger: true, permanent: true },
+    ] },
+  };
+  const selectionBar = createSelectionBar({
+    container: elements.selectionHeading,
+    views,
+    initialView: view,
+    noun: "会话",
+    untitledLabel: "新会话",
+    permanentDeleteDetail: "会话原文会一并删除",
+    getId: (session) => session.id,
+    getTitle: (session) => session.title,
+    isSelectable: (session) => context.sessionSelectable(session),
+    isPinned: (session) => Boolean(session.marked),
+    executeAction: (action, ids) => context.executeSessionSelectionAction(action, ids),
+    refreshItems: () => context.loadSessions(),
+    confirm: async (message, options) => {
+      confirmations.push({ message, options });
+      return confirmAnswer;
+    },
+    notify: (message, tone) => context.showNotice(
+      message,
+      tone === "error" ? context.TEMPORARY_ERROR : context.TEMPORARY_INFO,
+    ),
+    onSelectionChange: () => context.renderSessionList(),
+    onBusyChange: (busy) => context.setNavigationBusy(busy),
+    document: context.document,
+  });
+  context.selectionBar = selectionBar;
+  if (selectionMode && view !== "trash") selectionBar.setManualSelection(true);
   return {
     context,
+    selectionBar,
     elements,
     requests,
     notices,
-    actionNotices,
-    confirms,
+    confirmations,
     get resets() { return resets; },
     get titleUpdates() { return titleUpdates; },
     rejectConfirm() { confirmAnswer = false; },
+    byId(id) {
+      return [elements.selectionHeading, ...elements.selectionHeading.walk()]
+        .find((element) => element.id === id);
+    },
     /** 下一次请求的结果；传 Error 表示失败，传 deferred 表示由测试控制完成时间。 */
     respond(result) {
       responders.push(() => {
@@ -301,17 +349,19 @@ test("pinned sessions from another project cannot join the current project's bat
   assert.equal(other.disabled, true);
   assert.equal(pinned.disabled, false);
 
-  h.context.toggleSelectAllSessions();
-  assert.deepEqual([...h.context.state.selectedSessions.keys()], ["pinned", "a", "b"]);
-  assert.equal(h.elements.selectionCount.textContent, "已选择 3 项");
+  h.byId("selection-select-all-button").emit("click");
+  assert.deepEqual(h.selectionBar.selectedIds(), ["a", "b"]);
+  assert.equal(h.selectionBar.toggle("other"), false);
+  assert.equal(h.selectionBar.toggle("pinned"), true);
+  assert.equal(h.byId("selection-count").textContent, "已选择 3 项");
 
-  h.respond({ succeeded: ["pinned", "a", "b"], failed: [] });
+  h.respond({ succeeded: ["a", "b", "pinned"], failed: [] });
   h.respond({ sessions: [], marked: [], nextCursor: null });
-  await h.context.runBulkPrimaryAction();
+  await h.selectionBar.runAction("archive");
   assert.deepEqual(plain(h.requests[0]), {
     type: "sessions.mutate",
     projectId: "root-a/one",
-    sessionIds: ["pinned", "a", "b"],
+    sessionIds: ["a", "b", "pinned"],
     action: "archive",
   });
 });
@@ -324,17 +374,17 @@ test("a refresh drops selections that left the list so confirmation and request 
     checkbox.checked = true;
     checkbox.listeners.change();
   }
-  assert.equal(h.elements.selectionCount.textContent, "已选择 2 项");
+  assert.equal(h.byId("selection-count").textContent, "已选择 2 项");
 
   // 另一台设备恢复了 A，并把 B 改了名。
   h.respond({ sessions: [summary("b", { title: "Renamed B" })], marked: [], nextCursor: null });
   await h.context.loadSessions();
-  assert.equal(h.elements.selectionCount.textContent, "已选择 1 项");
+  assert.equal(h.byId("selection-count").textContent, "已选择 1 项");
 
   h.respond({ succeeded: ["b"], failed: [] });
   h.respond({ sessions: [], marked: [], nextCursor: null });
-  await h.context.runBulkDangerAction();
-  assert.deepEqual(h.confirms, [
+  await h.selectionBar.runAction("delete-trash");
+  assert.deepEqual(h.confirmations.map((entry) => entry.message), [
     "立刻永久删除「Renamed B」。这一步无法撤销，会话原文会一并删除。继续吗？",
   ]);
   assert.deepEqual(plain(h.requests.at(-2)), {
@@ -343,6 +393,26 @@ test("a refresh drops selections that left the list so confirmation and request 
     sessionIds: ["b"],
     action: "delete-trash",
   });
+});
+
+test("trash keeps backend failures selected through the codex-remote result adapter", async () => {
+  const h = harness({ view: "trash" });
+  h.context.state.sessions = [summary("a"), summary("b")];
+  h.context.renderSessionList();
+  h.selectionBar.toggle("a");
+  h.selectionBar.toggle("b");
+  h.respond({
+    succeeded: ["a"],
+    failed: [{ sessionId: "b", message: "这个会话仍在整理。" }],
+  });
+  h.respond({ sessions: [summary("b")], marked: [], nextCursor: null });
+  await h.selectionBar.runAction("restore-trash");
+
+  assert.deepEqual(h.selectionBar.selectedIds(), ["b"]);
+  assert.deepEqual(h.notices, [{
+    message: "已完成 1 项，1 项失败：这个会话仍在整理。",
+    options: { tone: "error" },
+  }]);
 });
 
 test("nothing is deleted when every selected session left the list", async () => {
@@ -355,10 +425,10 @@ test("nothing is deleted when every selected session left the list", async () =>
 
   h.respond({ sessions: [], marked: [], nextCursor: null });
   await h.context.loadSessions();
-  await h.context.runBulkDangerAction();
+  await h.selectionBar.runAction("delete-trash");
 
-  assert.equal(h.elements.selectionCount.textContent, "已选择 0 项");
-  assert.deepEqual(h.confirms, []);
+  assert.equal(h.byId("selection-count").textContent, "已选择 0 项");
+  assert.deepEqual(h.confirmations, []);
   assert.deepEqual(h.requests.map((request) => request.type), ["sessions.list"]);
 });
 
@@ -373,15 +443,16 @@ test("bulk actions wait while the list is being refreshed", async () => {
   const refresh = deferred();
   h.respond(refresh);
   const loading = h.context.loadSessions();
-  await h.context.runBulkDangerAction();
-  await h.context.runBulkPrimaryAction();
-  assert.deepEqual(h.confirms, []);
+  h.selectionBar.setDisabled(true);
+  await h.selectionBar.runAction("delete-trash");
+  await h.selectionBar.runAction("restore-trash");
+  assert.deepEqual(h.confirmations, []);
   assert.deepEqual(h.requests.map((request) => request.type), ["sessions.list"]);
   refresh.resolve({ sessions: [summary("a")], marked: [], nextCursor: null });
   await loading;
 });
 
-test("undo keeps the original project after the page switches projects", async () => {
+test("a completed batch reports success without adding an undo action", async () => {
   const h = harness({ selectionMode: true });
   h.context.state.sessions = [summary("a")];
   h.context.renderSessionList();
@@ -390,26 +461,15 @@ test("undo keeps the original project after the page switches projects", async (
   checkbox.listeners.change();
   h.respond({ succeeded: ["a"], failed: [] });
   h.respond({ sessions: [], marked: [], nextCursor: null });
-  await h.context.runBulkPrimaryAction();
-  assert.equal(h.actionNotices.length, 1);
-
-  h.context.state.projectId = "root-a/two";
-  h.context.setSelectionMode(true);
-  h.context.state.sessions = [summary("c", { projectId: "root-a/two" })];
-  h.context.state.selectedSessions.set("c", h.context.state.sessions[0]);
-  h.respond({ succeeded: ["a"], failed: [] });
-  h.respond({ sessions: h.context.state.sessions, marked: [], nextCursor: null });
-  await h.actionNotices[0].action();
-
-  const undo = h.requests.find((request) => request.action === "unarchive");
-  assert.deepEqual(plain(undo), {
+  await h.selectionBar.runAction("archive");
+  assert.deepEqual(plain(h.requests[0]), {
     type: "sessions.mutate",
     projectId: "root-a/one",
     sessionIds: ["a"],
-    action: "unarchive",
+    action: "archive",
   });
-  assert.equal(h.context.state.selectionMode, true, "undo does not clear another project's selection");
-  assert.deepEqual([...h.context.state.selectedSessions.keys()], ["c"]);
+  assert.deepEqual(h.notices, [{ message: "已归档 1 个会话。", options: { tone: "info" } }]);
+  assert.equal(h.context.state.navigationBusy, false);
 });
 
 test("a rename seen in the refreshed list updates the current conversation title", async () => {

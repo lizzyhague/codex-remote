@@ -89,27 +89,7 @@
           </button>
         </div>
 
-        <div id="selection-heading" class="selection-heading" hidden>
-          <button id="cancel-selection-button" class="quiet small icon-button" type="button" aria-label="取消" title="取消">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-          </button>
-          <div class="selection-heading-end">
-            <strong id="selection-count">已选择 0 项</strong>
-            <button id="bulk-primary-button" class="quiet small icon-button" type="button" aria-label="归档" title="归档">
-              <svg id="bulk-archive-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
-              <svg id="bulk-unarchive-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="m9 15 3-3 3 3"/><path d="M12 12v6"/></svg>
-              <svg id="bulk-restore-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
-            </button>
-            <button id="bulk-trash-button" class="quiet small icon-button danger" type="button" aria-label="删除" title="删除">
-              <svg id="bulk-delete-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
-              <svg id="bulk-delete-permanently-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="m9.5 11.5 5 5"/><path d="m14.5 11.5-5 5"/></svg>
-            </button>
-            <button id="select-all-sessions-button" class="quiet small icon-button" type="button" aria-label="全选" title="全选">
-              <svg id="select-all-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 15 2 2 4-4"/><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
-              <svg id="select-none-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><rect width="18" height="18" x="3" y="3" rx="2"/></svg>
-            </button>
-          </div>
-        </div>
+        <div id="selection-heading" class="selection-heading" hidden></div>
 
         <div id="session-list" class="session-list" role="list" aria-live="polite"></div>
         <button id="load-more-sessions-button" class="quiet load-more-sessions" type="button" hidden>加载更多</button>
@@ -294,6 +274,23 @@
         <p id="app-alert-message"></p>
         <div class="rename-actions">
           <button class="primary" type="submit" autofocus>知道了</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog
+      id="confirm-dialog"
+      class="alert-dialog"
+      aria-labelledby="confirm-dialog-title"
+      aria-describedby="confirm-dialog-message"
+    >
+      <form id="confirm-dialog-form" method="dialog" class="alert-card">
+        <h2 id="confirm-dialog-title">确认</h2>
+        <div id="confirm-dialog-message" class="confirm-dialog-copy"></div>
+        <div class="alert-actions">
+          <button id="confirm-dialog-cancel-button" class="quiet" type="button">取消</button>
+          <button id="confirm-dialog-accept-button" class="primary" type="submit" value="confirm">
+            确定
+          </button>
         </div>
       </form>
     </dialog>

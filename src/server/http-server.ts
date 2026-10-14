@@ -60,6 +60,7 @@ const STATIC_FILES: Record<string, { file: string; contentType: string }> = {
   "/index.html": { file: "index.html", contentType: "text/html; charset=utf-8" },
   "/boot.js": { file: "boot.js", contentType: "text/javascript; charset=utf-8" },
   "/app.js": { file: "app.js", contentType: "text/javascript; charset=utf-8" },
+  "/confirm-dialog.js": { file: "confirm-dialog.js", contentType: "text/javascript; charset=utf-8" },
   "/markdown.js": { file: "markdown.js", contentType: "text/javascript; charset=utf-8" },
   "/mcp-form.js": { file: "mcp-form.js", contentType: "text/javascript; charset=utf-8" },
   "/notice.js": { file: "notice.js", contentType: "text/javascript; charset=utf-8" },
@@ -67,6 +68,7 @@ const STATIC_FILES: Record<string, { file: string; contentType: string }> = {
   "/display-timezone.js": { file: "display-timezone.js", contentType: "text/javascript; charset=utf-8" },
   "/project-labels.js": { file: "project-labels.js", contentType: "text/javascript; charset=utf-8" },
   "/recovery-state.js": { file: "recovery-state.js", contentType: "text/javascript; charset=utf-8" },
+  "/selection-bar.js": { file: "selection-bar.js", contentType: "text/javascript; charset=utf-8" },
   "/styles.css": { file: "styles.css", contentType: "text/css; charset=utf-8" },
   "/manifest.webmanifest": {
     file: "manifest.webmanifest",
