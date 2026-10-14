@@ -98,6 +98,7 @@ export function createSelectionBar({
   getTitle,
   isSelectable,
   isPinned,
+  getActionUnavailableReason = () => "",
   executeAction,
   refreshItems,
   confirm,
@@ -132,10 +133,12 @@ export function createSelectionBar({
   count.id = "selection-count";
   end.append(count);
 
+  const actions = new Map();
   const actionButtons = new Map();
   for (const config of Object.values(views)) {
     for (const action of config.actions) {
       if (actionButtons.has(action.id)) continue;
+      actions.set(action.id, action);
       const actionButton = button(document, {
         id: `selection-action-${action.id}`,
         label: action.label,
@@ -178,6 +181,14 @@ export function createSelectionBar({
     return [...items.values()].filter((item) => isSelectable(item) && !isPinned(item));
   }
 
+  function unavailableReasonFor(action, targets = [...selected.values()]) {
+    for (const item of targets) {
+      const reason = getActionUnavailableReason(action, item);
+      if (reason) return String(reason);
+    }
+    return "";
+  }
+
   function update() {
     container.hidden = !selecting();
     backButton.hidden = view !== "trash";
@@ -195,11 +206,18 @@ export function createSelectionBar({
     const currentActions = new Set((views[view]?.actions ?? []).map((action) => action.id));
     for (const [id, actionButton] of actionButtons) {
       actionButton.hidden = !currentActions.has(id);
-      actionButton.disabled = unavailable() || selected.size === 0;
+      const restriction = currentActions.has(id) && selected.size > 0
+        ? unavailableReasonFor(actions.get(id))
+        : "";
+      actionButton.disabled = unavailable() || selected.size === 0 || Boolean(restriction);
+      const label = actionButton.getAttribute("aria-label");
+      actionButton.title = unavailable() && disabledReason
+        ? disabledReason
+        : restriction || label;
     }
 
     const reason = unavailable() && disabledReason ? disabledReason : "";
-    for (const element of [selectAllButton, selectNoneButton, ...actionButtons.values()]) {
+    for (const element of [selectAllButton, selectNoneButton]) {
       const label = element.getAttribute("aria-label");
       element.title = reason || label;
     }
@@ -267,6 +285,7 @@ export function createSelectionBar({
     const action = views[view]?.actions.find((candidate) => candidate.id === actionId);
     const targets = [...selected.values()];
     if (!action || targets.length === 0 || unavailable()) return null;
+    if (unavailableReasonFor(action, targets)) return null;
 
     if (action.permanent) {
       const message = targets.length === 1
@@ -283,7 +302,9 @@ export function createSelectionBar({
     update();
     onBusyChange(true);
     try {
-      const result = normalizeResult(await executeAction(action.id, targets.map(getId), targets));
+      const rawResult = await executeAction(action.id, targets.map(getId), targets);
+      if (rawResult?.cancelled === true) return rawResult;
+      const result = normalizeResult(rawResult);
       if (view === "trash") {
         const failed = new Set(result.failed.map((failure) => failure.id));
         selected = new Map([...selected].filter(([id]) => failed.has(id)));

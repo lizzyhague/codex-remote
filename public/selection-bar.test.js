@@ -81,6 +81,7 @@ function harness({
   noun = "会话",
   backLabel = "返回最近会话",
   permanentDeleteDetail = "会话原文会一并删除",
+  getActionUnavailableReason = () => "",
 } = {}) {
   const container = new FakeElement();
   const executions = [];
@@ -103,6 +104,7 @@ function harness({
     getTitle: (entry) => entry.title,
     isSelectable: (entry) => entry.selectable,
     isPinned: (entry) => entry.pinned,
+    getActionUnavailableReason,
     executeAction: async (action, ids) => {
       executions.push({ action, ids });
       return result;
@@ -215,6 +217,38 @@ test("a project-wide busy reason disables selection actions without hiding trash
     "这个项目有正在执行的任务，暂时不能整理会话。",
   );
   assert.equal(h.controller.toggle("a"), false);
+});
+
+test("an item can disable only one action and expose its reason", async () => {
+  const reason = "选中的会话里有正在永久删除的，不能恢复。";
+  const h = harness({
+    initialView: "trash",
+    getActionUnavailableReason: (action, entry) =>
+      action.id === "restore-trash" && entry.deleting ? reason : "",
+  });
+  h.controller.reconcile([item("a"), item("deleting", { deleting: true })]);
+  h.controller.toggle("a");
+  h.controller.toggle("deleting");
+
+  assert.equal(h.byId("selection-action-restore-trash").disabled, true);
+  assert.equal(h.byId("selection-action-restore-trash").title, reason);
+  assert.equal(h.byId("selection-action-delete-trash").disabled, false);
+  assert.equal(await h.controller.runAction("restore-trash"), null);
+  assert.deepEqual(h.executions, []);
+});
+
+test("an adapter cancellation keeps the current selection without refreshing or notifying", async () => {
+  const h = harness();
+  h.controller.setManualSelection(true);
+  h.controller.reconcile([item("a")]);
+  h.controller.toggle("a");
+  h.setResult({ cancelled: true });
+
+  assert.deepEqual(await h.controller.runAction("archive"), { cancelled: true });
+  assert.equal(h.controller.isSelecting(), true);
+  assert.deepEqual(h.controller.selectedIds(), ["a"]);
+  assert.equal(h.refreshes, 0);
+  assert.deepEqual(h.notices, []);
 });
 
 test("trash keeps only failed items selected and reports the first reason", async () => {
