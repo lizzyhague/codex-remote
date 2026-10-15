@@ -33,6 +33,7 @@
   --mix-bubble-ai: 6%;
   --mix-permission: 8%;
   --mix-copy-success: 12%;
+  --mix-divider-accent: 70%;
 
   /* 推导角色 */
   --tint: color-mix(in srgb, var(--theme) var(--mix-tint), var(--neutral));
@@ -43,7 +44,8 @@
   --surface-3: color-mix(in srgb, var(--tint) var(--mix-surface-3), white);
   --border: color-mix(in srgb, var(--tint) var(--mix-border), white);
   --border-strong: color-mix(in srgb, var(--tint) var(--mix-border-strong), white);
-  --divider: color-mix(in srgb, var(--border) 58%, transparent);
+  --divider: var(--border);
+  --divider-accent: color-mix(in srgb, var(--theme) var(--mix-divider-accent), var(--border));
   --text: color-mix(in srgb, var(--tint) var(--mix-text), white);
   --text-mid: color-mix(in srgb, var(--tint) var(--mix-text-mid), white);
   --text-muted: color-mix(in srgb, var(--tint) var(--mix-text-muted), white);
@@ -68,11 +70,11 @@
   --bubble-ai: color-mix(in srgb, var(--theme) var(--mix-bubble-ai), var(--surface-2));
   --permission-fill: color-mix(in srgb, var(--theme) var(--mix-permission), var(--surface-2));
   --copy-success-fill: color-mix(in srgb, var(--theme) var(--mix-copy-success), var(--surface-2));
-  --stop-fill: #2a1e1a;
-  --stop-border: var(--border);
+  --stop-fill: var(--danger-wash);
+  --stop-border: var(--danger);
   --danger-border: #7f1d1d;
-  --notice-fill: var(--hover);
-  --attachment-border: rgb(255 255 255 / 18%);
+  --notice-fill: transparent;
+  --attachment-border: var(--border);
 
   --max-width: 920px;
   --sidebar-width: clamp(260px, 20vw, 304px);
@@ -531,7 +533,7 @@ button.icon-button svg {
 .session-mark-divider {
   margin: 0.4rem 0.85rem;
   border: 0;
-  border-top: 2px solid var(--theme);
+  border-top: 2px solid var(--divider-accent);
 }
 
 .session-rename-trigger,
