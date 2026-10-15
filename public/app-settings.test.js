@@ -27,7 +27,7 @@ test("the gear sits to the left of collapse and does not overlay the app icon", 
   assert.match(heading, /title="应用设置"/u);
   assert.ok(heading.indexOf('id="app-settings-button"') < heading.indexOf('id="collapse-sidebar-button"'));
   assert.ok(heading.indexOf('class="sidebar-brand"') < heading.indexOf('id="app-settings-button"'));
-  assert.match(heading, /class="sidebar-logo"/u);
+  assert.match(heading, /class="sidebar-brand-icon"/u);
   assert.doesNotMatch(
     heading.slice(heading.indexOf("sidebar-brand"), heading.indexOf("sidebar-heading-actions")),
     /app-settings-button/u,

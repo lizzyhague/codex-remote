@@ -2733,27 +2733,33 @@ function addApproval(approval, sourceSession = null, sessionId = null) {
     return;
   }
   const card = document.createElement("section");
-  card.className = "approval-card";
+  card.className = "permission-card";
   card.dataset.approvalId = approval.id;
   card.dataset.sessionId = sourceSession?.id || sessionId || "";
-  const description = document.createElement("p");
-  description.textContent = approval.reason || (approval.kind === "command"
+  const title = document.createElement("p");
+  title.className = "permission-card-title";
+  title.textContent = approval.reason || (approval.kind === "command"
     ? "Codex 请求执行一项操作。"
     : approval.kind === "permissions"
     ? "Codex 请求为本轮增加权限。"
     : "Codex 请求修改文件。");
+  const body = document.createElement("div");
+  body.className = "permission-card-body";
   const source = document.createElement("small");
+  source.className = "permission-card-detail";
   source.textContent = `来源会话：${pendingRequestSessionLabel(sourceSession, sessionId)}`;
-  description.append(source);
+  body.append(source);
   for (const line of approvalScopeLines(approval)) {
     const detail = document.createElement("small");
+    detail.className = "permission-card-detail";
     detail.textContent = line;
-    description.append(detail);
+    body.append(detail);
   }
   if (approval.canApprove === false) {
     const unavailable = document.createElement("small");
+    unavailable.className = "permission-card-detail";
     unavailable.textContent = "完整范围无法在网页中安全显示，只能拒绝。";
-    description.append(unavailable);
+    body.append(unavailable);
   }
 
   const decline = document.createElement("button");
@@ -2767,10 +2773,10 @@ function addApproval(approval, sourceSession = null, sessionId = null) {
   decline.addEventListener("click", () => void answerApproval(card, approval.id, "decline"));
   approve.addEventListener("click", () => void answerApproval(card, approval.id, "approve_once"));
   const actions = document.createElement("div");
-  actions.className = "approval-card-actions";
+  actions.className = "permission-card-actions";
   actions.append(decline);
   if (approval.canApprove !== false) actions.append(approve);
-  card.append(description, actions);
+  card.append(title, body, actions);
   elements.approvalList.append(card);
 }
 
@@ -3119,15 +3125,18 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
     )
   ) return;
   const card = document.createElement("section");
-  card.className = "approval-card";
+  card.className = "permission-card";
   card.dataset.interactionId = interaction.id;
   card.dataset.sessionId = sourceSession?.id || sessionId || "";
   const heading = document.createElement("p");
+  heading.className = "permission-card-title";
   heading.textContent = "Codex 需要你的输入。";
+  const body = document.createElement("div");
+  body.className = "permission-card-body";
   const source = document.createElement("small");
+  source.className = "permission-card-detail";
   source.textContent = `来源会话：${pendingRequestSessionLabel(sourceSession, sessionId)}`;
-  heading.append(source);
-  card.append(heading);
+  body.append(source);
 
   const fields = new Map();
   let canSubmit = true;
@@ -3152,20 +3161,21 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
         control.type = question.isSecret ? "password" : "text";
       }
       label.append(control);
-      card.append(label);
+      body.append(label);
       let other = null;
       if (question.isOther && Array.isArray(question.options)) {
         other = document.createElement("input");
         other.type = question.isSecret ? "password" : "text";
         other.placeholder = "其他回答（可选）";
-        card.append(other);
+        body.append(other);
       }
       fields.set(question.id, { control, other, multiple: false });
     }
   } else {
     const message = document.createElement("small");
+    message.className = "permission-card-detail";
     message.textContent = `${interaction.serverName || "MCP"}：${interaction.message || "需要确认"}`;
-    card.append(message);
+    body.append(message);
     const loginHref = externalLinkHref(interaction.url);
     if (loginHref) {
       const link = document.createElement("a");
@@ -3173,21 +3183,23 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.textContent = "打开登录或授权页面";
-      card.append(link);
+      body.append(link);
     } else if (typeof interaction.url === "string" && interaction.url) {
       // 地址在，但不是普通网页链接。原样显示让人自己判断，不给它可点的通道，
       // 也不允许确认——没打开过的授权不该回报成已完成。
       const rejected = document.createElement("small");
+      rejected.className = "permission-card-detail";
       rejected.textContent = `这个地址不是网页链接，没有作为链接呈现：${interaction.url}`;
-      card.append(rejected);
+      body.append(rejected);
       canSubmit = false;
     } else {
       mcpForm = normalizeMcpFormSchema(interaction.schema);
-      const count = addMcpFormFields(card, fields, mcpForm);
+      const count = addMcpFormFields(body, fields, mcpForm);
       if (count === 0) {
         const unsupported = document.createElement("small");
+        unsupported.className = "permission-card-detail";
         unsupported.textContent = "这个 MCP 表单暂时无法在网页中安全呈现，只能取消本轮。";
-        card.append(unsupported);
+        body.append(unsupported);
         canSubmit = false;
       }
     }
@@ -3197,7 +3209,7 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
   validation.className = "interaction-validation";
   validation.role = "alert";
   validation.hidden = true;
-  card.append(validation);
+  body.append(validation);
   for (const field of fields.values()) {
     const clearValidation = () => {
       for (const candidate of fields.values()) candidate.control.setCustomValidity?.("");
@@ -3239,10 +3251,10 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
     void answerInteraction(card, interaction.id, "submit", answers);
   });
   const actions = document.createElement("div");
-  actions.className = "approval-card-actions";
+  actions.className = "permission-card-actions";
   actions.append(cancel);
   if (canSubmit) actions.append(submit);
-  card.append(actions);
+  card.append(heading, body, actions);
   elements.approvalList.append(card);
 }
 

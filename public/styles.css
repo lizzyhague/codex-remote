@@ -317,16 +317,25 @@ button.small {
 }
 
 .sidebar-brand {
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 0.55rem;
-  min-width: 0;
+  gap: 0.5rem;
 }
 
-.sidebar-logo {
-  width: 28px;
-  height: 28px;
-  flex-shrink: 0;
+.sidebar-brand-icon {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.sidebar-brand strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
 }
 
 .sidebar-heading-actions {
@@ -1420,75 +1429,88 @@ button.icon-button svg {
 
 .approval-list,
 .notice {
-  padding: 0.7rem max(1rem, calc((100% - var(--max-width)) / 2));
-  border-top: 1px solid var(--border);
+  width: 100%;
 }
 
 .approval-list {
-  min-height: 0;
-  max-height: min(50dvh, 32rem);
+  max-width: calc(var(--max-width) + 2rem);
+  margin: 0 auto 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0 calc(1rem + var(--scrollbar-width, 0px));
+  max-height: 66dvh;
   overflow-y: auto;
-  overscroll-behavior-y: contain;
-  scrollbar-gutter: stable;
-  scroll-padding-block: 0.7rem 4rem;
+  overscroll-behavior: contain;
+}
+
+.permission-card {
+  flex: none;
   display: grid;
-  gap: 0.9rem;
-  border-top-color: var(--theme);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-width: 100%;
+  min-width: 0;
+  max-height: 62dvh;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--theme);
+  border-radius: var(--radius-md);
   background: var(--permission-fill);
+  color: var(--text);
+  font-size: 0.9rem;
 }
 
-.approval-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0.6rem;
-  align-items: center;
-}
-
-.approval-card p {
+.permission-card-title {
   margin: 0;
+  font-weight: 600;
+}
+
+.permission-card-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.permission-card-detail {
+  display: block;
+  margin: 0.3rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
   overflow-wrap: anywhere;
 }
 
-.approval-card small {
-  display: block;
-  margin-top: 0.25rem;
-  color: var(--text-muted);
+.permission-card[data-interaction-id] .permission-card-body {
+  display: grid;
+  gap: 0.6rem;
 }
 
-.approval-card[data-interaction-id] > label,
-.approval-card[data-interaction-id] > small,
-.approval-card[data-interaction-id] > a,
-.approval-card[data-interaction-id] > input {
-  grid-column: 1 / -1;
+.permission-card[data-interaction-id] .permission-card-detail {
+  margin-top: 0;
 }
 
-.approval-card[data-interaction-id] > label {
+.permission-card[data-interaction-id] .permission-card-body > label {
   display: grid;
   gap: 0.35rem;
   color: var(--text-muted);
   font-size: 0.88rem;
 }
 
-.approval-card[data-interaction-id] input,
-.approval-card[data-interaction-id] select {
+.permission-card[data-interaction-id] input,
+.permission-card[data-interaction-id] select {
   width: 100%;
 }
 
-.approval-card[data-interaction-id] select[multiple] {
+.permission-card[data-interaction-id] select[multiple] {
   min-height: 7rem;
 }
 
-.approval-card-actions {
-  position: sticky;
-  z-index: 1;
-  bottom: 0;
+.permission-card-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
-  gap: 0.6rem;
-  padding-block: 0.45rem;
-  border-top: 1px solid var(--border);
-  background: var(--permission-fill);
+  gap: 0.5rem;
+  margin-top: 0.6rem;
 }
 
 .interaction-validation:not([hidden]) {
@@ -1496,6 +1518,8 @@ button.icon-button svg {
 }
 
 .notice {
+  padding: 0.7rem max(1rem, calc((100% - var(--max-width)) / 2));
+  border-top: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--warning);
   font-size: 0.9rem;
@@ -1831,11 +1855,7 @@ button:focus-visible {
     max-width: 94%;
   }
 
-  .approval-card {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .approval-card-actions > button {
+  .permission-card-actions > button {
     flex: 1 1 8rem;
   }
 

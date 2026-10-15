@@ -170,6 +170,12 @@ test("an approval card names its source and shows the command path", () => {
   }, "session-a-123456");
 
   const card = h.approvalList.children[0];
+  assert.equal(card.className, "permission-card");
+  assert.deepEqual(card.children.map((child) => child.className), [
+    "permission-card-title",
+    "permission-card-body",
+    "permission-card-actions",
+  ]);
   assert.equal(card.dataset.sessionId, "session-a-123456");
   assert.match(visibleText(card), /来源会话：后台会话 · session-/u);
   assert.match(visibleText(card), /命令：cat \/home\/example\/project\/file\.txt/u);

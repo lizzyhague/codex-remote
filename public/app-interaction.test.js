@@ -185,16 +185,23 @@ test("a 50-field card keeps native actions after every field", () => {
     },
   }, { id: "session-1", title: "会话" }, "session-1");
   const card = h.approvalList.children[0];
-  assert.equal(card.children.filter((child) => child.tagName === "LABEL").length, 50);
+  assert.deepEqual(card.children.map((child) => child.className), [
+    "permission-card-title",
+    "permission-card-body",
+    "permission-card-actions",
+  ]);
+  assert.equal(descendants(card).filter((child) => child.tagName === "LABEL").length, 50);
   const actions = card.children.at(-1);
-  assert.equal(actions.className, "approval-card-actions");
+  assert.equal(actions.className, "permission-card-actions");
   assert.deepEqual(actions.children.map((button) => button.textContent), ["取消本轮", "提交回答"]);
   assert.ok(actions.children.every((button) => button.type === "button"));
 });
 
-test("the pending area is bounded and scrollable while its action row stays visible", () => {
-  assert.match(styles, /\.approval-list\s*\{[^}]*min-height:\s*0;[^}]*max-height:\s*min\(50dvh, 32rem\);[^}]*overflow-y:\s*auto;/su);
-  assert.match(styles, /\.approval-list\s*\{[^}]*overscroll-behavior-y:\s*contain;/su);
-  assert.match(styles, /\.approval-card-actions\s*\{[^}]*position:\s*sticky;[^}]*bottom:\s*0;/su);
-  assert.match(styles, /@media \(max-width: 640px\)[\s\S]*\.approval-card-actions > button\s*\{[^}]*flex:\s*1 1 8rem;/u);
+test("the pending area matches the composer width and keeps the card body scrollable", () => {
+  assert.match(styles, /\.approval-list\s*\{[^}]*max-width:\s*calc\(var\(--max-width\) \+ 2rem\);[^}]*margin:\s*0 auto 1rem;/su);
+  assert.match(styles, /\.approval-list\s*\{[^}]*gap:\s*0\.5rem;[^}]*padding:\s*0 calc\(1rem \+ var\(--scrollbar-width, 0px\)\);/su);
+  assert.match(styles, /\.approval-list\s*\{[^}]*max-height:\s*66dvh;[^}]*overflow-y:\s*auto;[^}]*overscroll-behavior:\s*contain;/su);
+  assert.match(styles, /\.permission-card\s*\{[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto;[^}]*max-height:\s*62dvh;/su);
+  assert.match(styles, /\.permission-card-body\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/su);
+  assert.match(styles, /@media \(max-width: 640px\)[\s\S]*\.permission-card-actions > button\s*\{[^}]*flex:\s*1 1 8rem;/u);
 });
