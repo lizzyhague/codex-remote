@@ -9,7 +9,7 @@
   --theme: #a7f3d0;
   --theme-ink: #102019;
 
-  /* 共用混合比例；浅主题色暂不向白提亮，以接近现状。 */
+  /* 共用混合比例 */
   --mix-tint: 3%;
   --mix-surface-sunken: 65%;
   --mix-surface-page: 100%;
@@ -21,7 +21,7 @@
   --mix-text: 2%;
   --mix-text-mid: 20%;
   --mix-text-muted: 30%;
-  --mix-theme-bright: 100%;
+  --mix-theme-bright: 70%;
   --mix-theme-wash: 14%;
   --mix-bubble-user: 90%;
   --mix-danger-wash: 10%;
@@ -49,7 +49,7 @@
   --text: color-mix(in srgb, var(--tint) var(--mix-text), white);
   --text-mid: color-mix(in srgb, var(--tint) var(--mix-text-mid), white);
   --text-muted: color-mix(in srgb, var(--tint) var(--mix-text-muted), white);
-  --theme-bright: color-mix(in srgb, var(--theme) var(--mix-theme-bright), white);
+  --theme-bright: color-mix(in srgb, var(--theme) var(--mix-theme-bright), var(--text));
   --theme-wash: color-mix(in srgb, var(--theme) var(--mix-theme-wash), var(--surface-2));
   --bubble-user: color-mix(in srgb, var(--tint) var(--mix-bubble-user), white);
   --hover: rgb(255 255 255 / 4%);
