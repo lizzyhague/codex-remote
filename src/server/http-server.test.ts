@@ -692,6 +692,7 @@ const WEB_FILES = {
   "selection-bar.js": "// selection bar",
   "manifest.webmanifest": "{}",
   "icon.svg": "<svg></svg>",
+  "logo.svg": "<svg></svg>",
   "icon-192.png": "fake png",
   "icon-512.png": "fake png",
   "icon-512-maskable.png": "fake png",
