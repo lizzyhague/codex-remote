@@ -124,6 +124,7 @@ function harness() {
       }
     },
   });
+  context.setLoginStatus = (text) => { context.elements.loginStatus.textContent = text; };
   vm.runInContext([
     section("async function connect(", "async function loadSessions("),
     section("function beginOpenIntent(", "async function startSession("),
