@@ -8,6 +8,7 @@
   --neutral: #0f0f10;
   --theme: #a7f3d0;
   --theme-ink: #102019;
+  --brand-mark: var(--theme);
 
   /* 共用混合比例 */
   --mix-tint: 3%;
@@ -79,6 +80,55 @@
   --max-width: 920px;
   --sidebar-width: clamp(260px, 20vw, 304px);
   --header-height: 64px;
+}
+
+/* 浅色表面沿用 lanting；Codex 主色按 lanting 的 mint 成员规则混入 40% 正文色。 */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --neutral: #f8f4ea;
+  --theme: color-mix(in srgb, color-mix(in srgb, var(--neutral) var(--mix-text), var(--ink)) 40%, #a7f3d0);
+  --theme-ink: #102019;
+  --ink: #1c1c1e;
+
+  --mix-tint: 0%;
+  --mix-surface-sunken: 95%;
+  --mix-surface-1: 97%;
+  --mix-surface-2: 50%;
+  --mix-surface-3: 92%;
+  --mix-border: 87%;
+  --mix-border-strong: 78%;
+  --mix-text: 6%;
+  --mix-text-mid: 26%;
+  --mix-text-muted: 42%;
+  --mix-danger: 80%;
+  --mix-success: 60%;
+  --mix-warning: 85%;
+  --mix-info: 85%;
+  --mix-bubble-ai: 10%;
+  --mix-permission: 14%;
+  --mix-copy-success: 16%;
+  --mix-bubble-user: 93%;
+
+  --surface-sunken: color-mix(in srgb, var(--tint) var(--mix-surface-sunken), black);
+  --surface-1: color-mix(in srgb, var(--tint) var(--mix-surface-1), black);
+  --surface-2: color-mix(in srgb, var(--tint) var(--mix-surface-2), white);
+  --surface-3: color-mix(in srgb, var(--tint) var(--mix-surface-3), black);
+  --border: color-mix(in srgb, var(--tint) var(--mix-border), black);
+  --border-strong: color-mix(in srgb, var(--tint) var(--mix-border-strong), black);
+  --text: color-mix(in srgb, var(--tint) var(--mix-text), var(--ink));
+  --text-mid: color-mix(in srgb, var(--tint) var(--mix-text-mid), var(--ink));
+  --text-muted: color-mix(in srgb, var(--tint) var(--mix-text-muted), var(--ink));
+  --theme-bright: var(--theme);
+  --brand-mark: var(--theme);
+  --bubble-user: color-mix(in srgb, var(--tint) var(--mix-bubble-user), black);
+  --hover: rgb(0 0 0 / 4%);
+  --scrim: color-mix(in srgb, var(--surface-page) 40%, transparent);
+  --warning: color-mix(in srgb, #fcd34d var(--mix-warning), var(--text));
+  --info: color-mix(in srgb, #facc15 var(--mix-info), var(--text));
+  --shadow-sm: 8px rgb(0 0 0 / 8%);
+  --shadow-md: 44px rgb(0 0 0 / 10%);
+  --shadow-lg: 90px rgb(0 0 0 / 14%);
 }
 
 * {
@@ -221,6 +271,7 @@ button.small {
 .login-icon {
   width: 48px;
   height: 48px;
+  color: var(--brand-mark);
 }
 
 .login-brand {
@@ -333,6 +384,7 @@ button.small {
   width: 22px;
   height: 22px;
   border-radius: 6px;
+  color: var(--brand-mark);
 }
 
 .sidebar-brand strong {
@@ -669,6 +721,63 @@ button.icon-button svg {
   padding: 0.85rem;
   border-radius: 10px;
   background: var(--surface-1);
+}
+
+.theme-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.theme-text {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.theme-text .field-help { margin: 0; }
+
+.theme-options {
+  display: flex;
+  flex: none;
+  width: 120px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-sunken);
+}
+
+.theme-options button {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  min-height: 30px;
+  padding: 0;
+  border-color: transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.theme-options button:hover:not(:disabled, [aria-pressed="true"]) {
+  border-color: transparent;
+  color: var(--text);
+}
+
+.theme-options button[aria-pressed="true"] {
+  border-color: var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.theme-options svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .application-settings-section-head {
@@ -1712,6 +1821,13 @@ button:focus-visible {
   margin-left: 0;
   padding: 0;
   border-radius: 50%;
+}
+
+:root[data-theme="light"] .task-button[data-action="send"]:disabled {
+  opacity: 1;
+  border-color: var(--theme);
+  background: var(--theme-wash);
+  color: var(--theme-bright);
 }
 
 .task-send-icon {

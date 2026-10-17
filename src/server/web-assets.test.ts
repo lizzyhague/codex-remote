@@ -8,6 +8,7 @@ import { RETAINED_PREVIOUS_VERSIONS, WebAssets } from "./web-assets.ts";
 
 const FILES = [
   "boot.js",
+  "theme.js",
   "app.js",
   "confirm-dialog.js",
   "markdown.js",
@@ -25,6 +26,7 @@ async function fixture(t: test.TestContext, files: Record<string, string> = {}) 
   const contents = {
     "index.html": PAGE,
     "boot.js": "// boot",
+    "theme.js": "// theme",
     "app.js": 'import { render } from "./markdown.js";\nwindow.__PWA_MARK__ = "A";',
     "confirm-dialog.js": "export const confirm = () => true;",
     "markdown.js": 'export const render = () => "mark-A";',

@@ -84,6 +84,7 @@ test("serves health and requires a cookie before the WebSocket upgrade", async (
 
     for (const asset of [
       "/boot.js",
+      "/theme.js",
       "/confirm-dialog.js",
       "/markdown.js",
       "/mcp-form.js",
@@ -683,6 +684,7 @@ const WEB_FILES = {
   "viewer.js": 'import "./markdown.js";',
   "viewer.css": ".file-viewer {}",
   "boot.js": "// boot",
+  "theme.js": "// theme",
   "mcp-form.js": "// mcp form",
   "notice.js": "// notice",
   "slash-menu.js": "// menu",

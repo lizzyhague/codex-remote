@@ -11,6 +11,8 @@ const [html, styles, app, boot] = await Promise.all([
 
 test("the login card keeps its existing visual logo alignment", () => {
   assert.match(styles, /\.login-card > :not\(\.login-brand\)\s*\{[^}]*margin-inline:\s*0\.75rem;/su);
+  assert.match(html, /<svg class="login-icon"[^>]*>[\s\S]*?fill="currentColor"[\s\S]*?<\/svg>/u);
+  assert.match(styles, /\.login-icon\s*\{[^}]*color:\s*var\(--brand-mark\);/su);
 });
 
 test("the login label is compact and browser validation does not intercept submission", () => {

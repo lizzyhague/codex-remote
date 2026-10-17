@@ -128,6 +128,8 @@ const elements = {
   appSettingsCancelButton: byId("app-settings-cancel-button"),
   appSettingsSaveButton: byId("app-settings-save-button"),
   appSettingsStatus: byId("app-settings-status"),
+  themeSetting: byId("theme-setting"),
+  themeOptions: byId("theme-options"),
   defaultModelSelect: byId("default-model-select"),
   defaultReasoningEffortSelect: byId("default-reasoning-effort-select"),
   defaultPermissionsSelect: byId("default-permissions-select"),
@@ -356,6 +358,12 @@ elements.appSettingsButton.addEventListener("click", () => {
 });
 elements.appSettingsCloseButton.addEventListener("click", closeAppSettings);
 elements.appSettingsCancelButton.addEventListener("click", closeAppSettings);
+elements.themeOptions.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-theme-choice]");
+  if (!button || !window.codexRemoteTheme) return;
+  window.codexRemoteTheme.set(button.dataset.themeChoice);
+  renderThemeChoice();
+});
 elements.appSettingsForm.addEventListener("submit", (event) => {
   event.preventDefault();
   void saveAppSettings();
@@ -3617,6 +3625,7 @@ async function openAppSettings() {
   if (state.appSettingsBusy) return;
   const generation = ++state.appSettingsLoadGeneration;
   discardDisplayTimezoneDraft();
+  renderThemeChoice();
   syncAppSettingsForm();
   setAppSettingsStatus("");
   state.settingsModelsState = "loading";
@@ -3634,6 +3643,16 @@ async function openAppSettings() {
   if (!elements.appSettingsDialog.open) elements.appSettingsDialog.showModal();
   void models;
   void permissions;
+}
+
+function renderThemeChoice() {
+  const theme = window.codexRemoteTheme;
+  elements.themeSetting.hidden = !theme;
+  if (!theme) return;
+  const current = theme.get();
+  for (const button of elements.themeOptions.querySelectorAll("[data-theme-choice]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.themeChoice === current));
+  }
 }
 
 function closeAppSettings() {

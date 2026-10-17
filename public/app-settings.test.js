@@ -28,6 +28,7 @@ test("the gear sits to the left of collapse and does not overlay the app icon", 
   assert.ok(heading.indexOf('id="app-settings-button"') < heading.indexOf('id="collapse-sidebar-button"'));
   assert.ok(heading.indexOf('class="sidebar-brand"') < heading.indexOf('id="app-settings-button"'));
   assert.match(heading, /class="sidebar-brand-icon"/u);
+  assert.match(heading, /<svg class="sidebar-brand-icon"[^>]*>[\s\S]*?fill="currentColor"[\s\S]*?<\/svg>/u);
   assert.doesNotMatch(
     heading.slice(heading.indexOf("sidebar-brand"), heading.indexOf("sidebar-heading-actions")),
     /app-settings-button/u,
@@ -47,11 +48,17 @@ test("the collapse action is a labelled left-chevron icon", () => {
 
 test("application settings keeps timezone controls and does not copy companion-only chrome", () => {
   assert.match(appDialog, /<h2 id="app-settings-title">应用设置<\/h2>/u);
+  assert.ok(appDialog.indexOf("外观") < appDialog.indexOf("新会话默认值"));
   assert.match(appDialog, />跟随设备</u);
   assert.match(appDialog, />城市</u);
   assert.match(appDialog, /仅影响这台设备上的时间显示，自动考虑夏令时。/u);
   assert.doesNotMatch(appDialog, /照面/u);
-  assert.doesNotMatch(appDialog, /主题/u);
+  assert.match(appDialog, /id="theme-options"[^>]*role="group"/u);
+  for (const choice of ["system", "light", "dark"]) {
+    assert.match(appDialog, new RegExp(`data-theme-choice="${choice}"`, "u"));
+  }
+  assert.match(appDialog, /只影响当前浏览器。/u);
+  assert.match(app, /window\.codexRemoteTheme\.set\(button\.dataset\.themeChoice\)/u);
   assert.doesNotMatch(appDialog, /给伴的话/u);
   assert.doesNotMatch(appDialog, /role="tablist"/u);
   for (const city of DISPLAY_TIME_ZONES) {

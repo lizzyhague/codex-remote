@@ -8,6 +8,7 @@
     <meta name="description" content="通过私人网络使用远程主机上的 Codex">
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="icon" href="/icon-192.png" type="image/png" sizes="192x192">
+    <script src="/theme.js"></script>
     <link rel="stylesheet" href="/styles.css">
     <title>Codex Remote</title>
   </head>
@@ -15,7 +16,7 @@
     <section id="login-view" class="login-view">
       <form id="token-form" class="login-card">
         <div class="login-brand">
-          <img class="login-icon" src="/logo.svg" alt="">
+          <svg class="login-icon" viewBox="0 0 512 512" aria-hidden="true"><rect x="132" y="149" width="248" height="46" rx="23" fill="currentColor"/><rect x="132" y="233" width="154" height="46" rx="23" fill="currentColor"/><rect x="132" y="317" width="248" height="46" rx="23" fill="currentColor"/><circle cx="344" cy="256" r="27" fill="currentColor"/></svg>
           <h1>Codex Remote</h1>
         </div>
         <label for="token-input">访问令牌<span class="login-label-hint">（登录状态存于浏览器）</span></label>
@@ -29,7 +30,7 @@
       <aside id="session-sidebar" class="session-sidebar" aria-label="会话导航">
         <div class="sidebar-heading">
           <span class="sidebar-brand">
-            <img class="sidebar-brand-icon" src="/logo.svg" alt="">
+            <svg class="sidebar-brand-icon" viewBox="0 0 512 512" aria-hidden="true"><rect x="132" y="149" width="248" height="46" rx="23" fill="currentColor"/><rect x="132" y="233" width="154" height="46" rx="23" fill="currentColor"/><rect x="132" y="317" width="248" height="46" rx="23" fill="currentColor"/><circle cx="344" cy="256" r="27" fill="currentColor"/></svg>
             <strong>Codex Remote</strong>
           </span>
           <div class="sidebar-heading-actions">
@@ -185,6 +186,23 @@
           <button id="app-settings-close-button" class="quiet small" type="button" aria-label="关闭">关闭</button>
         </div>
         <div class="application-settings-body">
+          <section id="theme-setting" class="application-settings-section theme-setting">
+            <div class="theme-text">
+              <h3 id="theme-label" class="application-settings-title">外观</h3>
+              <p class="field-help">只影响当前浏览器。</p>
+            </div>
+            <div id="theme-options" class="theme-options" role="group" aria-labelledby="theme-label">
+              <button type="button" data-theme-choice="system" aria-pressed="false" aria-label="跟随系统" title="跟随系统">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/></svg>
+              </button>
+              <button type="button" data-theme-choice="light" aria-pressed="false" aria-label="浅色" title="浅色">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="5.6"/><path d="M12 2.2v1.3M12 20.5v1.3M2.2 12h1.3M20.5 12h1.3M5.1 5.1l.9.9M18 18l.9.9M5.1 18.9l.9-.9M18 6l.9-.9"/></svg>
+              </button>
+              <button type="button" data-theme-choice="dark" aria-pressed="false" aria-label="深色" title="深色">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.7a10 10 0 1 0 9.5 14 8 8 0 0 1-9.5-14z"/></svg>
+              </button>
+            </div>
+          </section>
           <section class="application-settings-section">
             <div class="application-settings-section-head">
               <h3 class="application-settings-title">新会话默认值<button id="model-defaults-info-button" type="button" class="field-info" popovertarget="info-model-defaults" aria-label="关于新会话默认值的说明">i</button></h3>
