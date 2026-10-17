@@ -35,15 +35,15 @@ import { resolveSharedUploadSocket } from "../shared-upload/paths.ts";
 const TRASH_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 
 export type MainOptions = {
-  /** 测试替身入口；生产环境监听当前进程的 SIGINT/SIGTERM。 */
+  /** Test-double injection point; production listens for SIGINT/SIGTERM on the current process. */
   signals?: SignalSource;
   startupTimeoutMs?: number;
   stopSignalGraceMs?: number;
 };
 
-/** 运行整个服务，返回进程退出码。计划内停止为 0，启动失败或目录进程意外退出为 1。 */
+/** Run the service and return its exit code: 0 for planned stops, 1 for startup failure or unexpected directory-process exit. */
 export async function main(options: MainOptions = {}): Promise<number> {
-  // 停止意图必须最先建立：启动期间收到的信号也要能打断启动并按计划停止处理。
+  // Establish stop intent first so signals received during startup can interrupt it and count as planned stops.
   const stop = new StopIntent(options.signals);
   const grace = options.stopSignalGraceMs ?? STOP_SIGNAL_GRACE_MS;
   try {
@@ -87,7 +87,7 @@ async function serve(
   let remote: RemoteWebSocketServer | null = null;
   let workers: SessionWorkerManager | null = null;
   let cleanupTimer: NodeJS.Timeout | null = null;
-  // 被放弃的启动清理仍可能在收尾；关闭 Worker 状态前要等它离开。
+  // Abandoned startup cleanup may still be finishing; await it before closing Worker state.
   let startupCleanup: Promise<unknown> | null = null;
 
   try {
@@ -150,17 +150,16 @@ async function serve(
         uploads,
       },
     });
-    // listen 本身很快就有结果；不去 race 它，免得放弃后它才监听成功、close() 已错过。
+    // listen resolves quickly; do not race it, or it could succeed after abandonment once close() has already missed it.
     const address = await remote.listen(port);
     startup.check();
     startup.finish();
     workers.start();
     console.log(`Codex Remote 正在监听 http://${address.host}:${address.port}/`);
 
-    // codex app-server 一旦消失，这个进程就无法再服务任何请求。继续监听只会
-    // 让浏览器一直收到失败响应，所以主动退出，交给进程管理器重启。
-    // 停止意图在信号回调里同步置位；子进程先于 Node 处理信号退出时，由 main()
-    // 的宽限窗口再确认一次，计划内停止的退出码保持 0。
+    // Once codex app-server disappears, this process cannot serve requests. Continuing would only return failures,
+    // so exit and let the supervisor restart it. Signal handlers set stop intent synchronously; if the child exits
+    // before Node handles its signal, main() checks once more during its grace window to preserve exit code 0.
     return await Promise.race([
       stop.whenRequested().then(() => "stopped" as const),
       appServer.whenExited().then(() =>
@@ -172,7 +171,7 @@ async function serve(
     if (cleanupTimer) clearInterval(cleanupTimer);
     await remote?.close();
     if (startupCleanup) {
-      // 启动清理卡在目录 RPC 上：先关子进程让在途请求失败，清理才会收口。
+      // Startup cleanup is stuck on a directory RPC; close the child so pending requests fail and cleanup can finish.
       await appServer?.close();
       await startupCleanup.catch(() => {});
     }
@@ -195,7 +194,7 @@ async function cleanExpiredTrash(sessions: CodexSessionService): Promise<void> {
   }
 }
 
-/** 浏览器 Origin 白名单。留空时只接受与 Host 同源的升级请求。 */
+/** Browser Origin allowlist. When empty, accept only upgrade requests sharing the Host origin. */
 function readAllowedOrigins(source: string | undefined): string[] {
   return (source ?? "")
     .split(",")
@@ -229,7 +228,7 @@ function readNonnegativeInteger(source: string | undefined): number | undefined 
   return value;
 }
 
-/** 离线宽限直接交给 Node 计时器，超过计时器上限会被 Node 改成 1 ms，启动时就拒绝。 */
+/** Offline grace uses a Node timer directly; reject at startup because Node clamps values above its limit to 1 ms. */
 export function readOfflineGraceMs(source: string | undefined): number | undefined {
   if (source === undefined || source.trim() === "") return undefined;
   const value = Number(source);

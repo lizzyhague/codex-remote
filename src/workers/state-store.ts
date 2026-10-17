@@ -83,10 +83,10 @@ export function resolveWorkerStateDirectory(
 }
 
 /**
- * 已接受消息、任务状态与流事件的持久化日志。
+ * Persistent log of accepted messages, turn states, and streaming events.
  *
- * SQLite 事务保证 `accepted` 前消息已经落盘，也让 clientMessageId 的幂等约束
- * 在进程重启后仍然成立。事件正文只保存已经过后端脱敏的浏览器事件。
+ * SQLite transactions ensure messages are durable before `accepted` and preserve clientMessageId
+ * idempotency across process restarts. Event bodies store only browser events redacted by the backend.
  */
 export class WorkerStateStore {
   readonly #database: DatabaseSync;
@@ -188,8 +188,8 @@ export class WorkerStateStore {
   }
 
   /**
-   * 行可能还不存在（从没确认过 Full access 的会话），这时用调用方给的当前 desired
-   * 值补一行；已有行只改待生效设置，不动 desired setting。
+   * The row may not exist yet for a session that has never confirmed Full access. In that case, create
+   * one with the current desired values supplied by the caller. Existing rows update only pending settings.
    */
   setSessionPendingTurnSettings(
     threadId: string,
@@ -213,8 +213,8 @@ export class WorkerStateStore {
   }
 
   /**
-   * 同步原子准入：幂等检查、项目忙检查和插入在同一事务里完成。
-   * 终态记录仍留在同一张表，因此不能靠永久唯一索引禁止第二轮任务。
+   * Synchronous atomic admission: idempotency check, project-busy check, and insertion occur in one transaction.
+   * Terminal records remain in the same table, so a permanent unique index cannot prohibit a second turn.
    */
   admit(task: AdmitTaskInput): AdmitTaskResult {
     this.#database.exec("BEGIN IMMEDIATE");
@@ -427,12 +427,13 @@ export class WorkerStateStore {
   }
 
   /**
-   * 删掉这个会话里已经不会再被回放的事件。
+   * Delete events in this session that can no longer be replayed.
    *
-   * 事件日志只服务三种回放：任务仍在进行时重连看进度、最后一个任务停在中断状态时
-   * 补上中断前那一屏，以及任务在 Codex 建立 native turn 前失败时补回未进入历史的消息。
-   * 其他对话历史由 Codex 自己的会话文件提供，不读这里；保留更多终态只会让库无限增长。
-   * `keepTaskId` 是当前仍需回放的那个任务；传 null 表示这个会话一条都不必留。
+   * The event log serves three replay cases: reconnecting to an active turn to see progress; restoring the
+   * screen before the last turn was interrupted; and restoring a message absent from history when a turn fails
+   * before Codex creates its native turn. Other conversation history comes from Codex's session files and does
+   * not read this log; retaining more terminal states would only grow the database without bound.
+   * `keepTaskId` is the turn that still needs replay; null means the session needs no retained events.
    */
   #pruneThreadEvents(threadId: string, keepTaskId: string | null): void {
     this.#database.prepare(`
@@ -454,10 +455,10 @@ export class WorkerStateStore {
   }
 
   /**
-   * 删掉这个会话留在库里的全部记录，供永久删除会话时调用。事件靠外键级联一起走。
+   * Delete all database records for this session when permanently deleting it. Events cascade through foreign keys.
    *
-   * 仍在进行的任务不删：回收站里的会话本不该有活任务，真出现了也不该让清理去打断
-   * 它。`keptActive` 大于 0 就表示这次没有删干净。
+   * Do not delete active turns. Trashed sessions should not have one, but cleanup must not interrupt it if one
+   * does appear. A positive `keptActive` means this deletion left records behind.
    */
   forgetThread(threadId: string): { deleted: number; keptActive: number } {
     this.#database.exec("BEGIN IMMEDIATE");
@@ -514,8 +515,8 @@ export class WorkerStateStore {
 }
 
 /**
- * 启动时清掉存量里已经不会再被回放的事件：只有仍在进行的任务，以及会话最后一个
- * 可回放终态（中断，或没有 native turn 的失败）需要留着。返回删掉的行数。
+ * At startup, remove existing events that can no longer be replayed. Keep only active turns and the session's
+ * final replayable terminal state: an interruption or a failure without a native turn. Return the deleted row count.
  */
 function pruneObsoleteEvents(database: DatabaseSync): number {
   const result = database.prepare(`

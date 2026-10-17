@@ -109,7 +109,7 @@ test("reports an unexpected child exit as fatal", async () => {
 });
 
 test("close interrupts an initialize that never answers", async () => {
-  // 子进程活着但不回 initialize 时，close() 不能等 ready，否则启动时限到点也关不掉它。
+  // If the child stays alive without answering initialize, close() cannot await ready or a startup timeout could not stop it.
   let fake: FakeAppServerProcess | null = null;
   const runtime = new DirectoryAppServer({
     clientFactory: (options) => {
@@ -145,7 +145,7 @@ test("close interrupts an initialize that never answers", async () => {
 });
 
 test("a deliberate close is not reported as a fatal exit", async () => {
-  // main.ts 用 whenExited() 决定要不要以退出码 1 结束进程；正常停止必须保持 0。
+  // main.ts uses whenExited() to decide whether to exit with code 1; a normal stop must remain 0.
   const { runtime } = setupRuntime();
   await runtime.initialize(INITIALIZE_PARAMS);
   await runtime.close();

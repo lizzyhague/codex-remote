@@ -215,7 +215,7 @@ test("an interaction card keeps the same explicit source-session label", () => {
     answerInteraction() {},
   });
   vm.runInContext(
-    section("function addInteraction(", "/**\n * 外部来源的地址"),
+    section("function addInteraction(", "/**\n * Determines whether an externally sourced address"),
     context,
   );
   context.addInteraction({

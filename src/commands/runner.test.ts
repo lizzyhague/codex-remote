@@ -87,8 +87,9 @@ class FakeTransport implements AppServerTransport {
   }
 
   /**
-   * 照 codex-cli 0.153.4 实测的行为：切到某个权限方案会回 `thread/settings/updated`
-   * 并带上生效的沙箱策略；`permissions: null` 一条通知都不发，哪怕生效的沙箱真的变了。
+   * Matches observed codex-cli 0.153.4 behavior: switching to a permission profile emits
+   * `thread/settings/updated` with the effective sandbox policy; `permissions: null` emits no notification,
+   * even when the effective sandbox actually changes.
    */
   #emitSettingsUpdated(permissions: unknown): void {
     if (typeof permissions !== "string") return;
@@ -197,7 +198,7 @@ test("stages model and permission choices without touching Codex", async () => {
     false,
   );
 
-  // 菜单优先把待生效的选择标成选中项。
+  // The menu prefers the pending choice as its selected option.
   const permissions = await runner.options("permissions", { permissions: ":read-only" });
   assert.deepEqual(
     permissions.items.filter((item) => item.selected).map((item) => item.id),
@@ -222,7 +223,7 @@ test("runs settings, rename and compact commands through app-server methods", as
   const permissionsResult = await runner.setPermissions(":read-only");
   assert.equal(permissionsResult.title, "权限已更新");
   assert.equal(permissionsResult.fullAccessEnabled, false);
-  // 受限方案明确带上“需要时询问”，config.toml 写了 never 也能弹出批准卡。
+  // A restricted profile explicitly uses “需要时询问”, so approval cards can appear even if config.toml says never.
   assert.deepEqual(
     transport.requests.filter((request) => request.method === "thread/settings/update").at(-1),
     {
@@ -330,8 +331,8 @@ test("toggles Full access for only the current thread and restores defaults", as
   const updates = transport.requests.filter((request) =>
     request.method === "thread/settings/update"
   );
-  // 关闭动作必须落到一个具体的受限方案。`permissions: null` 只是清回部署默认，
-  // 而默认本身可能就是 Full access，App Server 对它又不发通知，等于关不掉也看不出来。
+  // Disabling must select a concrete restricted profile. `permissions: null` merely restores the deployment
+  // default, which may itself be Full access, and App Server emits no notification for it, making the failure invisible.
   assert.deepEqual(updates, [
     {
       method: "thread/settings/update",
@@ -346,7 +347,7 @@ test("toggles Full access for only the current thread and restores defaults", as
 });
 
 test("reads Full access from the sandbox policy, not the profile name", async () => {
-  // 主机默认权限就是 Full access 时的样子：方案名什么都不带，沙箱策略说了算。
+  // This is what a host defaulting to Full access looks like: the profile name says nothing, so the sandbox policy decides.
   const enabled = createRunner(new FakeTransport(), "legacy", {
     sandboxPolicy: { type: "dangerFullAccess" },
     activePermissionProfile: null,
@@ -354,7 +355,7 @@ test("reads Full access from the sandbox policy, not the profile name", async ()
   assert.equal(enabled.fullAccessEnabled(), true);
   enabled.dispose();
 
-  // 反过来，名字里带 full 但沙箱是只读，就不能当成 Full access。
+  // Conversely, a name containing "full" with a read-only sandbox must not count as Full access.
   const disabled = createRunner(new FakeTransport(), "legacy", {
     sandboxPolicy: { type: "readOnly", networkAccess: false },
     activePermissionProfile: { id: ":full-access", extends: null },
@@ -366,7 +367,7 @@ test("reads Full access from the sandbox policy, not the profile name", async ()
 test("does not claim Full access is off when the sandbox says otherwise", async () => {
   const transport = new FakeTransport();
   transport.fullAccessAllowed = true;
-  // 切到受限方案，Codex 却报告沙箱仍是完全访问。
+  // Codex reports that the sandbox still has full access after switching to a restricted profile.
   transport.sandboxPolicyByProfile[":workspace"] = { type: "dangerFullAccess" };
   const runner = createRunner(transport, "legacy", {
     sandboxPolicy: { type: "dangerFullAccess" },

@@ -191,7 +191,7 @@ const elements = {
   renameSaveButton: byId("rename-save"),
 };
 
-// 两个选择入口共用一套结构；注册表保持扁平，按 kind 取元素走这里。
+// Both selection entry points share one structure; keep the registry flat and resolve elements here by kind.
 const composerPickers = {
   model: { button: elements.modelPickerButton, label: elements.modelPickerLabel },
   permission: { button: elements.permissionPickerButton, label: elements.permissionPickerLabel },
@@ -225,7 +225,7 @@ const state = {
   pickerGeneration: 0,
   sessionSearchTimer: null,
   sidebarCollapsed: stateGet(SIDEBAR_COLLAPSED_KEY) === "1",
-  /** 已保存的显示时区；设置对话框里未保存的改动只放在 draft 里预览。 */
+  /** Saved display time zone; unsaved changes in the settings dialog are previewed only in the draft. */
   displayTimezone: loadDisplayTimezonePreference(),
   displayTimezoneDraft: null,
   developerInstructions: "",
@@ -585,13 +585,14 @@ async function connect(token) {
             acceptLoadingStates: true,
           });
         } catch (error) {
-          // 恢复期间会话被另一台设备移走：页面已经退回会话列表，连接本身没有问题。
+          // Another device moved the session during restoration: the page has returned to the session list,
+          // but the connection itself is healthy.
           if (openGeneration === state.openGeneration) throw error;
         } finally {
           finishOpenIntent(openGeneration);
         }
         if (generation !== state.generation || socket.readyState !== WebSocket.OPEN) return;
-        // 打开意图已作废时不应用迟到结果，但连接照常完成恢复。
+        // Ignore a late result when the open intent is invalidated, but allow the connection to finish restoring.
         if (openGeneration === state.openGeneration) {
           if (projectId !== state.projectId || sessionId !== state.sessionId) return;
           applySessionResumeResult(opened, sessionId, {
@@ -756,8 +757,9 @@ async function loadProjects(generation = state.generation) {
 
   const savedProject = state.projectId || stateGet(PROJECT_KEY);
   const savedAvailable = projects.some((project) => project.id === savedProject);
-  // 列表读取成功就是后端的权威白名单；扫描失败会让请求本身失败，走重连。
-  // 缺了当前会话的项目时退出挂载（草稿按原会话保存），不再留着它反复重连。
+  // A successful list response is the backend's authoritative allowlist; a scan failure rejects the request
+  // itself and enters reconnection. If the current session's project is absent, detach while preserving its
+  // draft under the original session instead of keeping it around for repeated reconnection attempts.
   if (state.sessionId && !savedAvailable) {
     invalidateOpenIntent();
     resetCurrentSession();
@@ -832,7 +834,8 @@ async function loadSessions({ append = false } = {}) {
     if (append) {
       showNotice(errorMessage(error), TEMPORARY_ERROR);
     } else {
-      // 列表已经清空；失败必须画成错误态，不能落到“还没有会话”这类权威空文案。
+      // The list has already been cleared. Render failures as errors rather than authoritative empty-state copy
+      // such as “还没有会话”.
       state.sessionLoadError = errorMessage(error);
     }
   } finally {
@@ -844,7 +847,7 @@ async function loadSessions({ append = false } = {}) {
   }
 }
 
-/** 页面发起一次新建或打开；更早的在途打开随之作废。 */
+/** Starts one create or open operation from the page, invalidating any earlier open still in flight. */
 function beginOpenIntent(projectId, sessionId) {
   const generation = ++state.openGeneration;
   state.openIntent = { generation, projectId, sessionId };
@@ -856,7 +859,7 @@ function invalidateOpenIntent() {
   state.openIntent = null;
 }
 
-/** 返回 true 表示没有更新的打开在途，调用方可以解除导航锁。 */
+/** Returns true when no newer open is in flight, allowing the caller to release the navigation lock. */
 function finishOpenIntent(generation) {
   if (state.openIntent && state.openIntent.generation !== generation) return false;
   state.openIntent = null;
@@ -864,8 +867,9 @@ function finishOpenIntent(generation) {
 }
 
 /**
- * 另一台设备归档、回收或删除了正在打开的目标：作废这次打开并退回“还没选会话”，
- * 不再等迟到的结果。目标还没在后端挂上时事件不带 closedSessionId，只能由这里收口。
+ * Another device archived, trashed, or deleted the target being opened: invalidate this open and return
+ * to “还没选会话” without waiting for a late result. When the target has not yet attached on the backend,
+ * the event has no closedSessionId, so only this path can finish the transition.
  */
 function cancelRemovedOpenIntent(event) {
   const intent = state.openIntent;
@@ -909,8 +913,8 @@ async function startSession() {
   } catch (error) {
     if (generation !== state.openGeneration) return;
     showNotice(errorMessage(error), TEMPORARY_ERROR);
-    // 旧会话已经撤下来了，没法再把它放回去；与其让输入框对着一个看不见的
-    // 会话，不如退回“还没选会话”。
+    // The old session has already been removed and cannot be restored. Rather than leave the composer
+    // pointing at an invisible session, return to “还没选会话”.
     resetCurrentSession();
     showEmpty("选择以前的会话，或者新建一个会话。");
   } finally {
@@ -938,8 +942,9 @@ async function resumeSession(sessionId) {
   setNavigationBusy(true);
   clearSessionResumeTimer();
   state.sessionOpenState = null;
-  // 切换期间把旧会话的内容撤下来。留着的话，停止、发送、加载更早都还点得动，
-  // 而这些请求认的是连接当前打开的会话——切换一旦先到，它们就落到新会话上了。
+  // Remove the old session content during a switch. If retained, stop, send, and load-earlier remain clickable,
+  // but those requests target whichever session the connection currently has open. If the switch arrives first,
+  // they would affect the new session.
   if (switching) showSessionLoading();
   try {
     const opened = await request("session.resume", {
@@ -947,8 +952,8 @@ async function resumeSession(sessionId) {
       sessionId,
       acceptLoadingStates: true,
     });
-    // 等待期间目标可能已被另一台设备移走，或页面有了新的导航意图；
-    // 迟到的结果不能把页面重新画回这个会话。
+    // While waiting, another device may move the target or the page may acquire a newer navigation intent.
+    // A late result must not render this session back onto the page.
     if (generation !== state.openGeneration) return;
     applySessionResumeResult(opened, sessionId);
     if (opened.notice) showNotice(opened.notice, {
@@ -1128,7 +1133,8 @@ function setSessionView(view, load = true) {
 }
 
 function renderSessionList() {
-  // 刷新开始时列表会暂时清空；等这一轮落地后再对账，不能把仍存在的选择提前丢掉。
+  // The list is temporarily cleared when refresh begins. Reconcile after this refresh settles instead of
+  // prematurely discarding a selection that still exists.
   if (!state.sessionLoading) selectionBar.reconcile(visibleSessionSummaries());
   elements.sessionViewTitle.parentElement.hidden = selectionBar.isSelecting();
   elements.sessionList.replaceChildren();
@@ -1326,8 +1332,9 @@ function sessionMarkIcon(pinned) {
   svg.setAttribute("aria-hidden", "true");
   svg.classList.add("session-mark-icon");
   /*
-   * 两副路径，不是同一副转角度：转了钉头会超出 viewBox 被切掉，斜边在小尺寸下发糊。
-   * viewBox 固定 24（路径按 24 网格画），渲染尺寸由 CSS 定在 17px。
+   * Two separate paths rather than one rotated path: rotation would push the pin head beyond the viewBox
+   * and clip it, while diagonals blur at small sizes. The viewBox stays at 24 because paths use a 24-unit grid;
+   * CSS sets the rendered size to 17px.
    */
   const LOOSE = {
     body: "M15 4.5l-4 4l-4 1.5l-1.5 1.5l7 7l1.5-1.5l1.5-4l4-4",
@@ -1402,15 +1409,15 @@ function visibleSessionSummaries() {
 }
 
 /**
- * 批量整理只作用于当前项目：跨项目钉住的会话出现在「最近」顶部，但不能混进
- * 以当前项目为目标的一次请求。
+ * Bulk organization applies only to the current project. Sessions pinned across projects appear at the top
+ * of “最近” but must not enter a request targeting the current project.
  */
 function sessionSelectable(session) {
   return session.state !== "active" &&
     Boolean(state.projectId) && session.projectId === state.projectId;
 }
 
-/** 当前列表里有正在打开的会话时，让右侧标题跟列表（例如另一台设备的重命名）一致。 */
+/** When the open session is in the current list, keeps the right-side title in sync, including renames from another device. */
 function syncCurrentSessionTitle() {
   if (!state.sessionId) return;
   const session = visibleSessionSummaries().find((candidate) =>
@@ -1513,7 +1520,7 @@ function openSidebar() {
     state.mobileSidebarOpen = true;
     elements.appView.dataset.mobileSidebarOpen = "true";
     syncSidebarState();
-    // 抽屉盖住页面后焦点进入侧栏；落在“收起”上，键盘用户一步就能退出。
+    // Once the drawer covers the page, move focus into the sidebar and onto “收起” so keyboard users can exit in one step.
     elements.collapseSidebarButton.focus();
     return;
   }
@@ -1542,7 +1549,7 @@ function closeMobileSidebar() {
   if (wasOpen && isMobileNavigation()) restoreFocusAfterMobileSidebar();
 }
 
-/** 焦点还在侧栏里（或随侧栏变 inert 掉回 body）时交还给汉堡按钮；已被对话框等接走就不抢。 */
+/** Returns focus to the hamburger when it remains in the sidebar or falls to body as the sidebar becomes inert; does not steal focus from a dialog. */
 function restoreFocusAfterMobileSidebar() {
   const active = document.activeElement;
   if (active && active !== document.body && !elements.sessionSidebar.contains(active)) return;
@@ -1551,7 +1558,7 @@ function restoreFocusAfterMobileSidebar() {
 
 function closeMobileSidebarOnEscape(event) {
   if (event.key !== "Escape" || !state.mobileSidebarOpen) return;
-  // 从侧栏打开的模态对话框自己处理 Escape；侧栏留着，关闭对话框后焦点才有地方回去。
+  // A modal opened from the sidebar handles Escape itself. Keep the sidebar open so focus has somewhere to return when the dialog closes.
   if (document.querySelector("dialog[open]")) return;
   closeMobileSidebar();
 }
@@ -1573,7 +1580,7 @@ function syncSidebarState() {
     : !state.sidebarCollapsed;
   elements.sessionSidebar.inert = !sidebarVisible;
   elements.sessionSidebar.setAttribute("aria-hidden", String(!sidebarVisible));
-  // 移动端侧栏盖住页面时，被遮住的会话页不可聚焦、不可点、对辅助技术隐藏。
+  // When the mobile sidebar covers the page, make the obscured session view unfocusable, unclickable, and hidden from assistive technology.
   elements.conversationShell.inert = isMobileNavigation() && state.mobileSidebarOpen;
   elements.openSidebarButton.setAttribute("aria-expanded", String(sidebarVisible));
   updateConversationTitle();
@@ -1618,8 +1625,8 @@ function renderTasks(tasks) {
 async function loadOlderHistory() {
   if (!state.projectId || !state.sessionId || !state.authenticated ||
       elements.loadOlderButton.disabled) return;
-  // 切换会话时这个按钮已经随时间线一起撤下去了；这里仍拒绝新的点击。
-  // 已发出的请求另外携带它当时看见的项目和会话，后端不匹配就不推进游标。
+  // This button is removed with the timeline during a session switch, but still reject new clicks here.
+  // An issued request also carries the project and session it saw, and the backend does not advance the cursor on a mismatch.
   if (state.navigationBusy) return;
   const projectId = state.projectId;
   const sessionId = state.sessionId;
@@ -1722,8 +1729,8 @@ async function sendMessage() {
       pending.element === optimistic
     );
     if (pendingIndex >= 0) state.pendingUserMessages.splice(pendingIndex, 1);
-    // 这条消息没有送到 Codex。撤掉气泡并把原文放回输入框，不要让用户
-    // 白写一次——尤其是长消息被后端拒绝或连接刚好断开的时候。
+    // This message did not reach Codex. Remove the bubble and restore the original text to the composer so
+    // the user does not lose their writing, especially when the backend rejects a long message or the connection drops.
     optimistic.remove();
     if (projectId === state.projectId && sessionId === state.sessionId) {
       state.running = false;
@@ -1747,7 +1754,7 @@ async function sendMessage() {
 }
 
 async function uploadFiles(files) {
-  // 系统文件选择器返回时连接可能尚未恢复，先接住文件再决定何时上传。
+  // The connection may still be restoring when the system file picker returns; retain the files first and decide when to upload afterward.
   if (!state.sessionId || !state.projectId || files.length === 0) return;
   const available = MAX_MESSAGE_ATTACHMENTS - state.pendingAttachments.length;
   if (available <= 0) {
@@ -1935,7 +1942,7 @@ function mergeAttachments(first, second) {
   return merged;
 }
 
-/** 只用来把乐观气泡和后端事件对上；附件名不参与拼接，也不会被再次解析。 */
+/** Used only to match an optimistic bubble with a backend event; attachment names are neither concatenated nor parsed again. */
 function userMessageKey(text, attachments) {
   return JSON.stringify([text, attachments.map((attachment) => attachment.id)]);
 }
@@ -1954,7 +1961,7 @@ async function stopTask() {
     const result = await request("task.stop", { projectId, sessionId });
     if (result?.requested === false) {
       state.stopping = false;
-      // 压缩指令已经发给模型，后端不会去打断它；时间线没有变化，不必重新载入。
+      // The compaction command has reached the model and the backend will not interrupt it; the timeline is unchanged and needs no reload.
       if (result.reason === "compact_started") {
         showNotice("压缩已经开始，不能中途停止", TEMPORARY_WARNING);
         return;
@@ -1972,7 +1979,7 @@ async function stopTask() {
 }
 
 function handleServerEvent(event, replay = false) {
-  // 后台排队任务在内存读数降级时放行，提示随 task.starting 持久保存；回放时也要再提示。
+  // A queued background task is allowed through when memory measurement degrades. The notice persists with task.starting and must reappear on replay.
   if (
     event.type === "task.starting" && event.sessionId === state.sessionId &&
     typeof event.notice === "string" && event.notice
@@ -2238,7 +2245,7 @@ function addMessage(role, text, id, buffered, attachments = [], taskId = null) {
   return article;
 }
 
-/** 附件名按文字节点原样显示；换行和控制字符不会被当成 Markdown 或另一条附件。 */
+/** Displays attachment names verbatim in text nodes; newlines and control characters cannot become Markdown or another attachment. */
 function renderMessageAttachments(attachments) {
   const list = document.createElement("div");
   list.className = "message-attachments";
@@ -2274,11 +2281,12 @@ function receiveUserMessage(event) {
 }
 
 /**
- * 取这条助手正文的输出流；没有就新建一个气泡。
+ * Gets the output stream for this assistant body, creating a bubble if necessary.
  *
- * 历史消息是直接渲染好贴上去的，不进流表。被中断那一轮重开时会连同事件一起
- * 重放，同一条正文于是来第二遍——不先看一眼页面就会画成两份。用户气泡一直有
- * 这道检查，这里补上；返回 null 表示页面上已经有了，这一份直接丢掉。
+ * Historical messages are rendered and inserted directly without entering the stream map. Reopening an
+ * interrupted turn replays them together with events, causing the same body to arrive twice. Without checking
+ * the page first, it would render two copies. User bubbles already have this check; add it here as well.
+ * Returning null means the body is already on the page and this copy should be discarded.
  */
 function assistantStreamFor(itemId, taskId = null) {
   const stream = state.assistantStreams.get(itemId);
@@ -2354,8 +2362,8 @@ function scheduleAssistantFrame(stream) {
 
 function animateAssistant(stream) {
   stream.frame = null;
-  // 已经渲染成 Markdown 之后，纯文本节点就不在页面里了。此时再来的增量
-  // 必须重新整体渲染，否则会写进一个已经脱离文档的节点，内容凭空消失。
+  // After Markdown rendering, the plain-text node is no longer in the document. Any later delta must rerender
+  // the whole body or it will write into a detached node and disappear.
   if (stream.markdownRendered) {
     const stickToBottom = isNearBottom();
     stream.shown = stream.target;
@@ -2839,7 +2847,7 @@ async function requestSlashCommand(type, payload = {}) {
     targetTurnId: pending.targetTurnId,
   });
   await applyRewindResult(result, pending);
-  // 结果已经在重新载入的时间线末尾画好，SlashCommandMenu 不必再处理一次。
+  // The result is already rendered at the end of the reloaded timeline; SlashCommandMenu need not process it again.
   return null;
 }
 
@@ -3193,8 +3201,8 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
       link.textContent = "打开登录或授权页面";
       body.append(link);
     } else if (typeof interaction.url === "string" && interaction.url) {
-      // 地址在，但不是普通网页链接。原样显示让人自己判断，不给它可点的通道，
-      // 也不允许确认——没打开过的授权不该回报成已完成。
+      // The address exists but is not a regular web link. Display it verbatim for manual judgment without
+      // making it clickable or allowing confirmation; authorization that was never opened must not be reported complete.
       const rejected = document.createElement("small");
       rejected.className = "permission-card-detail";
       rejected.textContent = `这个地址不是网页链接，没有作为链接呈现：${interaction.url}`;
@@ -3267,10 +3275,10 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
 }
 
 /**
- * 外部来源的地址能不能作为可点链接呈现。
+ * Determines whether an externally sourced address may be presented as a clickable link.
  *
- * sanitizeHref 已经挡掉 javascript: 之类的协议，这里再要求必须是 http(s)：
- * 这些地址来自 MCP 服务器或工具输出，不是本页自己拼出来的。
+ * sanitizeHref already blocks protocols such as javascript:. This additionally requires HTTP(S) because
+ * these addresses come from MCP servers or tool output rather than being constructed by this page.
  */
 function externalLinkHref(value) {
   const href = typeof value === "string" ? sanitizeHref(value) : null;
@@ -3446,7 +3454,7 @@ function updateControls() {
     ? "快捷操作执行中，可以继续写"
     : "在浏览器里写好，再发送给 Codex";
   const controlsDisabled = !connected || !hasSession || busy || navigationBusy;
-  // 模型和权限在回复进行中也能改，后端记下后从下一轮开始生效。
+  // Model and permissions may change while a response is in progress; the backend records them for the next turn.
   const pickersDisabled = !connected || !hasSession || state.commandBusy || navigationBusy;
   elements.commandMenuButton.disabled = controlsDisabled;
   elements.modelPickerButton.disabled = pickersDisabled;
@@ -3543,7 +3551,7 @@ function rewindDraftFromLatestTask(tasks) {
     item?.type === "message" && item.role === "user"
   );
   const text = typeof userMessage?.text === "string" ? userMessage.text : "";
-  // 附件来自后端的结构化字段；正文里看起来像附件行的文字始终只是正文。
+  // Attachments come from structured backend fields; text resembling an attachment line in the body remains plain body text.
   const attachments = publicAttachments(userMessage?.attachments);
   if (!text && attachments.length === 0) {
     return { targetTurnId, text: null, attachments: [] };
@@ -3917,7 +3925,7 @@ function displayedTimezone() {
   return state.displayTimezoneDraft ?? state.displayTimezone;
 }
 
-/** 对话框里改时区只预览；随“保存”写入本地存储，取消、关闭或 Escape 时丢弃。 */
+/** Time-zone changes in the dialog are previews only; “保存” writes them to local storage, while cancel, close, or Escape discards them. */
 function previewDisplayTimezonePreference() {
   const next = normalizeDisplayTimezonePreference({
     followDevice: elements.followDeviceTimezoneInput.checked,
@@ -3947,7 +3955,7 @@ function discardDisplayTimezoneDraft() {
   refreshDisplayedTimes();
 }
 
-/** 另一个标签页保存了时区：更新已保存值；本页正在预览的未保存改动保持不动。 */
+/** Another tab saved the time zone: update the saved value while preserving this page's unsaved preview. */
 function applyStoredDisplayTimezone() {
   state.displayTimezone = loadDisplayTimezonePreference();
   if (state.displayTimezoneDraft !== null) return;
@@ -3964,7 +3972,7 @@ function refreshDisplayedTimes() {
   }
 }
 
-/** 登录卡片的状态行：普通提示、进行中和错误分别使用自己的颜色。 */
+/** Status line for the login card; regular notices, progress, and errors each use their own color. */
 function setLoginStatus(text, tone = null) {
   elements.loginStatus.textContent = text;
   if (tone) elements.loginStatus.dataset.tone = tone;
@@ -4056,7 +4064,7 @@ function stateSet(key, value) {
   try {
     localStorage.setItem(key, value);
   } catch {
-    // 浏览器禁用本地存储时，当前页面仍可继续使用。
+    // The current page remains usable when the browser disables local storage.
   }
 }
 
@@ -4064,7 +4072,7 @@ function removeStored(key) {
   try {
     localStorage.removeItem(key);
   } catch {
-    // 同上。
+    // Same as above.
   }
 }
 
@@ -4137,7 +4145,7 @@ async function refreshSessionMetrics() {
     state.metrics = null;
   } finally {
     metricsRequestPending = false;
-    // 切换会话或 Worker 结束若发生在查询期间，完成后补取最新数据。
+    // If a session switch or Worker termination occurs during the query, fetch fresh data after it completes.
     if (metricsRefreshQueued) void refreshSessionMetrics();
   }
   renderSessionMetrics();
@@ -4180,7 +4188,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 
-// 以右侧顶栏的实际高度同步桌面侧栏首行，跟随信息条、字体和窗口变化。
+// Align the first desktop-sidebar row with the actual height of the right header, following banners, fonts, and window changes.
 const conversationHeader = document.querySelector(".app-header");
 const headerHeightObserver = new ResizeObserver(() => {
   const height = conversationHeader.getBoundingClientRect().height;
@@ -4190,10 +4198,10 @@ const headerHeightObserver = new ResizeObserver(() => {
 });
 headerHeightObserver.observe(conversationHeader);
 
-// 两个选择入口共用菜单；数据和变更都沿用现有命令接口。
+// Both selection entry points share a menu; data and changes use the existing command interface.
 function closeComposerPicker() {
   elements.composerPickerMenu.hidden = true;
-  // 关一次就作废一代，正在途中的打开请求回来时按这个丢弃。
+  // Each close invalidates one generation so an open request already in flight is discarded when it returns.
   state.pickerGeneration += 1;
   for (const kind of ["model", "permission"]) {
     composerPickers[kind].button.setAttribute("aria-expanded", "false");
@@ -4213,16 +4221,16 @@ async function refreshPickerLabels() {
       const kind = command === "model" ? "model" : "permission";
       composerPickers[kind].label.textContent = label;
       composerPickers[kind].button.title = label;
-    } catch { /* 任务正在启动或收尾时后端会拒绝查询，下次打开时重新读取。 */ }
+    } catch { /* The backend rejects queries while a task starts or finishes; read again the next time the menu opens. */ }
   }));
 }
 
 /**
- * 菜单打开时该把焦点放在哪个按钮上。
+ * Chooses which button receives focus when the menu opens.
  *
- * 不能写成一个逗号分隔的选择器：那样拿到的是文档顺序里第一个命中任一条的
- * 元素，而不是优先命中前一条的。打勾那项永远排在第一个可点按钮后面（有
- * “‹ 返回”时更是排在它后面），于是焦点永远落不到打勾那项上。
+ * This cannot be one comma-separated selector: that returns the first element in document order matching
+ * any branch instead of prioritizing the earlier branch. The checked option always follows the first enabled
+ * button, especially when “‹ 返回” is present, so focus would never reach the checked option.
  */
 function pickerFocusTarget(menu) {
   return menu.querySelector('button[aria-selected="true"]:not(:disabled)') ??

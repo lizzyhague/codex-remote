@@ -13,7 +13,7 @@ const object = (value: unknown): Record<string, unknown> | null =>
 const number = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) ? value : null;
 
-/** 保存 Worker 退出后仍需展示的统计；不读取会话文件，也不为刷新启动 writer。 */
+/** Retain statistics needed after a Worker exits; do not read session files or start a writer for refreshes. */
 export class SessionMetricsStore {
   readonly #sessions = new Map<string, Pick<SessionMetrics, "context" | "lastReplyAt">>();
   #quota: SessionMetrics["windows"] = [];
@@ -53,7 +53,7 @@ export class SessionMetricsStore {
   }
 
   async read(threadId: string, transport: AppServerTransport): Promise<SessionMetrics> {
-    // 每个活动触发一次新查询；多个客户端同时查询时合并在途请求。
+    // Each activity triggers a fresh query; concurrent client queries share the in-flight request.
     this.#pending ??= this.#refreshQuota(transport).finally(() => { this.#pending = null; });
     await this.#pending;
     return { ...this.#state(threadId), windows: this.#quota };
@@ -92,7 +92,7 @@ export class SessionMetricsStore {
         });
       });
     } catch {
-      // 查询失败不把上次的额度冒充为当前值；上下文与最后回复仍然可用。
+      // Do not present the previous quota as current after a failed query; context and the last reply remain usable.
       this.#quota = [];
     }
   }

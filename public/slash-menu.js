@@ -23,7 +23,7 @@ export class SlashCommandMenu {
   async load() {
     try {
       const data = await this._request("commands.list");
-      // model 与 permissions 由输入框旁的下拉按钮承担，不再进斜杠菜单。
+      // The composer dropdown buttons now own model and permissions, so omit them from the slash menu.
       this._commands = Array.isArray(data?.commands)
         ? data.commands.filter(command => !["model", "permissions"].includes(command.name)) : [];
       this.handleInput();
@@ -205,7 +205,7 @@ export class SlashCommandMenu {
     this._updateSelection();
   }
 
-  /** 键盘选择跳过不可用项，让高亮顺序和看到的顺序一致。 */
+  /** Keyboard selection skips unavailable items so highlight order matches visual order. */
   _moveSelection(direction) {
     const total = this._visibleItems.length;
     for (let step = 1; step <= total; step += 1) {

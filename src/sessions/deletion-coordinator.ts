@@ -11,11 +11,11 @@ export interface ThreadDeleteRequester {
 }
 
 /**
- * 永久删除的唯一编排入口。
+ * The sole orchestration entry point for permanent deletion.
  *
- * `deleting` 先于任何不可逆操作落盘，回收站条目最后才删除。中途退出后，调用方
- * 只需再次传入同一条目；所有本地清理都是幂等的，Codex 的精确“不存在”响应也
- * 视为此前已经删除成功。
+ * `deleting` is persisted before any irreversible operation, and the trash entry is removed last.
+ * After an interruption, the caller only needs to pass the same entry again. All local cleanup is
+ * idempotent, and Codex's exact “不存在” response is treated as a prior successful deletion.
  */
 export class SessionDeletionCoordinator {
   readonly #transport: ThreadDeleteRequester;

@@ -13,7 +13,7 @@ function section(start, end) {
   assert.ok(from >= 0 && to > from, `missing section ${start}`);
   return source.slice(from, to);
 }
-/** vm 上下文里的数组/对象原型不同，比较前转成本 realm 的普通值。 */
+/** Arrays and objects from the vm have different prototypes; convert them to ordinary values in this realm before comparison. */
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 function deferred() {
@@ -168,7 +168,7 @@ function harness({ view = "active", selectionMode = false } = {}) {
     formatDate: () => "",
   });
   vm.runInContext([
-    section("async function loadProjects(", "/** 页面发起一次新建或打开"),
+    section("async function loadProjects(", "/** Starts one create or open operation"),
     section("function setSessionView(", "function appendSessionText("),
     section("function visibleSessionSummaries(", "function mergeSessions("),
   ].join("\n"), context);
@@ -227,7 +227,7 @@ function harness({ view = "active", selectionMode = false } = {}) {
       return [elements.selectionHeading, ...elements.selectionHeading.walk()]
         .find((element) => element.id === id);
     },
-    /** 下一次请求的结果；传 Error 表示失败，传 deferred 表示由测试控制完成时间。 */
+    /** Result of the next request: Error means failure; deferred lets the test control completion. */
     respond(result) {
       responders.push(() => {
         if (result instanceof Error) return Promise.reject(result);
@@ -376,7 +376,7 @@ test("a refresh drops selections that left the list so confirmation and request 
   }
   assert.equal(h.byId("selection-count").textContent, "已选择 2 项");
 
-  // 另一台设备恢复了 A，并把 B 改了名。
+  // Another device restored A and renamed B.
   h.respond({ sessions: [summary("b", { title: "Renamed B" })], marked: [], nextCursor: null });
   await h.context.loadSessions();
   assert.equal(h.byId("selection-count").textContent, "已选择 1 项");

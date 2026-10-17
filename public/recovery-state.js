@@ -179,7 +179,7 @@ export class RecoveryStateStore {
       try {
         this.#storage.removeItem(key);
       } catch {
-        // 新格式已经确认写入；残留旧键不会再成为恢复权威。
+        // The new format is confirmed persisted; a leftover legacy key can no longer become recovery authority.
       }
     }
   }

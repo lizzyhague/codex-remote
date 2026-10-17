@@ -41,10 +41,10 @@ const REPLY_LOOKUP_PAGE_SIZE = 20;
 const REPLY_LOOKUP_CONCURRENCY = 8;
 const REPLY_LOOKUP_CACHE_SIZE = 500;
 
-/** 一次浏览器请求最多向 app-server 翻多少页，避免整页被过滤时无限翻下去。 */
+/** Maximum app-server pages fetched per browser request, preventing unbounded scans when whole pages are filtered out. */
 const MAX_LIST_PAGES_PER_REQUEST = 10;
 
-/** 一次回收站请求最多读取多少条登记，避免搜索不命中时读遍整个回收站。 */
+/** Maximum trash entries read per request, preventing a search miss from scanning the entire trash. */
 const MAX_TRASH_READS_PER_REQUEST = 200;
 const VISIBLE_SOURCE_KINDS = ["cli", "vscode", "appServer"] as const;
 const CODEX_REMOTE_ORIGINATOR = "codex_remote";
@@ -82,7 +82,7 @@ export type SessionListOptions = {
   searchTerm?: string | null;
 };
 
-/** 浏览器可见的会话摘要；有意不包含主机上的绝对路径。 */
+/** Browser-visible session summary; deliberately excludes absolute host paths. */
 export type SessionSummary = {
   id: string;
   sessionId: string;
@@ -100,7 +100,7 @@ export type SessionSummary = {
 
 export type SessionPage = {
   sessions: SessionSummary[];
-  /** 「最近会话」里跨项目置顶；不算进分页。归档 / 回收站为空数组。 */
+  /** Cross-project pinned entries in “最近会话”; excluded from pagination. Empty for archive and trash views. */
   marked: SessionSummary[];
   nextCursor: string | null;
 };
@@ -111,7 +111,7 @@ export type SessionMutationResult = {
 };
 
 export type TrashCleanupResult = {
-  /** 推进到终态的中断移入 / 恢复。 */
+  /** Interrupted trash or restore operations advanced to a terminal state. */
   settled: number;
   deleted: number;
   failed: Array<{ sessionId: string; message: string }>;
@@ -128,11 +128,11 @@ export type OpenedSession = {
   turns: Thread["turns"];
   activeTurnId: string | null;
   runtime: SessionRuntime;
-  /** 新建时没能用上全局默认设置的说明；只在 `start()` 退回默认时出现。 */
+  /** Notice that global defaults could not be used for creation; present only when `start()` falls back. */
   settingsNotice?: string;
 };
 
-/** 只在后端保存的当前会话运行设置；cwd 不会通过浏览器历史接口泄露。 */
+/** Current session runtime settings stored only on the backend; cwd cannot leak through the browser history API. */
 export type SessionRuntime = {
   cwd: string;
   historyMode: ThreadHistoryMode;
@@ -144,8 +144,8 @@ export type SessionRuntime = {
 };
 
 /**
- * 把“浏览器选择的项目 ID”翻译成 app-server 的会话请求。
- * 所有路径都来自 ProjectCatalog，绝不接受浏览器直接提供 cwd。
+ * Translates a project ID selected by the browser into app-server session requests.
+ * Every path comes from ProjectCatalog; a cwd supplied directly by the browser is never accepted.
  */
 export class CodexSessionService {
   readonly #transport: AppServerRequester;
@@ -204,7 +204,7 @@ export class CodexSessionService {
     const view = options.view ?? "active";
     const searchTerm = options.searchTerm?.trim() ?? "";
     if (view === "trash") {
-      // resolve() 既验证项目白名单，也避免旧项目 ID 借列表接口泄露摘要。
+      // resolve() validates the project allowlist and prevents stale project IDs from leaking summaries through the list API.
       const project = await this.#projects.resolve(projectId);
       const page = await this.#listTrash(
         projectId,
@@ -230,9 +230,9 @@ export class CodexSessionService {
       view === "active" ? this.#marks?.list().map((entry) => entry.threadId) ?? [] : [],
     );
 
-    // 归档页需要排除回收站条目。若一整页都被过滤，继续向后找，避免
-    // 浏览器看到一个“空列表但还能加载更多”的中间状态。翻页次数要有上限，
-    // 否则一个装满回收站条目的项目会让一次浏览器请求打出无限多次 RPC。
+    // The archive view excludes trash entries. If an entire page is filtered out, continue scanning to avoid
+    // showing the browser an intermediate “空列表但还能加载更多” state. Page count must be bounded or a
+    // project full of trash entries could make one browser request issue unlimited RPCs.
     for (let page = 0; page < MAX_LIST_PAGES_PER_REQUEST; page += 1) {
       const response = await this.#transport.request<ThreadListResponse>(
         "thread/list",
@@ -242,7 +242,7 @@ export class CodexSessionService {
 
       const sessions: SessionSummary[] = [];
       for (const thread of response.data) {
-        // app-server 本身会按 cwd 过滤；这里再检查一次，守住白名单边界。
+        // app-server already filters by cwd; check again here to enforce the allowlist boundary.
         if (
           isCodexRemoteThread(thread) &&
           !this.#trash.has(thread.id) &&
@@ -263,7 +263,7 @@ export class CodexSessionService {
       }
       params.cursor = response.nextCursor;
     }
-    // 到这里说明连续多页都被过滤空了。交回游标，让浏览器用“加载更多”继续。
+    // Reaching here means several consecutive pages were filtered empty. Return the cursor so the browser can continue with “加载更多”.
     const marked = view === "active" ? await this.#listMarked(searchTerm) : [];
     await this.#populateLastReplyTimes(marked);
     return {
@@ -289,7 +289,7 @@ export class CodexSessionService {
     let settingsNotice: string | null = null;
     let response: ThreadStartResponse;
     if (settings?.defaultPermissions) {
-      // 生成的类型早于 `permissions` 字段；0.159.2 实测 thread/start 接受它。
+      // Generated types predate the `permissions` field; testing with 0.159.2 confirms that thread/start accepts it.
       const withPermissions = {
         ...params,
         ...permissionSettings(settings.defaultPermissions),
@@ -444,8 +444,8 @@ export class CodexSessionService {
         });
         return;
       }
-      // Codex 与这份名单是两个权威：先落下 `trashing` 凭据再归档，任何一步失败或
-      // 退出，条目都还在，之后由这里或定期清理向前推进，不回滚。
+      // Codex and this list are separate authorities. Persist the `trashing` credential before archiving;
+      // if any step fails or exits, the entry remains for this path or periodic cleanup to advance, without rollback.
       const pending: TrashEntry = existing?.state === "trashing"
         ? existing
         : { threadId, projectId, deletedAt: this.#now(), origin: "active", state: "trashing" };
@@ -488,8 +488,9 @@ export class CodexSessionService {
   }
 
   /**
-   * 启动和每日清理的入口：先把上次没走完的移入 / 恢复推进到终态，再永久删除
-   * `deleting` 条目和过期的回收站条目。过渡条目推进失败时留待下次，不会被当作过期删除。
+   * Entry point for startup and daily cleanup: first advances unfinished trash and restore operations to
+   * terminal states, then permanently deletes `deleting` entries and expired trash entries. Transitional
+   * entries that fail to advance remain for the next run and are not deleted as expired.
    */
   async purgeExpired(): Promise<TrashCleanupResult> {
     const result: TrashCleanupResult = { settled: 0, deleted: 0, failed: [] };
@@ -554,8 +555,8 @@ export class CodexSessionService {
   }
 
   /**
-   * `trashing` → `trashed`。会话已经不在 Codex 活跃列表时，`thread/archive` 返回该 thread
-   * 的精确 `no rollout found`，视为此前已归档成功。
+   * `trashing` → `trashed`. When the session is already absent from Codex's active list, `thread/archive`
+   * returns the exact `no rollout found` error for that thread, which is treated as evidence of prior success.
    */
   async #finishTrashing(entry: TrashEntry): Promise<void> {
     const params: ThreadArchiveParams = { threadId: entry.threadId };
@@ -568,8 +569,9 @@ export class CodexSessionService {
   }
 
   /**
-   * `restoring` → 移除条目。会话已经不在 Codex 归档里时，`thread/unarchive` 返回该 thread
-   * 的精确 `no archived rollout found`，视为此前已恢复成功。
+   * `restoring` → remove entry. When the session is already absent from the Codex archive,
+   * `thread/unarchive` returns the exact `no archived rollout found` error for that thread, which is treated
+   * as evidence of prior success.
    */
   async #finishRestoring(entry: TrashEntry): Promise<void> {
     const params: ThreadUnarchiveParams = { threadId: entry.threadId };
@@ -601,8 +603,8 @@ export class CodexSessionService {
   ): Promise<SessionPage> {
     const offset = parseTrashCursor(cursor);
     const query = searchTerm.toLocaleLowerCase();
-    // 没走完的移入 / 恢复也列在这里：它们不出现在活跃和归档列表，
-    // 回收站是唯一能看到并再次恢复它们的地方。
+    // Include unfinished trash and restore operations here. They appear in neither active nor archived lists,
+    // making trash the only place where they remain visible and can be restored again.
     const entries = this.#trash.list(projectId)
       .filter((entry) => entry.state !== "deleting")
       .sort((left, right) => right.deletedAt - left.deletedAt);
@@ -633,8 +635,8 @@ export class CodexSessionService {
           purgeAt: entry.deletedAt + TRASH_RETENTION_SECONDS,
         });
       } catch {
-        // 会话可能被 Codex 的其他客户端直接删除；保留登记供自动清理重试，
-        // 但不要让一个陈旧条目阻断整个回收站列表。
+        // Another Codex client may have deleted the session directly. Retain the entry for automatic cleanup
+        // to retry, but do not let one stale entry block the entire trash list.
       }
     }
     return {
@@ -667,7 +669,7 @@ export class CodexSessionService {
         }
         summaries.push(summary);
       } catch {
-        // 会话可能已被其他客户端删掉；钉住名单先留着，列表里跳过这一条。
+        // Another client may have deleted the session; retain the pinned entry for now and omit it from the list.
       }
     }
     summaries.sort((left, right) =>
@@ -677,11 +679,13 @@ export class CodexSessionService {
   }
 
   /**
-   * 钉住的会话里哪些不能放进「最近」：已归档的，以及在翻页上限内无法确认状态的。
+   * Determines which pinned sessions cannot appear in “最近”: archived sessions and those whose state
+   * cannot be confirmed within the page limit.
    *
-   * 先在归档列表里找；归档列表翻完仍没找到才算确认 active。归档列表超过上限时，
-   * 剩下的再到活跃列表里有界核验，只有在那里找到的才算 active，其余一律当未知排除，
-   * 不因为扫描到了上限就把它们当成 active。
+   * Search the archived list first; a session is confirmed active only after that list is exhausted without
+   * finding it. If the archived list exceeds the limit, perform a bounded check for the remaining sessions in
+   * the active list. Only sessions found there count as active; exclude all others as unknown rather than
+   * assuming they are active because the scan reached its limit.
    */
   async #marksNotConfirmedActive(
     entries: Array<{ threadId: string; projectId: string }>,
@@ -711,8 +715,9 @@ export class CodexSessionService {
   }
 
   /**
-   * 在项目的归档或活跃列表里找 `wanted` 中的 thread，最多翻 `MAX_LIST_PAGES_PER_REQUEST` 页。
-   * 找到的会从 `wanted` 删去；`exhausted` 表示列表已经翻完，没找到的确定不在这个列表里。
+   * Searches a project's archived or active list for threads in `wanted`, reading at most
+   * `MAX_LIST_PAGES_PER_REQUEST` pages. Found threads are removed from `wanted`; `exhausted` indicates the
+   * entire list was read, so any missing thread is known not to be in that list.
    */
   async #findInThreadList(
     projectPath: string,
@@ -754,7 +759,7 @@ export class CodexSessionService {
         return toSessionSummary(response.thread, projectId, marked);
       }
     } catch {
-      // 取消钉住时目录或线程可能已经没了，仍要把状态回给页面。
+      // The project or thread may already be gone when unpinning; still return the state to the page.
     }
     return {
       id: threadId,
@@ -781,7 +786,7 @@ export class CodexSessionService {
         try {
           session.lastReplyAt = await this.#lastReplyAt(session.id, session.updatedAt);
         } catch {
-          // 回复时间只是列表辅助信息；读取失败不能让整个会话列表消失。
+          // Reply time is supplemental list information; a read failure must not remove the entire session list.
         }
       }
     };
@@ -876,7 +881,7 @@ export class CodexSessionService {
       try {
         listener(event);
       } catch {
-        // 一个浏览器连接的通知失败不应中断已经完成的会话整理操作。
+        // A notification failure on one browser connection must not interrupt an already completed organization operation.
       }
     }
   }
@@ -901,10 +906,10 @@ export class CodexSessionService {
 }
 
 /**
- * Codex 拒绝未知权限方案时只给通用的 -32600 和一句说明，没有结构化字段可认，
- * 只能按 0.159.2 实测的措辞匹配：
- * `failed to load configuration: default_permissions refers to unknown built-in profile`。
- * 认不出来的错误照原样抛出，不退回默认。
+ * When Codex rejects an unknown permission profile, it returns only generic -32600 and an explanatory sentence,
+ * with no structured field to inspect. Match the wording observed in 0.159.2:
+ * `failed to load configuration: default_permissions refers to unknown built-in profile`.
+ * Unrecognized errors are rethrown unchanged rather than falling back to defaults.
  */
 export function isUnknownPermissionProfileError(error: unknown): boolean {
   return error instanceof AppServerRpcError &&
@@ -994,8 +999,8 @@ function parseTrashCursor(cursor: string | null): number {
 }
 
 /**
- * 会话整理的成功 DTO 也属于浏览器公开边界。只有明确的业务错误保留文案，
- * App Server、文件系统和未知异常的原文只写服务日志。
+ * Successful session-organization DTOs also cross the browser's public boundary. Preserve messages only for
+ * explicit business errors; original text from App Server, the file system, and unknown exceptions goes only to service logs.
  */
 function describeFailure(error: unknown): string {
   if (isPublicError(error)) return error.message;

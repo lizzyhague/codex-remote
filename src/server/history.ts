@@ -18,7 +18,7 @@ export type BrowserTimelineItem = {
   id: string;
   role: "user" | "assistant";
   text: string;
-  /** 只在用户消息带有 Remote 附件时出现；来自独立路径块，不从正文反推。 */
+  /** Present only for user messages with Remote attachments; sourced from a separate path block, never inferred from text. */
   attachments?: MessageAttachment[];
 };
 
@@ -70,7 +70,7 @@ export function toBrowserTasks(
   return turns.map((turn) => toBrowserTask(turn, mappings));
 }
 
-/** 从 Remote 附加在用户消息后的独立路径块收集记录，用来补齐显示索引。 */
+/** Collect records from Remote's separate path block after a user message to complete the display index. */
 export function collectHistoryAttachmentRecords(turns: Turn[]): Array<{
   messageId: string;
   attachments: AttachmentDisplayMapping[];
@@ -160,8 +160,8 @@ function toBrowserTimelineItem(
       text: redactKnownAttachmentPaths(item.review, mappings),
     }];
   }
-  // 重新加载只恢复对话。工具、思考和模式切换仍作为独立 ThreadItem
-  // 保存在 App Server 中，因此相邻的 agentMessage 不会被合并成一个气泡。
+  // Reloading restores conversation only. Tools, reasoning, and mode changes remain separate ThreadItems
+  // in App Server, so adjacent agentMessages must not be merged into one bubble.
   return [];
 }
 

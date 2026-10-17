@@ -38,7 +38,7 @@ export type RemoteWebSocketServerOptions = {
   services: BrowserConnectionServices;
   fileRoots?: string[];
   heartbeatIntervalMs?: number;
-  /** 额外允许的浏览器 Origin。与 Host 同源的请求始终允许。 */
+  /** Additional allowed browser Origins. Requests sharing the Host origin are always allowed. */
   allowedOrigins?: string[];
   webRoot?: string;
   uploads?: Pick<SharedUploadClient, "upload">;
@@ -46,10 +46,10 @@ export type RemoteWebSocketServerOptions = {
 
 const DEFAULT_WEB_ROOT = fileURLToPath(new URL("../../public/", import.meta.url));
 
-/** 没有回 pong 的连接会被判定为已断开，用于准确执行离线审批宽限规则。 */
+/** Connections that miss a pong are treated as disconnected, enabling accurate offline approval grace periods. */
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 
-/** 浏览器长时间不读数据时的发送缓冲上限，超过就断开，避免后端内存无界增长。 */
+/** Send-buffer limit for browsers that stop reading; disconnect above it to bound backend memory. */
 const MAX_OUTBOUND_BUFFER_BYTES = 16 * 1_048_576;
 
 const STATIC_FILES: Record<string, { file: string; contentType: string }> = {
@@ -83,7 +83,7 @@ const STATIC_FILES: Record<string, { file: string; contentType: string }> = {
   "/sw.js": { file: "sw.js", contentType: "text/javascript; charset=utf-8" },
 };
 
-/** 浏览器入口。它只绑定回环地址，公网/Tailscale 配置不属于这一层。 */
+/** Browser entry point. It binds only to loopback; public-network and Tailscale configuration belong elsewhere. */
 export class RemoteWebSocketServer {
   readonly #token: string;
   readonly #auth: CookieAuth;
@@ -92,13 +92,13 @@ export class RemoteWebSocketServer {
   readonly #heartbeatIntervalMs: number;
   readonly #allowedOrigins: ReadonlySet<string>;
   readonly #webRoot: string;
-  /** listen() 时读入并固定；之后工作树的前端改动要重启才生效。 */
+  /** Loaded and fixed at listen(); later frontend worktree changes require a restart. */
   #webAssets: WebAssets | null = null;
   readonly #uploads: RemoteWebSocketServerOptions["uploads"];
   readonly #http: Server;
   readonly #webSockets: WebSocketServer;
   readonly #connections = new Map<WebSocket, BrowserConnection>();
-  /** 在途上传的取消源。关闭服务时逐个取消，不让下游等待扣住 HTTP close。 */
+  /** Cancellation sources for in-flight uploads, aborted on shutdown so downstream waits cannot hold HTTP close. */
   readonly #uploadsInFlight = new Set<AbortController>();
   #listening = false;
 
@@ -133,8 +133,8 @@ export class RemoteWebSocketServer {
         socket.destroy();
         return;
       }
-      // WebSocket 不受同源策略保护：没有这一步，用户浏览的任何网站都能向
-      // 本机或 tailnet 上的这个端口发起连接。令牌仍是主要防线，这是第二层。
+      // The same-origin policy does not protect WebSockets: without this check, any site the user visits could
+      // connect to this port on localhost or the tailnet. The token remains the primary defense; this is a second layer.
       if (!this.#originAllowed(request)) {
         console.warn(
           `拒绝了来源不匹配的 WebSocket 升级请求：origin=${
@@ -331,8 +331,8 @@ export class RemoteWebSocketServer {
       sendUploadError(response, stoppingError());
       return;
     }
-    // 请求体中断由客户端自己监听；浏览器在正文传完后关掉响应、服务关闭这两种情况
-    // 由这里的取消源通知，二者都销毁同一个下游请求。
+    // The client watches request-body interruption itself. This cancellation source covers the browser closing
+    // after sending the body and service shutdown; both destroy the same downstream request.
     const controller = new AbortController();
     const onResponseClose = () => {
       if (!response.writableFinished) {
@@ -355,7 +355,7 @@ export class RemoteWebSocketServer {
       });
       response.end(body);
     } catch (error) {
-      // 浏览器已经离开时连接也已关闭，没有人读这个错误。
+      // The connection is already closed when the browser leaves, so nobody can read this error.
       if (!response.destroyed) {
         this.#closeConnectionIfStopping(response);
         sendUploadError(response, error);
@@ -367,8 +367,8 @@ export class RemoteWebSocketServer {
   }
 
   /**
-   * `http.close()` 只在调用那一刻关闭空闲连接。关闭开始后才写完的上传响应要明确关掉
-   * keep-alive 连接，否则 close 会一直等它。
+   * `http.close()` closes only connections idle at invocation. Upload responses completed after shutdown begins
+   * must explicitly close their keep-alive connections, or close will wait indefinitely.
    */
   #closeConnectionIfStopping(response: ServerResponse): void {
     if (!this.#listening) response.setHeader("connection", "close");
@@ -439,7 +439,7 @@ export class RemoteWebSocketServer {
     if (this.#listening) {
       throw new Error("WebSocket 服务已经启动。");
     }
-    // 前端在开始监听前一次读定：不完整的一套会让启动失败，而不是对外提供。
+    // Read the frontend once before listening; an incomplete set fails startup instead of being served.
     this.#webAssets ??= await WebAssets.load(
       this.#webRoot,
       new Set(Object.values(STATIC_FILES).map((asset) => asset.file)),
@@ -487,7 +487,7 @@ export class RemoteWebSocketServer {
 
   #originAllowed(request: IncomingMessage): boolean {
     const origin = request.headers.origin;
-    // 冒烟脚本和命令行客户端不会发 Origin；只有浏览器才发。
+    // Smoke scripts and command-line clients send no Origin; only browsers do.
     if (typeof origin !== "string" || !origin) {
       return true;
     }
@@ -504,7 +504,7 @@ export class RemoteWebSocketServer {
     if (!originHost) {
       return false;
     }
-    // Tailscale Serve 这类反向代理会保留 Host，或者用 X-Forwarded-Host 传递。
+    // Reverse proxies such as Tailscale Serve preserve Host or pass it through X-Forwarded-Host.
     return [request.headers.host, request.headers["x-forwarded-host"]]
       .flatMap((value) => typeof value === "string" ? value.split(",") : [])
       .map((value) => value.trim().toLowerCase())
@@ -517,8 +517,8 @@ export class RemoteWebSocketServer {
         if (webSocket.readyState !== WebSocket.OPEN) {
           return;
         }
-        // 手机锁屏或网络极慢时，浏览器可能长时间不读数据。放任 ws 无界缓冲
-        // 会把后端内存吃光，这里宁可断开让前端重连。
+        // A locked phone or very slow network may leave the browser unread for a long time. Unbounded ws buffering
+        // would exhaust backend memory, so disconnect and let the frontend reconnect.
         if (webSocket.bufferedAmount > MAX_OUTBOUND_BUFFER_BYTES) {
           webSocket.close(1013, "Client too slow");
           return;
@@ -534,8 +534,8 @@ export class RemoteWebSocketServer {
     );
     this.#connections.set(webSocket, connection);
 
-    // 手机换网络或息屏时 TCP 常常只是半开：不发心跳的话，后端要等到内核超时
-    // 才会发现连接已死，也就无法准确判断何时进入离线审批宽限期。
+    // TCP often remains half-open when a phone changes networks or sleeps. Without heartbeats, the backend detects
+    // death only after the kernel timeout and cannot accurately start the offline approval grace period.
     let responsive = true;
     webSocket.on("pong", () => {
       responsive = true;
@@ -550,9 +550,9 @@ export class RemoteWebSocketServer {
     }, this.#heartbeatIntervalMs);
     heartbeatTimer.unref();
 
-    // ws 收到超过 maxPayload 的帧或非法 UTF-8 文本时，会在这个 WebSocket 上
-    // emit error；没有监听的话 EventEmitter 会把它抛成未捕获异常，带走整个后端
-    // 进程。协议错误的关闭帧由 ws 自己发，这里只记录。
+    // When ws receives a frame above maxPayload or invalid UTF-8, it emits error on this WebSocket. Without a
+    // listener, EventEmitter throws it uncaught and terminates the backend. ws sends protocol close frames itself;
+    // only log here.
     webSocket.on("error", (error: Error) => {
       console.warn(`浏览器连接出错：${error.message}`);
     });

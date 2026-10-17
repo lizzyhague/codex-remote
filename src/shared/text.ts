@@ -1,8 +1,8 @@
 /**
- * 在一段文本里找整行等于 `marker` 的那一行，返回行首位置；找不到返回 -1。
+ * Finds a line exactly equal to `marker` in a text and returns its start offset, or -1 if absent.
  *
- * 只认整行匹配：`marker` 必须从行首开始、到行尾结束，所以正文里出现同样的字符串
- * 不会被误判成标记行。`from` 用于从上一次命中之后继续找。
+ * Matches whole lines only: `marker` must span from the start through the end of a line, so the same
+ * string inside body text is not mistaken for a marker line. `from` continues after the previous match.
  */
 export function indexOfWholeLine(text: string, marker: string, from = 0): number {
   let index = from;

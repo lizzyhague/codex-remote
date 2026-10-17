@@ -69,9 +69,9 @@ const MAX_TOOL_TEXT = 100_000;
 const MAX_TITLE_LENGTH = 256;
 
 /**
- * 把 App Server 的 ThreadItem 收成浏览器可以直接渲染的工具视图。
- * 未知 MCP / dynamic 工具保持为 other；只有原生 webSearch 才按 action
- * 细分 search / fetch，避免根据工具名字猜错语义。
+ * Condense App Server ThreadItems into tool views the browser can render directly.
+ * Unknown MCP and dynamic tools remain `other`; only native webSearch items are split
+ * into search and fetch by action, avoiding guesses based on tool names.
  */
 export function publicToolView(
   item: unknown,
@@ -245,9 +245,9 @@ export function publicToolView(
 }
 
 /**
- * App Server 目前不会把 programmatic `exec` 调用提升为 ThreadItem，只会通过
- * rawResponseItem/completed 暴露原始的 custom_tool_call。这里仅补这一种缺口，
- * 不接管其它原始工具类型，以免和 item/started、item/completed 重复显示。
+ * App Server currently does not promote programmatic `exec` calls to ThreadItems; it only
+ * exposes the raw custom_tool_call through rawResponseItem/completed. Fill only this gap here
+ * and leave other raw tool types alone to avoid duplicating item/started and item/completed.
  */
 export function publicRawToolView(
   item: unknown,
@@ -463,7 +463,7 @@ function numberField(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-/** 读字段用：不是对象就当成没有字段，调用点因此不必每次判空。 */
+/** Read fields safely: non-objects have no fields, so callers need no repeated null checks. */
 function objectFields(value: unknown): Record<string, unknown> {
   return isObject(value) ? value : {};
 }

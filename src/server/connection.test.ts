@@ -38,7 +38,7 @@ class FakeSocket implements BrowserSocket {
 
   close(): void {}
 
-  /** 最近一条指定类型的消息，测试大多只关心这个。 */
+  /** Most recent message of a given type; most tests only care about this one. */
   last(type: string): JsonObject | undefined {
     return [...this.messages].reverse().find((message) => message.type === type);
   }
@@ -51,7 +51,7 @@ class FakeSocket implements BrowserSocket {
   }
 }
 
-/** 目录 App Server；会话和任务都不经过它。 */
+/** Directory App Server; sessions and turns do not pass through it. */
 class FakeTransport implements AppServerTransport {
   readonly requests: Array<{ method: string; params: unknown }> = [];
   beforeModels: (() => Promise<void>) | null = null;
@@ -93,8 +93,8 @@ class FakeTransport implements AppServerTransport {
 }
 
 /**
- * Worker 管理器替身。真管理器会启动 codex 子进程，这里只记录被调用了什么、
- * 返回事先准备好的结果，并允许测试主动推送事件。
+ * Worker manager double. The real manager starts codex children; this one only records calls,
+ * returns prepared results, and lets tests push events explicitly.
  */
 class FakeWorkers {
   readonly calls: Array<{ method: string; args: unknown[] }> = [];
@@ -110,7 +110,7 @@ class FakeWorkers {
   readonly runningSessions = new Set<string>();
   readonly busyProjects = new Set<string>();
   commandResult: Record<string, unknown> = { kind: "message", title: "完成", lines: [] };
-  /** 恢复会话前的等待；测试用它模拟断线时仍未返回的后台请求。 */
+  /** Wait before resuming a session; tests use it to simulate a pending backend request at disconnect. */
   beforeResume: (() => Promise<void>) | null = null;
   #sequence = 0;
   #nextSession = 1;
@@ -120,7 +120,7 @@ class FakeWorkers {
     return () => this.#listeners.delete(listener);
   }
 
-  /** 模拟管理器广播一条事件。 */
+  /** Simulate the manager broadcasting an event. */
   emit(
     event: Record<string, unknown> & { type: string },
     audience: WorkerManagerEvent["audience"],
@@ -158,7 +158,7 @@ class FakeWorkers {
     this.attached.delete(clientId);
   }
 
-  /** 下一次 startSession 带回的默认设置退回说明。 */
+  /** Default-setting fallback explanation returned by the next startSession. */
   startSettingsNotice: string | null = null;
 
   async startSession(projectId: string): Promise<ManagedSessionOpen> {
@@ -190,7 +190,7 @@ class FakeWorkers {
     return [];
   }
 
-  /** 打开会话时那次真实等待；测试用它把事件卡进窗口里。 */
+  /** Real wait while opening a session; tests use it to hold events in the timing window. */
   beforeAttachmentSync: (() => Promise<void>) | null = null;
 
   async syncAttachmentMappings(): Promise<[]> {
@@ -478,7 +478,7 @@ for (const snapshotReuse of [false, true]) {
       context.after(() => connection.disconnect());
 
       for (const marked of [true, false, true]) {
-        // 两个方向都要覆盖快照，包括在一次打开之后再次切换。
+        // Cover snapshots in both directions, including switching again after one open.
         snapshot.session.marked = !marked;
         connection.receiveText(request("session.mark", "mark", {
           projectId: "projects/demo", sessionId: "session-pinned", marked,
@@ -575,8 +575,8 @@ test("holds events raised while opening until the page has been told about the s
 
   await openSession(connection, "session-1");
   workers.beforeAttachmentSync = async () => {
-    // 连接已经指向 session-2，但“会话已打开”的响应还没发出去。这两条事件
-    // 今天会先于响应到达页面，随后被首屏渲染清掉。
+    // The connection already points to session-2, but the “会话已打开” response has not been sent.
+    // These two events would reach the page first and then be cleared by initial rendering.
     workers.emit(
       { type: "message.delta", sessionId: "session-2", delta: "半" },
       "session",
@@ -599,7 +599,7 @@ test("holds events raised while opening until the page has been told about the s
   assert.ok(opened >= 0, "缺少打开会话的响应");
   assert.ok(delta > opened, "新会话的增量必须排在响应之后");
 
-  // 补发时按当前会话重新过滤：刚切走的那个会话不该再画到页面上。
+  // Re-filter against the current session when replaying; the session just left must not render on the page.
   assert.deepEqual(socket.events("message.delta").map((event) => event.delta), ["半"]);
 });
 
@@ -612,7 +612,7 @@ for (const action of ["archive", "trash", "delete"] as const) {
     await openSession(connection, "session-1");
 
     workers.beforeAttachmentSync = async () => {
-      // 连接已经挂到 session-2，响应还在等附件同步；另一台设备此时移走它。
+      // The connection is attached to session-2 while its response awaits attachment sync; another device moves it now.
       assert.equal(workers.attached.get("phone"), "session-2");
       workers.emit(
         { type: "message.delta", sessionId: "session-2", delta: "迟到" },
@@ -674,7 +674,7 @@ for (const loadState of ["ready", "queued"] as const) {
     const response = socket.last("response")!;
     assert.equal(response.ok, false);
     assert.equal((response.error as JsonObject).code, "session_open_cancelled");
-    // 没有进入挂载步骤，原先打开的会话保持原样。
+    // Attachment never begins, so the previously open session remains unchanged.
     assert.equal(workers.attached.get("phone"), "session-1");
     assert.equal(socket.events("sessions.changed")[0]?.closedSessionId, null);
   });
@@ -716,7 +716,7 @@ test("forwards worker events for the open session and hides other sessions", asy
   await openSession(computer, "session-2");
 
   workers.emit({ type: "message.delta", sessionId: "session-1", delta: "你" }, "session", "session-1");
-  // 待答请求及其终态要送到所有已登录设备，即使它们正在看别的会话。
+  // Pending requests and their terminal states go to every logged-in device, even those viewing another session.
   workers.emit({
     type: "approval.requested",
     sessionId: "session-1",
@@ -747,7 +747,7 @@ test("forwards worker events for the open session and hides other sessions", asy
     id: "session-1",
     title: "第一条会话",
   });
-  // 事件带着管理器给的序号，断线重连后前端才能去重。
+  // Events carry manager-assigned sequence numbers so the frontend can deduplicate after reconnecting.
   assert.equal(phoneSocket.events("message.delta")[0]?.sequence, 1);
 });
 
@@ -838,7 +838,7 @@ test("archiving the open session closes it and tells every device", async (conte
   const changed = phoneSocket.events("sessions.changed").at(-1);
   assert.equal(changed?.change, "archive");
   assert.equal(changed?.closedSessionId, "session-1");
-  // 别的设备也收到通知，但它没打开这个会话，所以不该被告知“当前会话已关闭”。
+  // Another device receives the notice too, but it has not opened this session and must not hear “当前会话已关闭”.
   assert.equal(computerSocket.events("sessions.changed").at(-1)?.closedSessionId, null);
   assert.equal(workers.attached.has("phone"), false, "会话关掉后必须 detach");
 
@@ -995,7 +995,7 @@ test("keeps every current-session request bound to its explicit target", async (
   }
   assert.deepEqual(workers.calls, [], "错目标请求不能到达 Worker 或附件服务");
 
-  // 错目标的历史请求没有推进 session-2 的游标。
+  // A history request for the wrong target does not advance session-2's cursor.
   connection.receiveText(request("history.older", "current-history", {
     projectId: "projects/demo",
     sessionId: "session-2",

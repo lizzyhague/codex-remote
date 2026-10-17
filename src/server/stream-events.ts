@@ -45,7 +45,7 @@ export function toBrowserStreamEvent(
   return { type, sessionId, taskId: nativeTurnId, nativeTurnId, ...projectedPayload };
 }
 
-/** 把已知附件路径从即将发给浏览器的事件副本里换掉。 */
+/** Replace known attachment paths in an event copy before sending it to the browser. */
 export function redactBrowserStreamEvent<T extends Record<string, unknown>>(
   event: T,
   mappings: readonly AttachmentDisplayMapping[],

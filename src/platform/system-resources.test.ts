@@ -9,7 +9,7 @@ import {
   readAvailableMemory,
 } from "./system-resources.ts";
 
-/** base（Apple Silicon Mac mini）上 vm_stat 的真实输出，页大小 16 KiB。 */
+/** Real `vm_stat` output from base (Apple Silicon Mac mini), with 16 KiB pages. */
 const appleSiliconVmStat = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                                     9183.
 Pages active:                                 411410.
@@ -35,7 +35,7 @@ Swapins:                                           0.
 Swapouts:                                          0.
 `;
 
-/** Intel 的 vm_stat 输出，页大小 4 KiB。 */
+/** Intel `vm_stat` output with 4 KiB pages. */
 const intelVmStat = `Mach Virtual Memory Statistics: (page size of 4096 bytes)
 Pages free:                              200000.
 Pages wired down:                         50000.
@@ -46,7 +46,7 @@ Pages occupied by compressor:             10000.
 const sixteenGiB = 17_179_869_184;
 const eightGiB = 8_589_934_592;
 
-test("Linux 读取 MemAvailable，可回收缓存算作可用", async () => {
+test("Linux reads MemAvailable and counts reclaimable cache as available", async () => {
   assert.equal(parseLinuxAvailableBytes("MemTotal: 1000 kB\nMemAvailable: 2048 kB\n"), 2_097_152);
 
   const reading = await readAvailableMemory({
@@ -60,7 +60,7 @@ test("Linux 读取 MemAvailable，可回收缓存算作可用", async () => {
   });
 });
 
-test("Linux 读数缺失或读取失败时降级到 os.freemem()，而不是返回 0", async () => {
+test("Linux falls back to os.freemem() instead of returning zero when reading is missing or fails", async () => {
   const missing = await readAvailableMemory({
     platform: "linux",
     readLinuxMeminfo: async () => "MemTotal: 1000 kB\n",
@@ -81,21 +81,21 @@ test("Linux 读数缺失或读取失败时降级到 os.freemem()，而不是返�
   assert.match(failed.degradedReason ?? "", /EACCES/u);
 });
 
-test("macOS 用已占用的页换算可用内存，缓存不计入已用", () => {
+test("macOS derives available memory from occupied pages without counting cache as used", () => {
   const parsed = parseDarwinAvailableBytes(appleSiliconVmStat, sixteenGiB);
   assert.equal(parsed.ok, true);
   // (Anonymous 467010 + wired 103114 + compressor 798) × 16384 = 9_353_986_048
   assert.equal(parsed.ok && parsed.availableBytes, sixteenGiB - 9_353_986_048);
 });
 
-test("macOS 页大小取自输出首行，不写死 4096", () => {
+test("macOS reads page size from the first output line instead of assuming 4096", () => {
   const parsed = parseDarwinAvailableBytes(intelVmStat, eightGiB);
   assert.equal(parsed.ok, true);
   // (100000 + 50000 + 10000) × 4096 = 655_360_000
   assert.equal(parsed.ok && parsed.availableBytes, eightGiB - 655_360_000);
 });
 
-test("macOS 缺少必需字段时报出缺的是哪一项，不猜数字", () => {
+test("macOS reports the missing required field instead of guessing a value", () => {
   const withoutCompressor = appleSiliconVmStat
     .split("\n")
     .filter((line) => !line.startsWith("Pages occupied by compressor:"))
@@ -112,7 +112,7 @@ test("macOS 缺少必需字段时报出缺的是哪一项，不猜数字", () =>
   assert.equal(parseDarwinAvailableBytes(appleSiliconVmStat, 0).ok, false);
 });
 
-test("macOS 解析失败或命令失败时降级到 os.freemem()", async () => {
+test("macOS falls back to os.freemem() after a parsing or command failure", async () => {
   const unparsable = await readAvailableMemory({
     platform: "darwin",
     readVmStat: async () => "totally unexpected output",
@@ -135,7 +135,7 @@ test("macOS 解析失败或命令失败时降级到 os.freemem()", async () => {
   assert.match(failed.degradedReason ?? "", /ENOENT/u);
 });
 
-test("macOS 正常读数不走降级", async () => {
+test("macOS does not fall back when its reading succeeds", async () => {
   const reading = await readAvailableMemory({
     platform: "darwin",
     readVmStat: async () => appleSiliconVmStat,
@@ -147,7 +147,7 @@ test("macOS 正常读数不走降级", async () => {
   assert.equal(reading.availableBytes, sixteenGiB - 9_353_986_048);
 });
 
-test("未支持的平台降级到 os.freemem() 并说明原因", async () => {
+test("unsupported platforms fall back to os.freemem() and report the reason", async () => {
   const reading = await readAvailableMemory({
     platform: "win32",
     readFreeMemory: () => 1_048_576,
@@ -157,7 +157,7 @@ test("未支持的平台降级到 os.freemem() 并说明原因", async () => {
   assert.match(reading.degradedReason ?? "", /win32/u);
 });
 
-test("正常读数的拦截提示写明数值、来源和可调的环境变量", () => {
+test("blocking message for a normal reading includes value, source, and configurable environment variable", () => {
   const message = memoryLowMessage(
     "暂时不能新建会话。",
     { availableBytes: 512 * 1_048_576, platform: "linux", source: "linux-meminfo" },
@@ -169,7 +169,7 @@ test("正常读数的拦截提示写明数值、来源和可调的环境变量",
   assert.match(message, /CODEX_REMOTE_MIN_AVAILABLE_MEMORY_MIB/u);
 });
 
-test("降级提示说明已放行、断在哪里、门槛暂不生效，以及往哪里改", () => {
+test("degraded notice explains allowance, failure point, disabled threshold, and configuration location", () => {
   const message = memoryDegradedMessage(
     {
       availableBytes: 216 * 1_048_576,

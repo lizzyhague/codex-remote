@@ -7,16 +7,17 @@ export type PermissionProfileSummary = {
   allowed: boolean;
 };
 
-/** 设置页下拉框用的权限选项；标签和说明由后端统一给出，与 `/permissions` 一致。 */
+/** Permission options for the settings dropdown; backend-provided labels and descriptions match `/permissions`. */
 export type PermissionOption = PermissionProfileSummary & {
   label: string;
   fullAccess: boolean;
 };
 
 /**
- * 权限方案和批准方式成对设置，与 Codex 桌面端一致：Full access 等于
- * `danger-full-access` 加 `never`；其他方案一律“需要时询问”。否则 config.toml
- * 写了 `never` 又选了受限方案时，越界操作既做不了也弹不出批准卡。
+ * Set permission profiles and approval policies together, matching Codex Desktop: Full access means
+ * `danger-full-access` plus `never`; all other profiles use “需要时询问”. Otherwise, selecting a
+ * restricted profile while config.toml specifies `never` would block out-of-bounds operations without
+ * showing an approval card.
  */
 export type PermissionSettings = {
   permissions: string;
@@ -85,9 +86,9 @@ export function permissionDescription(id: string): string {
 }
 
 /**
- * 权限方案只有 id、说明和是否可选，没有任何字段说明它意味着什么沙箱，所以挑方案
- * 时只能认名字。判断"当前是不是完全访问"要用 runner 里的 `runtimeUsesFullAccess`，
- * 那里有 App Server 给的结构化沙箱策略可用。
+ * Permission profiles expose only an ID, description, and availability, with no field describing their
+ * sandbox semantics, so profile selection must recognize names. Use `runtimeUsesFullAccess` in the runner
+ * to determine whether the current runtime has full access; it has App Server's structured sandbox policy.
  */
 export function isFullAccessProfile(id: string): boolean {
   const normalized = id.toLowerCase();
@@ -95,9 +96,9 @@ export function isFullAccessProfile(id: string): boolean {
 }
 
 /**
- * 关闭 Full access 时要落到的方案。`permissions: null` 会清成部署默认，而默认本身
- * 可能就是完全访问，且 App Server 对它不发 `thread/settings/updated`，客户端既关不掉
- * 也看不出来，所以改成显式切到一个受限方案。
+ * Profile to use when disabling Full access. `permissions: null` resets to the deployment default, which
+ * may itself grant full access, and App Server emits no `thread/settings/updated` for it. The client could
+ * neither disable nor detect full access, so explicitly switch to a restricted profile instead.
  */
 export function pickRestrictedProfile(
   profiles: PermissionProfileSummary[],

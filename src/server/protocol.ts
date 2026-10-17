@@ -17,15 +17,15 @@ export type BrowserSessionMutationAction =
   | "delete-trash";
 
 /**
- * WebSocket 帧上限。它必须明显大于单条消息正文的上限，否则超长正文会在 ws 层
- * 被直接关闭连接，浏览器拿不到可读的错误，用户写的内容也就白丢了。
+ * WebSocket frame limit. It must substantially exceed the message-body limit; otherwise ws would
+ * disconnect on an oversized body before the browser receives a readable error, losing the user's text.
  */
 export const MAX_BROWSER_MESSAGE_BYTES = 2_097_152;
 
-/** 单条发给 Codex 的消息正文上限（UTF-8 字节）。 */
+/** Maximum body size for one message sent to Codex, in UTF-8 bytes. */
 export const MAX_MESSAGE_TEXT_BYTES = 1_048_576;
 
-/** 正文字符数上限，用于在计算字节数之前先挡掉明显过长的输入。 */
+/** Character limit used to reject clearly oversized bodies before calculating their byte length. */
 const MAX_MESSAGE_TEXT_LENGTH = 524_288;
 
 type BrowserSessionTarget = {
@@ -340,8 +340,8 @@ export function parseBrowserRequest(source: string): BrowserRequest {
         type: "message.send",
         requestId,
         ...requireSessionTarget(value, requestId),
-        // 旧前端缓存升级期间可能暂时不带该字段；requestId 仍是单次连接内唯一值。
-        // 新前端会传持久 UUID，才能在断线重试时获得跨连接幂等性。
+        // An old cached frontend may omit this field briefly during upgrades; requestId remains unique per connection.
+        // New frontends send a persistent UUID to provide cross-connection idempotency for reconnect retries.
         clientMessageId: value.clientMessageId === undefined
           ? requestId
           : requireString(value.clientMessageId, "客户端消息 ID", requestId, 128),

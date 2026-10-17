@@ -1,7 +1,7 @@
 import { isObject } from "../shared/json.ts";
 import { readJsonIfPresent, writeJsonAtomically } from "../workers/atomic-json.ts";
 
-/** 回收站登记和钉住名单都是按 thread 记的小名单。 */
+/** Trash entries and pinned entries are both small lists keyed by thread. */
 export type ThreadScopedEntry = {
   threadId: string;
 };
@@ -11,7 +11,7 @@ type EntryFile<Entry extends ThreadScopedEntry> = {
   entries: Entry[];
 };
 
-/** 子类要说清楚的三件事：错误里怎么称呼自己、条目怎么复制、什么样的值算条目。 */
+/** Subclasses define their error label, entry cloning, and entry validation. */
 export type ThreadEntryStoreShape<Entry extends ThreadScopedEntry> = {
   label: string;
   clone: (entry: Entry) => Entry;
@@ -19,10 +19,10 @@ export type ThreadEntryStoreShape<Entry extends ThreadScopedEntry> = {
 };
 
 /**
- * Codex 仍保存真实会话；这里只持久化名单本身，不复制标题或对话内容。
+ * Codex retains the real session; this persists only the list, without copying titles or conversation content.
  *
- * 落盘走共享的 `writeJsonAtomically`（临时文件 → fsync → rename → 目录 fsync），
- * 写入排队串行。内存先改、落盘失败再回滚，所以外部读到的始终是已经落盘的那一份。
+ * Persistence uses shared `writeJsonAtomically` and serializes writes. Memory changes first and rolls
+ * back on failure, so external readers always see the persisted version.
  */
 export abstract class ThreadEntryStore<Entry extends ThreadScopedEntry> {
   readonly #filePath: string;
@@ -73,7 +73,7 @@ export abstract class ThreadEntryStore<Entry extends ThreadScopedEntry> {
     return true;
   }
 
-  /** 子类的 `open()` 建好实例后调用一次。文件不存在就是空名单。 */
+  /** Called once after a subclass `open()` creates the instance. A missing file means an empty list. */
   protected async load(): Promise<void> {
     const value = await readJsonIfPresent(this.#filePath);
     if (value === null) return;

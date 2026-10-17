@@ -5,19 +5,19 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-/** LaunchDaemon 下的 PATH 可能很小，因此使用绝对路径而不是依赖 PATH。 */
+/** LaunchDaemon may provide a minimal PATH, so use an absolute path instead of relying on PATH. */
 const VM_STAT_PATH = "/usr/bin/vm_stat";
 const VM_STAT_TIMEOUT_MS = 1_000;
 
-/** 读数来源。`os-freemem` 表示平台专用来源失败后的降级结果。 */
+/** Reading source. `os-freemem` indicates a fallback after the platform-specific source failed. */
 export type MemorySource = "linux-meminfo" | "darwin-vm-stat" | "os-freemem";
 
 export type MemoryReading = {
-  /** 可供启动新 Worker 使用的保守可用字节数。 */
+  /** Conservative number of bytes available for starting a new Worker. */
   availableBytes: number;
   platform: NodeJS.Platform;
   source: MemorySource;
-  /** 只有降级到 `os.freemem()` 时才有值，说明平台专用读数断在哪一步。 */
+  /** Present only after falling back to `os.freemem()`; identifies where platform-specific measurement failed. */
   degradedReason?: string;
 };
 
@@ -30,12 +30,13 @@ export type AvailableMemoryOptions = {
 };
 
 /**
- * 返回可用于决定是否启动新 Worker 的保守内存预算。
+ * Returns a conservative memory budget for deciding whether to start a new Worker.
  *
- * Linux 用 `/proc/meminfo` 的 `MemAvailable`，macOS 用 `vm_stat` 换算，两者都把
- * 可回收的文件缓存算作可用，语义一致，因此可以共用同一个门槛值。平台专用读数
- * 失败时降级到 `os.freemem()` 并在 `degradedReason` 里说明原因，由调用方决定
- * 怎么告诉用户；不返回 0，因为 0 会让门槛永久拦住所有会话。
+ * Linux uses `MemAvailable` from `/proc/meminfo`; macOS derives the value from `vm_stat`.
+ * Both count reclaimable file cache as available, giving them equivalent semantics and allowing one
+ * shared threshold. If platform-specific measurement fails, this falls back to `os.freemem()` and
+ * records the reason in `degradedReason` for the caller to present. It does not return zero, because
+ * that would cause the threshold to block every session indefinitely.
  */
 export async function readAvailableMemory(
   options: AvailableMemoryOptions = {},
@@ -72,7 +73,7 @@ export async function readAvailableMemory(
   return degraded(platform, `没有为 ${platform} 实现专用的内存读数`, options);
 }
 
-/** 解析 `/proc/meminfo` 的 `MemAvailable`，取不到可信数值时返回 undefined。 */
+/** Parses `MemAvailable` from `/proc/meminfo`; returns undefined if no trustworthy value is available. */
 export function parseLinuxAvailableBytes(meminfo: string): number | undefined {
   const match = /^MemAvailable:\s+(\d+)\s+kB$/mu.exec(meminfo);
   if (!match?.[1]) return undefined;
@@ -85,15 +86,15 @@ export type DarwinMemoryParse =
   | { ok: false; missing: string };
 
 /**
- * 把 `vm_stat` 的输出换算成可用字节。
+ * Converts `vm_stat` output into available bytes.
  *
- * macOS 没有 `MemAvailable` 那样的现成数值，因此这里先加出「确实被占住」的部分
- * ——匿名页、wired 页和压缩器占用的页，也就是活动监视器里的「已用内存」——再用
- * 物理内存总量减去它。空闲页和可回收的文件缓存都不计入已用，这样得到的结果与
- * Linux 的 `MemAvailable` 含义一致。
+ * macOS has no direct equivalent to `MemAvailable`, so this first totals memory that is truly occupied:
+ * anonymous pages, wired pages, and compressor pages, corresponding to "Memory Used" in Activity Monitor.
+ * It then subtracts that from total physical memory. Free pages and reclaimable file cache do not count
+ * as used, making the result equivalent in meaning to Linux `MemAvailable`.
  *
- * 任何一个必需字段（含页大小）解析不出来就返回 `missing`，由调用方降级，而不是
- * 猜一个看起来合理的数字。
+ * If any required field, including page size, cannot be parsed, returns `missing` so the caller can
+ * fall back instead of guessing a plausible-looking number.
  */
 export function parseDarwinAvailableBytes(vmStat: string, totalBytes: number): DarwinMemoryParse {
   if (!Number.isSafeInteger(totalBytes) || totalBytes <= 0) {
@@ -121,7 +122,7 @@ export function parseDarwinAvailableBytes(vmStat: string, totalBytes: number): D
   return { ok: true, availableBytes: Math.max(0, totalBytes - occupiedBytes) };
 }
 
-/** 可信读数低于门槛时的拦截提示，写明数值、来源和可调的门槛。 */
+/** Blocking message for a trustworthy reading below the threshold, including value, source, and configurable limit. */
 export function memoryLowMessage(
   action: string,
   reading: MemoryReading,
@@ -135,11 +136,12 @@ export function memoryLowMessage(
 }
 
 /**
- * 降级读数时的放行提示。
+ * Allow-through notice for a degraded reading.
  *
- * 读不到内存不等于内存不足，因此降级期间不按门槛拦截——否则一次解析失效就会让整台
- * 主机开不出任何会话，连修复所需的会话也开不出来。代价是这段时间没有启动前的内存
- * 保护，所以每次开新 Worker 都要把话说清楚，促成尽早修复。
+ * Failure to read memory does not imply low memory, so a degraded reading does not enforce the threshold.
+ * Otherwise, a single parsing failure could prevent every session on the host, including one needed to fix
+ * the problem. The tradeoff is losing the pre-start memory guard during this period, so every new Worker
+ * reports the condition to encourage a prompt repair.
  */
 export function memoryDegradedMessage(reading: MemoryReading, minimumBytes: number): string {
   const freememNote = reading.platform === "darwin"

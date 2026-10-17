@@ -3,7 +3,7 @@ import { isObject } from "../shared/json.ts";
 export const PRIVATE_ATTACHMENT_PATHS_START = "[AI_REMOTE_PRIVATE_ATTACHMENT_PATHS_V1]";
 export const PRIVATE_ATTACHMENT_PATHS_END = "[/AI_REMOTE_PRIVATE_ATTACHMENT_PATHS_V1]";
 
-/** 早期版本把文本附件内容作为独立输入发给 Codex；只在读取旧历史时识别。 */
+/** Early versions sent text attachment contents to Codex as separate inputs; recognized only in old history. */
 export const PRIVATE_ATTACHMENT_INPUT_PREFIX =
   "[CODEX_REMOTE_PRIVATE_ATTACHMENT_CONTENT_V1]";
 
@@ -21,7 +21,7 @@ export type AttachmentPathRecord = {
   size: number;
 };
 
-/** 用户消息里可以交给浏览器的附件字段；不含路径。 */
+/** Attachment fields from user messages that may be sent to the browser; excludes paths. */
 export type MessageAttachment = {
   id: string;
   originalName: string;
@@ -34,7 +34,7 @@ export type UserMessageContent = {
   attachments: AttachmentPathRecord[];
 };
 
-/** 给 CLI 的内部说明：JSON 元数据，不拼接 shell。 */
+/** Internal instructions for the CLI: JSON metadata, never interpolated into a shell command. */
 export function formatPrivateAttachmentPathsBlock(
   attachments: readonly AttachmentPathRecord[],
 ): string {
@@ -50,7 +50,7 @@ export function formatPrivateAttachmentPathsBlock(
   return `${PRIVATE_ATTACHMENT_PATHS_START}\n${BLOCK_INTRO}\n${payload}\n${PRIVATE_ATTACHMENT_PATHS_END}`;
 }
 
-/** 写进 Codex 输入的附件显示行。只供模型和 Codex 自己的界面阅读，Remote 不从中反推附件。 */
+/** Attachment display line written into Codex input. Only the model and Codex UI read it; Remote does not infer attachments from it. */
 export function attachmentDisplayText(
   text: string,
   attachments: readonly Pick<AttachmentPathRecord, "id" | "originalName">[],
@@ -74,11 +74,13 @@ export function messageAttachmentOf(record: {
 }
 
 /**
- * 把一条用户消息的输入分成可见正文和 Remote 自己附加的附件记录。
+ * Splits a user message into visible text and attachment records appended by Remote.
  *
- * Remote 发出的第一段文本总是用户正文加显示行，路径块和旧版附件内容各自是后面独立的一段。
- * 所以只有第一段之后、整段恰好是一个路径块的文本才被当作附件来源；用户正文里无论写了
- * 什么标记都原样保留。显示行只按这些记录精确地从正文末尾去掉，文件名里的换行也不例外。
+ * The first text block sent by Remote is always the user's text plus display lines. The path block and
+ * legacy attachment contents are separate later blocks. Therefore, only a block after the first one that
+ * consists entirely of a path block is treated as an attachment source; all markers in user text are
+ * preserved verbatim. Display lines are removed from the end of the text only when they exactly match
+ * these records, including filenames that contain newlines.
  */
 export function splitUserMessageContent(
   parts: readonly (string | null)[],
@@ -105,7 +107,7 @@ export function splitUserMessageContent(
   };
 }
 
-/** 整段文本必须恰好是一个路径块；前后多出任何字符都不算。 */
+/** The entire text must be exactly one path block; any extra character before or after invalidates it. */
 export function parseStandalonePrivateAttachmentPaths(
   text: string,
 ): AttachmentPathRecord[] | null {

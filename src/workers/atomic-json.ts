@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 
-/** 私有运行数据只允许属主读写。 */
+/** Private runtime data is readable and writable only by its owner. */
 export const PRIVATE_FILE_MODE = 0o600;
 export const PRIVATE_DIRECTORY_MODE = 0o700;
 
@@ -11,12 +11,12 @@ export async function ensurePrivateDirectory(directory: string): Promise<void> {
 }
 
 /**
- * 写临时文件 → fsync → rename 覆盖 → fsync 父目录。
+ * Write temporary file → fsync → rename over target → fsync parent directory.
  *
- * resolve 表示新内容和指向它的目录项都已同步到存储，掉电后读到的就是新内容。
- * rename 之前的任何失败都会尽力关闭并删除临时文件，再抛出原始错误，目标文件保持旧内容。
- * 目录同步失败时 rename 已经发生：掉电后可能是旧内容也可能是新内容，调用方必须把它当作
- * 失败处理，不能继续依赖这次写入的不可逆操作。
+ * Resolution means both the new content and its directory entry have reached storage.
+ * Any failure before rename closes and removes the temporary file when possible, then rethrows the original error.
+ * If directory sync fails, rename has already happened and either version may survive power loss. Callers must
+ * treat this as failure and must not proceed with irreversible operations that depend on this write.
  */
 export async function writeJsonAtomically(filePath: string, value: unknown): Promise<void> {
   const directory = path.dirname(filePath);
@@ -42,13 +42,13 @@ export async function writeJsonAtomically(filePath: string, value: unknown): Pro
   await syncDirectory(directory);
 }
 
-/** 删除文件并同步父目录；文件本来不存在也同步一次，补上此前可能未落盘的删除。 */
+/** Delete a file and sync its parent; sync even when absent to persist a possibly unsynced earlier deletion. */
 export async function removeFileDurably(filePath: string): Promise<void> {
   await fs.rm(filePath, { force: true });
   await syncDirectory(path.dirname(filePath));
 }
 
-/** 目录不存在时逐级创建，并同步每个新目录项所在的上级目录。 */
+/** Create missing directories one level at a time and sync each new entry's parent. */
 async function ensureDurableDirectory(directory: string): Promise<void> {
   const created = await fs.mkdir(directory, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
   if (created === undefined) return;
@@ -59,7 +59,7 @@ async function ensureDurableDirectory(directory: string): Promise<void> {
   }
 }
 
-/** Linux 与 macOS 都允许以只读方式打开目录并 fsync；Node 在 macOS 上会用 F_FULLFSYNC。 */
+/** Linux and macOS both allow opening a directory read-only for fsync; Node uses F_FULLFSYNC on macOS. */
 async function syncDirectory(directory: string): Promise<void> {
   const handle = await fs.open(directory, "r");
   try {
@@ -71,7 +71,7 @@ async function syncDirectory(directory: string): Promise<void> {
   await handle.close();
 }
 
-/** 文件不存在时返回 null；内容损坏时抛错，由调用方决定是否保持未就绪。 */
+/** Return null when absent; throw for corrupt content so the caller can decide whether to remain unready. */
 export async function readJsonIfPresent(filePath: string): Promise<unknown | null> {
   let source: string;
   try {

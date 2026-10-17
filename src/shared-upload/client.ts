@@ -24,11 +24,11 @@ import {
 
 const MAX_RESPONSE_BYTES = 1_048_576;
 
-/** 普通 JSON 请求从发出到收完响应的总时限。 */
+/** Total deadline for a regular JSON request, from sending it through receiving the complete response. */
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
-/** 流式上传的总时限，与共享服务的票据有效期一致：票据过期后再传也不会成功。 */
+/** Total streaming upload deadline, matching the shared service ticket lifetime; uploads cannot succeed after expiry. */
 const DEFAULT_UPLOAD_TIMEOUT_MS = 10 * 60_000;
-/** 上传过程中 socket 两个方向都没有任何字节的最长时间，包括正文传完后等待响应。 */
+/** Maximum time with no bytes in either socket direction during upload, including while awaiting the response. */
 const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
 
 export type SharedUploadClientOptions = {
@@ -37,7 +37,7 @@ export type SharedUploadClientOptions = {
   idleTimeoutMs?: number;
 };
 
-/** 共享服务错误 code 对应的公开文案。下游原文只写进服务日志。 */
+/** Public messages for shared-service error codes. Original downstream text is written only to service logs. */
 const PUBLIC_ERROR_MESSAGES: Record<string, string> = {
   content_length_required: "上传必须提供 Content-Length。",
   content_length_mismatch: "上传大小与声明不一致。",
@@ -82,8 +82,8 @@ export class SharedUploadClient {
   }
 
   /**
-   * 把浏览器请求体流式转交共享服务。请求体中断、`signal` 取消、无进展或总时限到期，
-   * 都会销毁同一个下游请求并以 `SharedUploadError` 结束。
+   * Streams the browser request body to the shared service. A body interruption, `signal` cancellation,
+   * idle timeout, or total deadline destroys the same downstream request and ends with `SharedUploadError`.
    */
   async upload(
     ticket: string,
@@ -119,7 +119,8 @@ export class SharedUploadClient {
     try {
       return decoded(() => decodeLeaseResponse(value, binding, ownerId, attachmentIds));
     } catch (error) {
-      // 服务端已经建了租约；不能交给 Codex，就尽快释放，失败时靠 15 分钟自然过期。
+      // The server has already created the lease. If it cannot be passed to Codex, release it promptly;
+      // if release fails, rely on its natural 15-minute expiry.
       const leaseId = leaseIdOf(value);
       if (leaseId) await this.releaseLease(leaseId, ownerId).catch(() => {});
       throw error;
@@ -224,7 +225,7 @@ export class SharedUploadClient {
           },
         );
       });
-      // destroy() 之后还可能再报一次 error，不能用 once。
+      // Another error may arrive after destroy(), so this cannot use once.
       request.on("error", (error) => {
         if (!settled) finish(connectionError(error));
       });
@@ -271,7 +272,7 @@ async function collectResponse(response: IncomingMessage): Promise<unknown> {
   try {
     value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
-    // 下面按状态码分别处理。
+    // Handle each status code below.
   }
   const status = response.statusCode ?? 502;
   if (status >= 400) throw downstreamError(value, status);
@@ -283,7 +284,7 @@ async function collectResponse(response: IncomingMessage): Promise<unknown> {
   return value;
 }
 
-/** 只保留稳定的机器 code，公开文案由本仓库决定；原文进日志。 */
+/** Keeps only the stable machine code; this repository defines public messages and logs the original text. */
 function downstreamError(value: unknown, status: number): SharedUploadError {
   const error = typeof value === "object" && value !== null &&
       "error" in value && typeof value.error === "object" && value.error !== null

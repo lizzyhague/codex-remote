@@ -13,8 +13,9 @@ import {
 } from "./types.ts";
 
 /**
- * 共享上传服务是另一个仓库。这里把它的 `/v1` 响应当作不可信输入：逐字段解码、只投影
- * 已声明字段，并核对与请求的绑定。任何不一致都在进入浏览器、SQLite 或 Codex 之前失败。
+ * The shared upload service lives in another repository. Its `/v1` responses are untrusted input here:
+ * decode each field, project only declared fields, and verify request binding. Any mismatch fails before
+ * reaching the browser, SQLite, or Codex.
  */
 export class SharedUploadProtocolError extends SharedUploadError {
   readonly detail: string;
@@ -52,7 +53,7 @@ export function decodeUploadResponse(value: unknown): PublicAttachment {
   return decodePublicAttachment(record(value, "upload").attachment, "upload.attachment");
 }
 
-/** 公开附件只保留这些字段；未声明的字段（包括任何路径别名）一律丢弃。 */
+/** Public attachments retain only these fields; all undeclared fields, including path aliases, are discarded. */
 export function decodePublicAttachment(value: unknown, label = "attachment"): PublicAttachment {
   const object = record(value, label);
   const kind = object.kind;
@@ -77,7 +78,7 @@ export function decodePublicAttachment(value: unknown, label = "attachment"): Pu
   };
 }
 
-/** 在已经解码的 lease 之外，本仓库其他地方也用它把私有附件投影成公开对象。 */
+/** Also used outside decoded leases to project private attachments into public objects. */
 export function publicAttachmentOf(attachment: PublicAttachment): PublicAttachment {
   return {
     id: attachment.id,
@@ -95,7 +96,7 @@ export function publicAttachmentOf(attachment: PublicAttachment): PublicAttachme
   };
 }
 
-/** 只读出 leaseId，供解码失败时释放这份租约。 */
+/** Extracts only the leaseId so the lease can be released after decoding fails. */
 export function leaseIdOf(value: unknown): string | null {
   if (!isRecord(value) || !isRecord(value.lease)) return null;
   const leaseId = value.lease.leaseId;
@@ -128,7 +129,8 @@ export function decodeLeaseResponse(
     }
     byId.set(publicValue.id, { ...publicValue, path: attachmentPath });
   });
-  // 服务端按首次出现去重；这里要求返回的 ID 集合与请求完全相同，并按请求顺序排列。
+  // The server deduplicates by first occurrence; require the returned ID set to match the request exactly,
+  // then arrange it in request order.
   const requested = [...new Set(attachmentIds)];
   if (byId.size !== requested.length || requested.some((id) => !byId.has(id))) {
     throw new SharedUploadProtocolError("lease.attachments 与请求的附件 ID 集合不一致");

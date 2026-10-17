@@ -178,7 +178,7 @@ for (const outcome of ["success", "failure"]) {
     const opening = context.resumeSession("session-2");
     assert.equal(context.state.navigationBusy, true);
 
-    // 另一台设备把正在打开的目标归档；页面此时仍显示“加载中”。
+    // Another device archives the target while it opens; the page still displays “加载中”.
     assert.equal(context.cancelRemovedOpenIntent({
       type: "sessions.changed",
       projectId: "project-1",
@@ -275,7 +275,7 @@ test("loading older history is refused while a session switch is in flight", asy
   await busy.context.loadOlderHistory();
   assert.deepEqual(busy.requests, []);
 
-  // 后端会核对点击时看到的项目和会话，不会在导航后推进新会话的游标。
+  // The backend verifies the project and session seen at click time and will not advance a new session after navigation.
   const idle = loadOlderContext(false);
   await idle.context.loadOlderHistory();
   assert.deepEqual(JSON.parse(JSON.stringify(idle.requests)), [{

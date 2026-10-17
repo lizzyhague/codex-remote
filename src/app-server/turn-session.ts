@@ -115,7 +115,7 @@ export class CodexTurnCancelledError extends Error {
   }
 }
 
-/** `turn/interrupt` 在截止时间内没有得到确认；调用方应改走强制关闭 Worker。 */
+/** `turn/interrupt` was not acknowledged by the deadline; the caller should force-close the Worker. */
 export class CodexInterruptTimeoutError extends Error {
   constructor(timeoutMs: number) {
     super(`Codex 在 ${timeoutMs} ms 内没有确认停止请求。`);
@@ -126,8 +126,8 @@ export class CodexInterruptTimeoutError extends Error {
 const DEFAULT_INTERRUPT_TIMEOUT_MS = 10_000;
 
 /**
- * 管理一个 Codex 会话中的当前任务，并把 app-server 通知缩成前端需要的事件。
- * 它不负责 WebSocket，也不会把 app-server 的原始协议暴露给浏览器。
+ * Manages the current turn in a Codex session and condenses app-server notifications into
+ * frontend events. It neither manages WebSockets nor exposes the raw app-server protocol.
  */
 export class CodexTurnSession {
   readonly #transport: AppServerTransport;
@@ -186,7 +186,7 @@ export class CodexTurnSession {
     this.#attachmentMappings = [...mappings];
   }
 
-  /** `settings` 是会话运行中选定、这一轮起生效的模型与权限覆盖。 */
+  /** `settings` contains model and permission overrides selected during the session, effective this turn. */
   async startTextTurn(
     text: string,
     attachments: CodexTurnAttachment[] = [],
@@ -268,9 +268,10 @@ export class CodexTurnSession {
   }
 
   /**
-   * 请求停止当前 turn，最多等待 interruptTimeoutMs。返回值只表示 Codex 确认收到停止
-   * 请求，不表示 turn 已经结束；超时以 CodexInterruptTimeoutError 拒绝。启动中的等待
-   * 也计入同一个截止时间。重复调用共用同一个请求，各自计时。
+   * Requests interruption of the current turn and waits at most interruptTimeoutMs. Resolution only
+   * means Codex acknowledged the request, not that the turn has ended. A timeout rejects with
+   * CodexInterruptTimeoutError. Time spent waiting for startup counts toward the same deadline.
+   * Repeated calls share one request but track their own deadlines.
    */
   interruptActiveTurn(): Promise<boolean> {
     const request = this.#requestInterrupt();

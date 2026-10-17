@@ -1,9 +1,9 @@
-/** 从进程启动到开始监听的总时限；覆盖目录 App Server 初始化和启动清理。 */
+/** Overall deadline from process start to listening, including directory App Server initialization and startup cleanup. */
 export const STARTUP_TIMEOUT_MS = 120_000;
 
 /**
- * 进程准备以失败结束时，再等这么久看停止信号是否正在路上。进程管理器同时向 Node
- * 和目录子进程发信号时，子进程可能先退出、Node 稍后才处理到自己的信号。
+ * When process preparation fails, wait this long for a stop signal already in flight. If the supervisor
+ * signals Node and the directory child together, the child may exit before Node handles its signal.
  */
 export const STOP_SIGNAL_GRACE_MS = 1_000;
 
@@ -15,8 +15,8 @@ export type SignalSource = {
 };
 
 /**
- * 进程级停止意图的唯一权威。信号回调里同步置位，任何后到的子进程退出、启动失败都
- * 先查这里再决定退出码。
+ * Single source of truth for process-level stop intent. Signal handlers set it synchronously; later child
+ * exits and startup failures check it before choosing an exit code.
  */
 export class StopIntent {
   readonly #source: SignalSource;
@@ -46,7 +46,7 @@ export class StopIntent {
     return this.#requested;
   }
 
-  /** 已经收到或在 `ms` 内收到停止信号时为 true。 */
+  /** True if a stop signal has arrived or arrives within `ms`. */
   async arrivesWithin(ms: number): Promise<boolean> {
     if (this.#stopRequested) return true;
     let timer: NodeJS.Timeout | undefined;
@@ -78,8 +78,8 @@ export class StartupAbortedError extends Error {
 }
 
 /**
- * ready 前阶段的取消源：总时限到点或收到停止信号都会让 `guard()` 立即拒绝。被放弃的
- * 外部等待由调用方关闭其底层资源来收口，这里只负责不再等它。
+ * Cancellation source before readiness: the overall deadline or a stop signal makes `guard()` reject
+ * immediately. Callers close underlying resources for abandoned external waits; this only stops awaiting them.
  */
 export class StartupDeadline {
   readonly #timeoutMs: number;
@@ -93,7 +93,7 @@ export class StartupDeadline {
     this.#aborted = new Promise<never>((_resolve, reject) => {
       this.#rejectAborted = reject;
     });
-    // guard() 之外也可能先到点；没有等待者时不能变成未处理拒绝。
+    // The deadline can fire outside guard(); with no waiter it must not become an unhandled rejection.
     this.#aborted.catch(() => {});
     this.#timer = setTimeout(() => this.#abort("timeout"), timeoutMs);
     void stop.whenRequested().then(() => this.#abort("stop"));
@@ -113,7 +113,7 @@ export class StartupDeadline {
     return Promise.race([work, this.#aborted]);
   }
 
-  /** 服务已经就绪；之后的停止信号走正常关闭流程。 */
+  /** The service is ready; subsequent stop signals follow the normal shutdown path. */
   finish(): void {
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = null;

@@ -145,7 +145,7 @@ test("an incomplete release removes nothing; the next complete one also clears i
   current = c;
   missing = c.assets[1];
   await worker.dispatch(navigation());
-  // 不完整的 c 没有替换离线页，a、b 两套都还在，c 已下载的部分暂留。
+  // Incomplete c did not replace the offline page; sets a and b remain, along with the downloaded part of c.
   assert.deepEqual(await worker.cachedPaths(), ["/", ...a.assets, ...b.assets, c.assets[0]].sort());
   current = d;
   missing = null;
@@ -160,7 +160,7 @@ test("overlapping offline page updates do not delete resources the other update 
     if (request.mode === "navigate") return new Response(current.html);
     return new Response("resource");
   }, {
-    // 让第一次清理停在列举缓存处，第二次导航在这期间完成。
+    // Pause the first cleanup while listing caches so the second navigation finishes in the meantime.
     async beforeKeys() { if (gate) await gate.promise; },
   });
   const [b, c] = ["b", "c"].map(release);

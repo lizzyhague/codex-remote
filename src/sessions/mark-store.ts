@@ -32,7 +32,7 @@ const SHAPE: ThreadEntryStoreShape<MarkEntry> = {
     typeof value.projectId === "string" && value.projectId.length > 0,
 };
 
-/** 用户钉住的会话名单。 */
+/** The list of sessions pinned by the user. */
 export class MarkStore extends ThreadEntryStore<MarkEntry> {
   static async open(filePath: string): Promise<MarkStore> {
     const store = new MarkStore(path.resolve(filePath), SHAPE);

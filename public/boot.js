@@ -31,19 +31,19 @@
 }());
 
 /*
- * 页面更新由普通导航完成。SW 只管理离线副本，不因接管页面而自动重载。
- * 保留经典脚本注册，即使 app.js 无法启动也能维护离线支持。
+ * Normal navigation updates the page. The service worker only manages the offline copy and does not reload on takeover.
+ * Keep registration in a classic script so offline support remains maintainable even if app.js cannot start.
  */
 (function () {
   if (!("serviceWorker" in navigator)) return;
   window.addEventListener("load", function () {
     navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).catch(function () {
-      // 无法注册不影响联网使用。
+      // Registration failure does not affect online use.
     });
   });
 }());
 
-/* 内部滚动列表不依赖浏览器是否提供原生下拉刷新。 */
+/* Nested scrolling lists do not depend on whether the browser provides native pull-to-refresh. */
 (function () {
   if (!("ontouchstart" in window)) return;
   var start = null;
@@ -69,7 +69,7 @@
     if (target.closest("input, textarea, button, a, select, dialog, [contenteditable], pre")) return;
     var surface = target.closest(".timeline, .session-list, .app-header, .login-view");
     if (!surface || surface.scrollTop > 0 || window.scrollY > 0) return;
-    // 嵌套滚动区（例如长问题卡）先处理自己的滚动。
+    // Nested scrolling areas, such as long question cards, handle their own scrolling first.
     for (var node = target; node && node !== surface; node = node.parentElement) {
       if (node.scrollHeight > node.clientHeight && /auto|scroll/.test(getComputedStyle(node).overflowY)) return;
     }

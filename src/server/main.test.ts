@@ -13,8 +13,8 @@ import { TrashStore } from "../sessions/trash-store.ts";
 import { MAX_TIMER_DELAY_MS } from "../workers/manager.ts";
 import { readOfflineGraceMs } from "./main.ts";
 
-// 子进程从源码副本启动：服务开始监听时会发布并回收 public/.web-assets，不能动仓库里
-// 那份（部署时它就是运行中服务的目录）。
+// Start the child from a source copy: the service publishes and prunes public/.web-assets when it begins
+// listening, and must not touch the repository copy (which is the live service directory when deployed).
 const REPO = path.resolve(import.meta.dirname, "../..");
 const APP_COPY = await mkdtemp(path.join(tmpdir(), "codex-remote-main-app-"));
 after(() => rm(APP_COPY, { recursive: true, force: true }));
@@ -28,8 +28,8 @@ await symlink(path.join(REPO, "node_modules"), path.join(APP_COPY, "node_modules
 const MAIN_URL = pathToFileURL(path.join(APP_COPY, "src/server/main.ts")).href;
 
 /**
- * 假的 `codex app-server --stdio`：`hang` 从不回 initialize，`ready` 只回 initialize、
- * 其余请求永不回答。stdin 结束就退出，模拟真实子进程的正常关闭。
+ * Fake `codex app-server --stdio`: `hang` never answers initialize, while `ready` answers only initialize
+ * and leaves all other requests unanswered. It exits when stdin ends, simulating a normal child shutdown.
  */
 const FAKE_CODEX = `
 import { appendFileSync } from "node:fs";
@@ -159,7 +159,7 @@ async function waitForReady(service: Service): Promise<void> {
   await waitFor(() => service.output().stdout.includes("正在监听"), "服务开始监听");
 }
 
-/** 等服务退出，记下仍存活的目录子进程，再强制清掉测试残留。 */
+/** Wait for the service to exit, record surviving directory children, then force-clean test leftovers. */
 async function finish(
   service: Service,
   inspect?: () => Promise<void>,
@@ -257,7 +257,7 @@ test("Node handling the stop signal first keeps a planned stop successful", asyn
   });
   await waitForReady(service);
   const pid = await directoryPid(service);
-  // 进程管理器向整组发信号：Node 先收到，目录子进程紧接着自行退出。
+  // The supervisor signals the whole group: Node receives it first, then the directory child exits on its own.
   service.child.kill("SIGTERM");
   process.kill(pid, "SIGTERM");
   assert.equal((await finish(service)).code, 0);
@@ -271,7 +271,7 @@ test("the directory child exiting before Node sees the signal is still a planned
   });
   await waitForReady(service);
   const pid = await directoryPid(service);
-  // 子进程先死并已被 Node 回收，Node 的停止信号随后才到。
+  // The child dies and is reaped by Node before Node receives its own stop signal.
   process.kill(pid, "SIGTERM");
   await waitFor(() => !alive(pid), "目录子进程被回收");
   service.child.kill("SIGTERM");

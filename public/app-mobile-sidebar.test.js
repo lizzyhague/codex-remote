@@ -14,7 +14,7 @@ function section(start, end) {
   return source.slice(from, to);
 }
 
-/** 只模拟本测试关心的焦点规则：inert 子树里的元素不能获得焦点，已聚焦元素变 inert 后焦点掉回 body。 */
+/** Model only the focus rules relevant here: inert descendants cannot focus, and focused elements return focus to body when made inert. */
 function fakeDom() {
   const document = {
     body: null,
@@ -102,7 +102,7 @@ function harness({ mobile = true, sidebarCollapsed = false } = {}) {
     document,
     elements,
     storage,
-    /** 键盘或辅助技术激活汉堡按钮。 */
+    /** Activate the hamburger button through the keyboard or assistive technology. */
     open() {
       elements.openSidebarButton.focus();
       assert.equal(document.activeElement, elements.openSidebarButton);

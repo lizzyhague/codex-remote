@@ -80,7 +80,7 @@ test("reloads transition states and rejects them for archived-origin entries", a
     [["thread-in", "trashing"], ["thread-out", "restoring"]],
   );
 
-  // archived 来源进出回收站没有 Codex 副作用，出现过渡阶段说明文件被写坏了。
+  // Moving an archived source into or out of trash has no Codex side effects, so a transitional state means the file is corrupt.
   for (const state of ["trashing", "restoring", "unknown"]) {
     await writeFile(filePath, JSON.stringify({
       version: 1,

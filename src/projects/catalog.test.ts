@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { ProjectCatalog } from "./catalog.ts";
 
-test("只列出根目录下一层的普通项目文件夹", async (context) => {
+test("lists only ordinary project directories directly below each root", async (context) => {
   const temporaryDirectory = await mkdtemp(path.join(tmpdir(), "codex-remote-projects-"));
   context.after(() => rm(temporaryDirectory, { recursive: true, force: true }));
 
@@ -37,7 +37,7 @@ test("只列出根目录下一层的普通项目文件夹", async (context) => {
   );
 });
 
-test("拒绝让两个 root ID 指向同一个规范物理根", async (context) => {
+test("rejects two root IDs that resolve to the same canonical physical root", async (context) => {
   const temporaryDirectory = await mkdtemp(path.join(tmpdir(), "codex-remote-project-roots-"));
   context.after(() => rm(temporaryDirectory, { recursive: true, force: true }));
 

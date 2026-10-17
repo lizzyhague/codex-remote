@@ -17,7 +17,7 @@ export type ApplicationSettings = {
   developerInstructions: string;
   defaultModel: string | null;
   defaultReasoningEffort: string | null;
-  /** 新建会话的权限方案 id；`null` 表示不指定，沿用 Codex 默认。 */
+  /** Permission profile ID for new sessions; `null` leaves it unspecified and uses the Codex default. */
   defaultPermissions: string | null;
 };
 
@@ -64,8 +64,9 @@ export function defaultApplicationSettings(): ApplicationSettings {
 }
 
 /**
- * 后端全局应用设置。与回收站、钉住名单同目录，原子覆盖、属主读写。
- * 空 Developer 指令表示不追加用户内容；空模型、强度和权限表示沿用 Codex 默认。
+ * Backend-wide application settings. Stored beside trash and pinned-session data, replaced atomically,
+ * and readable and writable only by the owner. Empty Developer instructions append no user content;
+ * empty model, effort, and permissions values use Codex defaults.
  */
 export class ApplicationSettingsStore {
   readonly #filePath: string;

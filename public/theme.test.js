@@ -48,7 +48,7 @@ function run({ stored = null, systemLight = false, storage = true } = {}) {
   };
 }
 
-test("未保存选择时跟随系统及系统后续变化", () => {
+test("an unsaved choice follows the system and subsequent system changes", () => {
   const page = run({ systemLight: true });
   assert.equal(page.api.get(), "system");
   assert.equal(page.theme(), "light");
@@ -56,7 +56,7 @@ test("未保存选择时跟随系统及系统后续变化", () => {
   assert.equal(page.theme(), "dark");
 });
 
-test("手动选择覆盖系统，并能恢复为跟随系统", () => {
+test("a manual choice overrides the system and can return to following it", () => {
   const page = run({ stored: "dark", systemLight: true });
   assert.equal(page.theme(), "dark");
   page.api.set("light");
@@ -67,20 +67,20 @@ test("手动选择覆盖系统，并能恢复为跟随系统", () => {
   assert.equal(page.store.has("codex-remote.theme"), false);
 });
 
-test("无效选择按跟随系统处理", () => {
+test("an invalid choice is treated as following the system", () => {
   const page = run({ stored: "sepia", systemLight: false });
   assert.equal(page.api.get(), "system");
   assert.equal(page.theme(), "dark");
 });
 
-test("本地存储不可用时仍能切换当前页面", () => {
+test("the current page can still switch when local storage is unavailable", () => {
   const page = run({ storage: false, systemLight: false });
   page.api.set("light");
   assert.equal(page.api.get(), "light");
   assert.equal(page.theme(), "light");
 });
 
-test("其他标签页修改选择时同步当前页面", () => {
+test("changes from another tab synchronize the current page", () => {
   const page = run({ systemLight: false });
   page.storageEvent("codex-remote.theme", "light");
   assert.equal(page.theme(), "light");
@@ -88,7 +88,7 @@ test("其他标签页修改选择时同步当前页面", () => {
   assert.equal(page.theme(), "dark");
 });
 
-test("所有页面都在样式表之前加载主题脚本", async () => {
+test("every page loads the theme script before stylesheets", async () => {
   for (const name of ["index.html", "view.html"]) {
     const html = await readFile(new URL(`./${name}`, import.meta.url), "utf8");
     const script = html.indexOf('<script src="/theme.js"></script>');

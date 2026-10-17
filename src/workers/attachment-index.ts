@@ -23,12 +23,12 @@ const INDEX_VERSION = 1;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/u;
 
 /**
- * 会话附件显示索引：只保存 id / 原名 / 真实路径，给页面转换用。
- * 不进入浏览器 DTO、公开事件或通用日志。
+ * Session attachment display index: stores only id, original name, and real path for page conversion.
+ * It never enters browser DTOs, public events, or general logs.
  *
- * 同一会话的读写都排在一条链上。`remove()` 一经调用就给会话立下删除屏障：之后开始
- * 执行的登记、重建和读取都不再碰文件，永久删除完成后索引不会被迟到的写入重建。
- * 屏障只在进程内；进程重启后迟到的操作也随之消失。
+ * Reads and writes for a session share one chain. Calling `remove()` establishes a deletion barrier:
+ * later registrations, rebuilds, and reads no longer touch the file, so late writes cannot recreate it.
+ * The barrier is process-local; late operations disappear on process restart as well.
  */
 export class AttachmentDisplayIndex {
   readonly #directory: string;
@@ -55,8 +55,8 @@ export class AttachmentDisplayIndex {
   }
 
   /**
-   * 按历史重建会话索引：加载与全部登记是链上的一次操作，删除不能插在两条登记之间。
-   * 返回操作完成时的映射；会话已删除时返回空数组且不写文件。
+   * Rebuild from history as one chained load-and-register operation, preventing deletion between entries.
+   * Return the completed mapping; if deleted, return an empty array without writing.
    */
   async rebuild(
     sessionId: string,
@@ -69,13 +69,13 @@ export class AttachmentDisplayIndex {
     return flatten(await this.#load(sessionId));
   }
 
-  /** 已加载会话的同步视图；未加载或已删除时返回空数组。 */
+  /** Synchronous view of a loaded session; empty when unloaded or deleted. */
   peek(sessionId: string): IndexedAttachment[] {
     if (this.#removed.has(sessionId)) return [];
     return flatten(this.#loaded.get(sessionId));
   }
 
-  /** 删除会话索引并立下删除屏障；失败可重试，屏障不会撤销。 */
+  /** Delete the index and establish a deletion barrier; failures are retryable and the barrier remains. */
   async remove(sessionId: string): Promise<void> {
     this.#filePath(sessionId);
     this.#removed.add(sessionId);
@@ -96,7 +96,7 @@ export class AttachmentDisplayIndex {
     return this.#enqueue(sessionId, () => this.#loadInChain(sessionId));
   }
 
-  /** 只在会话链内调用。 */
+  /** Called only within the session chain. */
   async #loadInChain(sessionId: string): Promise<Map<string, IndexedAttachment[]> | undefined> {
     if (this.#removed.has(sessionId)) return undefined;
     const existing = this.#loaded.get(sessionId);
@@ -117,7 +117,7 @@ export class AttachmentDisplayIndex {
     return this.#enqueue(sessionId, async () => {
       const current = await this.#loadInChain(sessionId);
       if (!current) return undefined;
-      // 写成功后才替换缓存；写失败时缓存仍与磁盘一致，下次同样的登记会重试写入。
+      // Replace the cache only after a successful write; on failure it still matches disk and registration retries next time.
       const next = new Map(current);
       let changed = false;
       for (const { messageId, records } of updates) {

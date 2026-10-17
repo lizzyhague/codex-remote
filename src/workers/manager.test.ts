@@ -84,7 +84,7 @@ test("publishes complete approval paths and resolves an answer only once", async
     canApprove: true,
   });
 
-  // 新设备认证时会得到同一条仍有效的待答项；它回答后所有设备收到全局终态。
+  // A newly authenticated device receives the same pending request; after it answers, all devices receive the global terminal state.
   fixture.manager.clientAuthenticated("computer");
   await waitFor(() => commandEvents().length === 2);
   assert.deepEqual(fixture.manager.answerApproval("command-approval-1", "approve_once"), {
@@ -237,13 +237,13 @@ test("reconnecting mid-sweep spares the turns the sweep has not reached", async 
   fixture = await managerFixture(context, {
     offlineGraceMs: 5,
     beforeInterrupt: async () => {
-      // 第一路的中断还在路上，客户端就回来了。
+      // The client returned while interruption of the first request was still in flight.
       if (reconnected) return;
       reconnected = true;
       fixture.manager.clientAuthenticated("phone");
     },
   });
-  // 两个审批要在宽限到点之前就挂着，才会走到逐路处理的那个循环。
+  // Both approvals must be pending before the grace period expires to reach the per-request processing loop.
   fixture.manager.clientAuthenticated("phone");
   fixture.manager.start();
   const first = await fixture.manager.enqueueMessage(
@@ -270,7 +270,7 @@ test("reconnecting mid-sweep spares the turns the sweep has not reached", async 
   await waitFor(() => fixture.store.require(first.taskId).status === "interrupted");
   await delay(20);
 
-  // 第二路的审批还挂着，等着刚回来的客户端去答。
+  // The second approval remains pending for the returning client to answer.
   assert.equal(secondWorker!.interruptCount, 0);
   assert.equal(secondWorker!.cancelledApprovals, 0);
   assert.equal(secondWorker!.approved, 0);
@@ -325,7 +325,7 @@ test("stages model and permission changes during an active task for the next tur
   );
   assert.equal(permission.title, "权限将在下一轮生效");
   assert.equal(model.title, "模型将在下一轮生效");
-  // 正在跑的这一轮不受影响。
+  // The current turn is unaffected.
   assert.equal(running.setPermissionsCalls, 0);
   assert.equal(running.fullAccessEnabled, true);
   assert.deepEqual(fixture.store.sessionPendingTurnSettings("thread-1"), {
@@ -384,7 +384,7 @@ test("keeps a newer staged choice made after the next turn was submitted", async
 
   await fixture.manager.enqueueMessage("project-1", "thread-1", "message-2", "第二轮");
   await waitFor(() => startCount === 2);
-  // 第二轮已经送出 `:read-only`，Codex 还没确认时用户又选了一次。
+  // The second turn sent `:read-only`, and the user selected again before Codex confirmed it.
   await fixture.manager.runCommand(
     "project-1", "thread-1", "permission-2", "permissions", ":workspace", null, null,
   );
@@ -718,13 +718,13 @@ test("a queued task started on a degraded memory reading carries a replayable no
   );
   const worker = await fixture.waitForWorker();
 
-  // 读数降级仍按原决定放行，同时 task.starting 带上与 direct 路径同源的提示。
+  // A degraded reading preserves the allow decision, while task.starting carries the same notice as the direct path.
   const starting = events.find((entry) => entry.event.type === "task.starting");
   assert.equal(starting?.audience, "session");
   assert.match(String(starting?.event.notice), /已经放行/u);
   assert.match(String(starting?.event.notice), /MemAvailable/u);
 
-  // 重连时从事件日志回放，提示仍在。
+  // The notice remains when reconnecting and replaying the event log.
   fixture.manager.clientDisconnected("phone");
   fixture.manager.clientAuthenticated("tablet");
   const resumed = await fixture.manager.resumeSession("project-1", "thread-1");
@@ -736,7 +736,7 @@ test("a queued task started on a degraded memory reading carries a replayable no
   worker.complete("completed");
   await waitFor(() => fixture.store.require(accepted.taskId).status === "completed");
 
-  // 可信读数下启动的任务不带提示。
+  // A task started with a reliable reading carries no notice.
   degraded = false;
   const next = await fixture.manager.enqueueMessage(
     "project-1",
@@ -1004,7 +1004,7 @@ test("releases an attached provisional Worker as soon as it exits unexpectedly",
   dead.exitUnexpectedly();
   await waitFor(() => dead.closeCount === 1);
 
-  // 页面仍 attach，但死亡 Worker 已不占容量；首条消息改由新 Worker 恢复会话。
+  // The page remains attached, but the dead Worker no longer consumes capacity; a new Worker resumes the session for the first message.
   const accepted = await fixture.manager.enqueueMessage(
     "project-1",
     threadId,
@@ -1382,11 +1382,11 @@ test("shutdown force-closes a launch whose turn/start and interrupt never answer
         failStart = reject;
       });
     },
-    // 真实 CodexTurnSession 的截止时间到点后就是这个错误。
+    // A real CodexTurnSession produces this error when its deadline expires.
     beforeInterrupt: async () => {
       throw new CodexInterruptTimeoutError(10);
     },
-    // 关闭 Worker 会让仍在等待的 turn/start 随连接关闭而失败。
+    // Closing the Worker makes the pending turn/start fail when the connection closes.
     beforeWorkerClose: async () => {
       failStart?.(new Error("codex app-server 连接已经关闭。"));
     },
@@ -1425,7 +1425,7 @@ test("shutdown still closes an active Worker whose interrupt times out", async (
   const worker = await fixture.waitForWorker();
   await fixture.manager.close();
   assert.equal(worker.closeCount, 1);
-  // 没有收到 turn 终态，留给重启按后端重启中断，而不是用户停止。
+  // With no terminal turn state, leave it for restart recovery as a backend-restart interruption rather than a user stop.
   assert.equal(fixture.store.require(accepted.taskId).status, "running");
   fixture.restartManager();
   const recovered = fixture.store.require(accepted.taskId);
@@ -1691,8 +1691,8 @@ test("does not replay an interrupted turn after rewind removed it", async (conte
     offlineGraceMs: 10,
     afterWorkerCreate: (worker) => {
       workerCreations += 1;
-      // 第一次恢复和执行 rewind 时，持久化历史里仍有这一轮；rewind 后的
-      // 第二次恢复模拟 Codex 返回已经删掉该 turn 的历史。
+      // The persisted history still contains this turn during the first resume and rewind;
+      // the second resume simulates Codex returning history with that turn removed.
       if (workerCreations === 2 || workerCreations === 3) {
         (worker.opened.turns as Turn[]).push(interruptedTurn);
       }
@@ -1777,7 +1777,7 @@ test("leases attachment paths only while the persisted task is pending", async (
           ...binding,
           originalName: "screen.png",
           path: "/private/uploads/screen.png",
-          // 未声明的私有别名：只能留在内存租约里，不能进 SQLite。
+          // An undeclared private alias may remain only in the in-memory lease, never in SQLite.
           storagePath: "/private/uploads/screen.png",
           declaredMime: "image/png",
           detectedMime: "image/png",
@@ -2223,8 +2223,8 @@ test("stopping compact after the instruction is sent refuses instead of interrup
   await fixture.manager.enqueueCommandTask("project-1", "thread-1", "compact-1", "compact");
   await compactStarted;
 
-  // 指令已经发给 Codex：不去打断，如实回绝。放掉闸门要先于断言，
-  // 否则断言失败会把压缩卡在半路，拖垮收尾。
+  // The command has reached Codex: do not interrupt it, and reject accurately. Release the gate before assertions,
+  // or an assertion failure would strand compaction midway and block cleanup.
   const stopped = await fixture.manager.stopTask("thread-1");
   releaseCompact();
   await waitFor(() => fixture.workers.some((worker) => worker.turns.activeTurnId !== null));
@@ -2376,7 +2376,7 @@ test("permanent deletion during a history attachment sync leaves no index behind
 
   const syncing = fixture.manager.syncAttachmentMappings("thread-1", historyWithAttachments());
   await renames.reached;
-  // 设备一的打开还在写索引，设备二的永久删除已经走到清理本地记录。
+  // Device one's open is still writing the index while device two's permanent deletion is cleaning local records.
   const forgetting = fixture.manager.forgetSession("thread-1");
   renames.release();
 
@@ -2456,7 +2456,7 @@ function historyWithAttachments(): Turn[] {
   ] as unknown as Turn[];
 }
 
-/** 让第一次 rename 停住，模拟索引写入正在进行时插进来的其他调用。 */
+/** Pause the first rename to simulate another call arriving during an index write. */
 function pauseFirstRename(context: test.TestContext) {
   const realRename = fs.rename.bind(fs);
   let calls = 0;
@@ -2599,7 +2599,7 @@ async function managerFixture(
     attachmentIndex,
     attachmentIndexFile: (threadId: string) =>
       path.join(directory, "attachment-index", `${threadId}.json`),
-    /** 模拟服务重启：旧 Manager 已关闭，新 Manager 读同一个 SQLite。 */
+    /** Simulate a service restart: close the old Manager and have the new one read the same SQLite database. */
     restartManager: () => {
       const next = createManager();
       managers.push(next);
@@ -2986,7 +2986,7 @@ class FakeWorker {
     );
   }
 
-  /** 与 SessionWorker 相同：并发 close() 共享同一次关闭。 */
+  /** Like SessionWorker, concurrent close() calls share a single shutdown. */
   close(): Promise<void> {
     this.#closing ??= this.#close();
     return this.#closing;

@@ -4,14 +4,14 @@ import path from "node:path";
 
 const RELATIVE_IMPORT = /\b(?:import|from)\s+["']\.\/([^"'?#]+)(?:\?[^"']*)?["']/gu;
 const VERSION = /^[a-f0-9]{64}$/u;
-/** 除当前版本外，磁盘上再保留最近发布的几套旧快照，供仍打开的旧页面取资源。 */
+/** Besides the current version, retain several recent snapshots for old pages that remain open. */
 export const RETAINED_PREVIOUS_VERSIONS = 2;
-/** 进程崩溃留下的 staging 目录超过这个时间才清理，不碰别的进程正在写的。 */
+/** Remove staging directories left by crashes only after this age, avoiding ones another process may be writing. */
 const STALE_STAGING_MS = 60 * 60 * 1000;
 
 /**
- * 进程启动时确认的整套前端。之后工作树里的 `public/` 怎么变，这个进程都只提供这一套：
- * 页面、脚本、样式、SW 和图标一起跟后端代码固定成一个版本，重启才整体换新。
+ * Complete frontend snapshot confirmed at process startup. Regardless of later changes under `public/`, this process
+ * serves only this set: page, scripts, styles, service worker, and icons stay pinned with the backend until restart.
  */
 export class WebAssets {
   readonly #root: string;
@@ -27,8 +27,8 @@ export class WebAssets {
   }
 
   /**
-   * 读入白名单里的全部文件，把 JS/CSS 发布成 `.web-assets/<hash>/`，并回收超出保留数的旧快照。
-   * 模块依赖或页面引用的脚本缺失时拒绝加载：宁可不启动，也不对外提供不完整的一套。
+   * Read every allowlisted file, publish JS/CSS under `.web-assets/<hash>/`, and prune snapshots beyond retention.
+   * Reject loading if a module dependency or page-referenced script is missing: fail startup instead of serving an incomplete set.
    */
   static async load(
     root: string,
@@ -62,7 +62,7 @@ export class WebAssets {
     }
     const version = hash.digest("hex");
 
-    // SW 要等模块依赖也进缓存后才切换离线页，所以清单含整套快照，不只是 HTML 直接引用。
+    // The service worker switches offline pages only after module dependencies are cached, so list the whole snapshot, not just direct HTML references.
     const assetList = entries.map(([file]) => `/assets/${version}/${file}`).join(",");
     for (const [file, body] of contents) {
       if (!file.endsWith(".html")) continue;
@@ -89,12 +89,12 @@ export class WebAssets {
     return this.#version;
   }
 
-  /** 启动时读入的文件；HTML 已改写成本版本的资源地址。启动时不存在的文件返回 null。 */
+  /** Files loaded at startup, with HTML rewritten to this version's asset URLs. Files absent at startup return null. */
   file(name: string): Buffer | null {
     return this.#files.get(name) ?? null;
   }
 
-  /** 当前版本从内存取；仍保留在磁盘上的旧版本给旧页面用。 */
+  /** Serve the current version from memory and retained disk versions to old pages. */
   async read(pathname: string): Promise<{ body: Buffer; file: string } | null> {
     const match = /^\/assets\/([a-f0-9]{64})\/([a-zA-Z0-9_.-]+)$/u.exec(pathname);
     if (!match || !this.#versioned.has(match[2]!)) return null;
@@ -122,7 +122,7 @@ async function publish(directory: string, version: string, entries: [string, Buf
   }
   if (!exists) {
     await mkdir(directory, { recursive: true });
-    // 先写 staging 再整体改名，别的进程不会读到写到一半的版本目录。
+    // Write to staging before an atomic rename so other processes never read a partially written version directory.
     const staging = await mkdtemp(path.join(directory, ".staging-"));
     try {
       for (const [file, body] of entries) await writeFile(path.join(staging, file), body);
@@ -135,12 +135,12 @@ async function publish(directory: string, version: string, entries: [string, Buf
       await rm(staging, { recursive: true, force: true });
     }
   }
-  // 目录修改时间记录“最近一次作为当前版本启动”，回退到旧版本时它也重新算作最新。
+  // Directory mtime records the latest startup as current; rolling back makes an old version newest again.
   const now = new Date();
   await utimes(target, now, now);
 }
 
-/** 保留当前版本和最近的若干旧版本。回收失败只记日志，不挡启动。 */
+/** Retain the current version and several recent ones. Log pruning failures without blocking startup. */
 async function prune(directory: string, current: string, retainPrevious: number): Promise<void> {
   try {
     const now = Date.now();

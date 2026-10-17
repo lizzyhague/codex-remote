@@ -1,4 +1,4 @@
-/** 浏览器按站点保存的显示时区偏好。不写入服务端，也不在设备或应用之间同步。 */
+/** Per-site display-time-zone preference stored in the browser. It is not sent to the server or synced across devices or apps. */
 export const DISPLAY_TIMEZONE_KEY = "codex-remote.display-timezone";
 export const DEFAULT_CITY_TIME_ZONE = "Asia/Shanghai";
 
@@ -72,12 +72,12 @@ export function saveDisplayTimezonePreference(input, storage) {
   try {
     store.setItem(DISPLAY_TIMEZONE_KEY, JSON.stringify(next));
   } catch {
-    // 浏览器禁用本地存储时，当前页面仍可继续使用内存中的选择。
+    // If the browser disables local storage, the current page can still use the in-memory choice.
   }
   return next;
 }
 
-/** 跟随设备时每次现读浏览器时区，不把第一次读到的偏移存下来。 */
+/** In device mode, read the browser time zone each time instead of retaining the first observed offset. */
 export function deviceTimeZone() {
   try {
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;

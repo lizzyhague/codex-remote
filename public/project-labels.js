@@ -1,5 +1,5 @@
 /**
- * 同名项目只使用已经公开的 rootId 消歧；真实根路径始终留在后端。
+ * Disambiguate same-name projects only with the already public rootId; real root paths always remain on the backend.
  */
 export function projectDisplayLabel(project, projects) {
   if (!project) return "目录不可用";

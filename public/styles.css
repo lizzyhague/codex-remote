@@ -4,13 +4,13 @@
   background: var(--surface-page);
   color: var(--text);
 
-  /* 配色输入 */
+  /* Color inputs */
   --neutral: #0f0f10;
   --theme: #a7f3d0;
   --theme-ink: #102019;
   --brand-mark: var(--theme);
 
-  /* 共用混合比例 */
+  /* Shared mixing ratios */
   --mix-tint: 3%;
   --mix-surface-sunken: 65%;
   --mix-surface-page: 100%;
@@ -36,7 +36,7 @@
   --mix-copy-success: 10%;
   --mix-divider-accent: 70%;
 
-  /* 推导角色 */
+  /* Derived roles */
   --tint: color-mix(in srgb, var(--theme) var(--mix-tint), var(--neutral));
   --surface-sunken: color-mix(in srgb, var(--tint) var(--mix-surface-sunken), black);
   --surface-page: color-mix(in srgb, var(--tint) var(--mix-surface-page), black);
@@ -67,7 +67,7 @@
   --shadow-md: 44px rgb(0 0 0 / 42%);
   --shadow-lg: 90px rgb(0 0 0 / 52%);
 
-  /* 选色时只切换这些值，规则保持不动。 */
+  /* Change only these values when switching palettes; keep the rules unchanged. */
   --bubble-ai: color-mix(in srgb, var(--theme) var(--mix-bubble-ai), var(--surface-2));
   --permission-fill: color-mix(in srgb, var(--theme) var(--mix-permission), var(--surface-2));
   --copy-success-fill: color-mix(in srgb, var(--theme) var(--mix-copy-success), var(--surface-2));
@@ -82,7 +82,7 @@
   --header-height: 64px;
 }
 
-/* 浅色表面沿用 lanting；Codex 主色按 lanting 的 mint 成员规则混入 40% 正文色。 */
+/* Light surfaces follow lanting; the Codex accent mixes in 40% text color using lanting's mint-member rule. */
 :root[data-theme="light"] {
   color-scheme: light;
 
@@ -296,7 +296,7 @@ button.small {
   color: var(--danger) !important;
 }
 
-/* 登录状态行默认是次要文字；错误为红色，启动和连接过程为黄色。 */
+/* Login status uses secondary text by default; errors are red, while startup and connection progress are yellow. */
 #login-status:not([data-tone="error"]):not([data-tone="progress"]) {
   color: var(--text-muted) !important;
 }
@@ -402,7 +402,7 @@ button.small {
   gap: 0.3rem;
 }
 
-/* 侧栏图标按钮共用方形键面和 16px 线条图标。 */
+/* Sidebar icon buttons share a square key surface and 16px line icons. */
 button.icon-button {
   width: 34px;
   min-width: 34px;
@@ -477,8 +477,8 @@ button.icon-button svg {
   font-size: 0.86rem;
 }
 
-/* 选中时不用浏览器自带的 2px 外圈，改用 1.5px 内框，保留原有选中色。
-   多出的 0.5px 用内阴影画，不占位置，内容不跳。 */
+/* Replace the browser's 2px outer focus ring with a 1.5px inset ring while retaining selection color.
+   Draw the extra 0.5px with an inset shadow so it takes no space and content does not jump. */
 .project-controls select:focus,
 .session-search input:focus {
   outline: 0;
@@ -1380,7 +1380,7 @@ button.icon-button svg {
   place-items: center;
   padding: 0;
   border-radius: 6px;
-  /* 按钮压在代码第一行上，底色必须不透明，阴影用来和下面的字拉开层次。 */
+  /* The button overlays the first code line, so its background must be opaque; shadow separates it from the text. */
   background: var(--surface-3);
   box-shadow: 0 2px var(--shadow-sm);
   color: var(--text-mid);
@@ -2131,7 +2131,7 @@ button:focus-visible {
   }
 }
 
-/* 指标保持单行，窄屏时在这一行内横滑。 */
+/* Keep metrics on one line and scroll horizontally within it on narrow screens. */
 .conversation-title-row {
   display: flex;
   align-items: center;
@@ -2198,9 +2198,9 @@ button:focus-visible {
 }
 
 /*
- * 原生 select 的箭头由浏览器/系统画，各平台长得都不一样也不受 CSS 控制；
- * 之前替它用的 ⌄ 是 Unicode 修饰字符 U+02C5，本来就不是给 UI 当箭头的。
- * 现在两个框都用同一段内联 SVG。
+ * Native select arrows are drawn by the browser/system, vary by platform, and are outside CSS control.
+ * The previous replacement, ⌄, is Unicode modifier U+02C5 rather than a UI arrow.
+ * Both controls now use the same inline SVG.
  */
 .composer-control-chevron {
   flex: none;
@@ -2261,7 +2261,7 @@ button:focus-visible {
   font-size: 0.78rem;
 }
 
-/* 云端 Select Model 那种分块：模块之间断开，模块内的条目不断。 */
+/* Group like the cloud Select Model: separated modules with contiguous rows inside each module. */
 .composer-picker-group + .composer-picker-group {
   margin-top: 0.35rem;
   padding-top: 0.35rem;
@@ -2307,7 +2307,7 @@ button:focus-visible {
   font-size: 0.78rem;
 }
 
-/* 还有下一级的模块（Effort / More models）用箭头提示，和斜杠菜单一致。 */
+/* Use an arrow for modules with another level (Effort / More models), matching the slash menu. */
 .composer-picker-option[data-drill-in="true"] .composer-picker-trailing::after {
   content: " ›";
   color: var(--text-muted);
@@ -2324,7 +2324,7 @@ button:focus-visible {
   background: var(--theme-wash);
 }
 
-/* 选中标记由 aria-selected 画出来，不再由后端拼进标签文字。 */
+/* Render the selection mark from aria-selected instead of having the backend embed it in label text. */
 .composer-picker-option[aria-selected="true"] strong::before {
   content: "✓ ";
 }
@@ -2340,7 +2340,7 @@ button:focus-visible {
   .composer-picker-menu { left: 0.6rem; right: 0.6rem; max-height: 46dvh; }
 }
 
-/* 下拉刷新只在手势进行时显示；由页面实现，避免原生手势重复触发。 */
+/* Show pull-to-refresh only during the gesture; the page implements it to avoid duplicate native triggers. */
 html.pull-refresh-enabled {
   overscroll-behavior-y: none;
 }

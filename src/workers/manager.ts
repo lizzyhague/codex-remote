@@ -63,7 +63,7 @@ import { PublicError } from "../shared/public-error.ts";
 const DEFAULT_MAX_WORKERS = 2;
 const DEFAULT_MIN_AVAILABLE_MEMORY_BYTES = 1_073_741_824;
 const DEFAULT_OFFLINE_GRACE_MS = 10_000;
-/** Node 计时器能表示的最长延迟（32 位有符号整数上限）。 */
+/** Maximum delay representable by a Node timer (the signed 32-bit integer limit). */
 export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const DEFAULT_QUEUE_RETRY_MS = 5_000;
 const DEFAULT_WORKER_START_TIMEOUT_MS = 120_000;
@@ -85,9 +85,9 @@ export class WorkerManagerError extends PublicError {
 export type ManagedSessionReady = {
   loadState: "ready";
   opened: OpenedSession;
-  /** 会话已经打开，但有需要转给浏览器的说明（目前只有内存读数降级）。 */
+  /** The session opened with a notice for the browser (currently only degraded memory readings). */
   notice?: string;
-  /** 新建时没能用上全局默认设置的说明。只随这次 start 返回，重新打开同一 Worker 不再带。 */
+  /** Notice that global defaults could not be used. Returned only by this start, not when reopening the Worker. */
   settingsNotice?: string;
   activeTaskId: string | null;
   controlsActiveTask: boolean;
@@ -96,7 +96,7 @@ export type ManagedSessionReady = {
 
 export type ManagedSessionLoading = {
   loadState: "queued" | "starting";
-  /** 后端内部用来维持连接挂载身份；发送浏览器前会移除。 */
+  /** Internal attachment identity, removed before sending to the browser. */
   projectId: string;
   sessionId: string;
   activeTaskId: string;
@@ -106,7 +106,7 @@ export type ManagedSessionLoading = {
 export type ManagedSessionOpen = ManagedSessionReady | ManagedSessionLoading;
 
 export type WorkerManagerEvent = StoredWorkerEvent & {
-  /** 待答请求发给所有已认证客户端；其他事件只发给正在查看该会话的客户端。 */
+  /** Pending prompts go to all authenticated clients; other events go only to clients viewing the session. */
   audience: "session" | "all";
 };
 
@@ -123,9 +123,9 @@ export type SessionWorkerManagerOptions = {
   minAvailableMemoryBytes?: number;
   offlineGraceMs?: number;
   queueRetryMs?: number;
-  /** Worker 初始化和会话恢复的等待上限；默认两分钟。 */
+  /** Timeout for Worker initialization and session resume; two minutes by default. */
   workerStartTimeoutMs?: number;
-  /** 请求已发出后等待 native turn ID 的上限；默认十秒。 */
+  /** Timeout for a native turn ID after sending the request; ten seconds by default. */
   taskStartTimeoutMs?: number;
   now?: () => number;
   workerFactory?: WorkerFactory;
@@ -151,11 +151,11 @@ type ActiveWorker = {
   cleaned: boolean;
   interruptionReason: string | null;
   startTimer: NodeJS.Timeout | null;
-  /** 压缩指令已经发给 Codex；从这一刻起这个任务不再接受停止。 */
+  /** The compaction command has reached Codex; from this point the task cannot be stopped. */
   compactIssued: boolean;
 };
 
-/** 启动中任务被取消的来源；先到的来源生效，后来的不覆盖。 */
+/** Source that canceled a starting task; the first source wins and later sources do not overwrite it. */
 type LaunchCancelReason = "user_requested" | "backend_stopping";
 
 type LaunchingTask = {
@@ -164,9 +164,9 @@ type LaunchingTask = {
   worker: SessionWorker | null;
   cancelReason: LaunchCancelReason | null;
   /**
-   * 任务已在 SQLite 标记为 running，并紧接着（中间没有 await）发出 turn/start 或
-   * compact。越过这条边界后，重启不能安全重放，只能记为中断；之前的阶段只做了可重做
-   * 的准备（附件租约、索引登记、Worker 创建、权限恢复）。
+   * The task is marked running in SQLite and immediately, without an await, sends turn/start or compact.
+   * Beyond this boundary a restart cannot replay safely and must record an interruption. Earlier stages perform
+   * only repeatable preparation: attachment leases, index registration, Worker creation, and permission restore.
    */
   turnSubmitted: boolean;
   settled: boolean;
@@ -187,8 +187,8 @@ type WorkerOperation = {
 };
 
 /**
- * 后端级会话主管理器。浏览器连接只负责 attach/detach；任务、writer、审批与
- * 事件日志都属于这里，因此页面断开不会销毁正在运行的 turn。
+ * Backend session manager. Browser connections only attach and detach; tasks, writers, approvals, and event
+ * logs live here, so disconnecting a page does not destroy a running turn.
  */
 export class SessionWorkerManager {
   readonly metrics = new SessionMetricsStore();
@@ -217,17 +217,17 @@ export class SessionWorkerManager {
   readonly #provisionalWorkers = new Map<string, ProvisionalWorker>();
   readonly #authenticatedClients = new Set<string>();
   readonly #clientSessions = new Map<string, string>();
-  /** 用户最后确认的会话设置；任务自己的 effective 权限固化在 WorkerTask。 */
+  /** Last session settings confirmed by the user; each task's effective permissions are fixed in WorkerTask. */
   readonly #sessionDesiredFullAccess = new Map<string, boolean>();
-  /** 会话运行中选定、下一轮 `turn/start` 才带上的模型与权限；同样落 SQLite。 */
+  /** Model and permissions selected during a turn for the next `turn/start`; also persisted in SQLite. */
   readonly #sessionPendingTurnSettings = new Map<string, PendingTurnSettings | null>();
   readonly #threadOperationTails = new Map<string, Promise<void>>();
   readonly #attachmentLeases = new Map<string, AttachmentLease>();
   readonly #workerStartControllers = new Set<AbortController>();
   readonly #workerOperations = new Set<WorkerOperation>();
-  /** 已离开可查 map、仍在异步收尾的 Worker 关闭与清理；总关闭必须等它们真正结束。 */
+  /** Worker shutdowns and cleanup no longer in searchable maps but still finishing; total shutdown awaits them. */
   readonly #closingWork = new Set<Promise<void>>();
-  /** 已进入的附件索引操作；关闭先等它们结束，再 drain 索引。 */
+  /** Admitted attachment-index operations; shutdown waits for them before draining the index. */
   readonly #indexOperations = new Set<Promise<unknown>>();
   #workerReservations = 0;
   #offlineSinceMs: number | null = null;
@@ -280,7 +280,7 @@ export class SessionWorkerManager {
   ): Promise<AttachmentDisplayMapping[]> {
     if (!this.#attachmentIndex) return [];
     if (this.#closed) throw new WorkerManagerError("worker_manager_closed", "后端正在停止。");
-    // 整轮重建在索引链上一次完成；永久删除要么排在它之后删掉结果，要么让它不再写。
+    // Complete the rebuild as one index-chain operation; permanent deletion either follows it or prevents its write.
     const mappings = await this.#trackIndexOperation(
       this.#attachmentIndex.rebuild(threadId, collectHistoryAttachmentRecords(turns)),
     );
@@ -288,7 +288,7 @@ export class SessionWorkerManager {
     return mappings;
   }
 
-  /** 会话被永久删除后，清掉后端为它留的附件显示索引和工作状态记录。 */
+  /** Remove the backend attachment display index and work-state records after permanent session deletion. */
   async forgetSession(threadId: string): Promise<void> {
     if (this.#closed) throw new WorkerManagerError("worker_manager_closed", "后端正在停止。");
     const { keptActive } = this.#store.forgetThread(threadId);
@@ -441,15 +441,15 @@ export class SessionWorkerManager {
       operation.worker = worker;
       operation.ownsWorker = true;
       this.#assertOpen();
-      // 退出回调早于登记时找不到任何角色；发布前在这里拦下，由 operation 关闭。
+      // An exit callback arriving before registration finds no role; catch it here before publication and let the operation close it.
       this.#assertWorkerAlive(worker);
       this.#recordDesiredFullAccess(worker.threadId, worker.fullAccessEnabled);
       this.#provisionalWorkers.set(worker.threadId, { worker, closeTimer: null });
       operation.worker = null;
       operation.ownsWorker = false;
       operation.countsCapacity = false;
-      // Worker 创建完成到浏览器 attach 之间也可能断线。先按无人持有处理；
-      // 正常的 attach 会在同一轮微任务中取消这个计时器。
+      // Disconnection can occur between Worker creation and browser attach. Treat it as unowned first;
+      // a normal attach cancels this timer in the same microtask turn.
       this.#armProvisionalClose(worker.threadId);
       return {
         loadState: "ready",
@@ -689,7 +689,7 @@ export class SessionWorkerManager {
             ? await worker.commands.setModel(option, argument)
             : await worker.commands.setPermissions(option);
           this.#assertOpen();
-          // 已经直接写进 Codex 的那一项不再留着等下一轮，免得旧选择把它盖回去。
+          // Do not retain a value written directly to Codex for the next turn, where an old selection could overwrite it.
           this.#updatePendingTurnSettings(threadId, worker, (pending) => {
             if (command === "model") delete pending.model;
             else delete pending.permissions;
@@ -719,9 +719,9 @@ export class SessionWorkerManager {
             ...pending,
             permissions: staged.permissions,
           }));
-          // desired setting 跟着用户的选择走：下一条消息准入时按它固化 permission_mode，
-          // 启动前的 reconcile 才不会把刚选的权限调回去。正在跑的这一轮仍按 Worker
-          // 的 effective 状态决定离线自动批准。
+          // Follow the user's choice in desired settings so the next admitted message fixes permission_mode from it
+          // and pre-start reconciliation does not revert the new permission. Offline auto-approval for the current
+          // turn still uses the Worker's effective state.
           this.#recordDesiredFullAccess(threadId, staged.fullAccess);
           return staged.message;
         },
@@ -776,7 +776,7 @@ export class SessionWorkerManager {
   attachSession(clientId: string, projectId: string, threadId: string): void {
     this.#assertKnownThreadProject(projectId, threadId);
     this.detachSession(clientId);
-    // WebSocket 断开时在线登记会立即删除；较晚完成的请求不能重新占住会话。
+    // WebSocket disconnect removes online registration immediately; a later request completion cannot reclaim the session.
     if (!this.#authenticatedClients.has(clientId)) return;
     this.#clientSessions.set(clientId, threadId);
     const provisional = this.#provisionalWorkers.get(threadId);
@@ -835,7 +835,7 @@ export class SessionWorkerManager {
       active.interruptionReason = "backend_stopping";
       active.worker.approvals.cancelThread(active.worker.threadId);
       active.worker.interactions.cancelThread(active.worker.threadId);
-      // interrupt 有截止时间；超时或失败都继续关闭 Worker，由进程组信号兜底。
+      // Interrupt has a deadline; on timeout or failure, continue closing the Worker with process-group signals as fallback.
       await active.worker.turns.interruptActiveTurn().catch(() => false);
       await this.#closeWorker(active.worker).catch(() => {});
       this.#locks.release(active.task.projectId, active.ownerId);
@@ -846,7 +846,7 @@ export class SessionWorkerManager {
         await this.#closeWorker(provisional.worker).catch(() => {});
       }
     }));
-    // 终态清理、空会话回收和意外退出的收尾可能已离开可查 map；它们只在这里仍有持有者。
+    // Terminal cleanup, empty-session collection, and unexpected-exit cleanup may leave searchable maps; only this retains them.
     while (this.#closingWork.size > 0) {
       await Promise.all(this.#closingWork);
     }
@@ -867,9 +867,9 @@ export class SessionWorkerManager {
   }
 
   /**
-   * 关闭时的启动中任务：未越过 turn 边界的，由启动流程在下一个检查点保留 queued 并
-   * 退出；已经提交 turn 的，按 backend_stopping 中断，interrupt 超时就直接关闭 Worker，
-   * 让仍在等待的 turn/start 以连接关闭结束，启动流程才能收尾。
+   * Starting tasks during shutdown: before the turn boundary, the startup flow leaves them queued at its next
+   * checkpoint and exits. Submitted turns are interrupted as backend_stopping; if interrupt times out, close the
+   * Worker so pending turn/start ends with the connection and startup can finish.
    */
   async #stopLaunchForShutdown(launching: LaunchingTask): Promise<void> {
     launching.cancelReason ??= "backend_stopping";
@@ -1115,9 +1115,10 @@ export class SessionWorkerManager {
   }
 
   /**
-   * 模型和权限在会话运行中也能改。空闲时和以前一样，用短命令 Worker 立即写进 Codex；
-   * 有任务时借正在跑的 Worker 读列表、校验选项，选定的值由 `busy` 存成下一轮的设置，
-   * 不碰正在跑的这一轮。任务还在排队或启动、收尾时没有可借的 Worker，照旧拒绝。
+   * Models and permissions can change while a session is active. When idle, a short-lived command Worker writes
+   * directly to Codex. During a task, the running Worker lists and validates options while `busy` stores the chosen
+   * value for the next turn without affecting the current one. Queued, starting, and finishing tasks have no Worker
+   * available to borrow, so changes are rejected as before.
    */
   #withSettingsWorker<Result>(
     projectId: string,
@@ -1201,7 +1202,7 @@ export class SessionWorkerManager {
           sessionId: task.threadId,
           taskId: task.id,
           status: "queued",
-          // 后台启动没有请求响应可带这条提示；写进事件日志，重连回放时也能看到。
+          // Background startup has no request response for this notice; log it as an event so reconnect replay shows it.
           ...(gate?.notice ? { notice: gate.notice } : {}),
         }, this.#now());
         this.#emit(starting, "session");
@@ -1273,7 +1274,7 @@ export class SessionWorkerManager {
         await this.#abandonLaunch(launching);
         return;
       }
-      // 从这里到发出 turn/start 或 compact 没有 await。
+      // There is no await from here through sending turn/start or compact.
       launching.turnSubmitted = true;
       const active: ActiveWorker = {
         task: marked,
@@ -1300,7 +1301,7 @@ export class SessionWorkerManager {
       }
 
       let startPromise: Promise<string | null>;
-      // 压缩不是对话轮次，待生效的设置留给下一条消息。
+      // Compaction is not a conversation turn, so pending settings remain for the next message.
       const submittedSettings = task.kind === "message"
         ? this.#knownPendingTurnSettings(task.threadId)
         : null;
@@ -1311,9 +1312,9 @@ export class SessionWorkerManager {
           turnSettingsOverride(submittedSettings),
         );
       } else {
-        // 打断一轮压缩会给会话上下文留下什么，Codex 没有给出保证，所以指令一旦
-        // 发出就不再停。标记必须在请求之前落下，中间不能有 await，否则会出现
-        // “指令已发但仍被当成可取消”的缝。
+        // Codex does not guarantee the session context left by interrupted compaction, so once sent it cannot stop.
+        // Set the marker before the request with no intervening await, avoiding a window where a sent command is
+        // still considered cancelable.
         active.compactIssued = true;
         startPromise = worker.commands.compact();
       }
@@ -1324,7 +1325,7 @@ export class SessionWorkerManager {
         await worker.turns.interruptActiveTurn().catch(() => false);
       }
       const nativeTurnId = await startPromise;
-      // Codex 接受了这一轮才算交付；失败时保留，用户下一条消息会再带一次。
+      // Delivery occurs only when Codex accepts the turn; retain it on failure so the user's next message carries it again.
       if (submittedSettings) {
         this.#clearSubmittedTurnSettings(task.threadId, worker, submittedSettings);
       }
@@ -1554,8 +1555,8 @@ export class SessionWorkerManager {
 
   async #handleOfflineGraceExpired(): Promise<void> {
     for (const active of this.#workers.values()) {
-      // 每一路开始前都要重新确认没人在线：处理上一路时有真实的等待，客户端
-      // 可能已经重连上来了，后面这些轮次不该再按“没人接”处理。
+      // Recheck that nobody is online before each request: processing the previous one involves real waiting, during
+      // which a client may reconnect, so later turns must not be treated as unattended.
       if (this.#authenticatedClients.size > 0) return;
       if (active.worker.interactions.pendingForThread(active.task.threadId).length > 0) {
         await this.#interruptForOfflineInteraction(active);
@@ -1589,9 +1590,9 @@ export class SessionWorkerManager {
   }
 
   /**
-   * 请求 Codex 停止当前 turn。interrupt 在截止时间内没有确认时，不再等这个 Worker：
-   * 任务按 active.interruptionReason 记为中断，Worker 进入带信号兜底的关闭。
-   * 关闭在后台由 closing 集合持有，调用方（停止请求、离线处理）不必等进程退出。
+   * Ask Codex to stop the current turn. If interrupt is not confirmed by its deadline, stop waiting for this Worker:
+   * mark the task interrupted using active.interruptionReason and close the Worker with a signal fallback.
+   * The closing set owns shutdown in the background, so callers need not wait for process exit.
    */
   async #interruptOrForceStop(active: ActiveWorker): Promise<boolean> {
     try {
@@ -1710,8 +1711,8 @@ export class SessionWorkerManager {
       } catch (error) {
         console.error(`关闭会话 Worker 失败：${errorMessage(error)}`);
       } finally {
-        // close() 会同步取消 broker 中的待答项。保留 active 映射到这里，Manager
-        // 才能把对应 resolved 事件广播给所有设备。
+        // close() synchronously cancels pending broker prompts. Keep the active mapping until here so the Manager
+        // can broadcast the corresponding resolved event to every device.
         if (this.#workers.get(active.task.threadId) === active) {
           this.#workers.delete(active.task.threadId);
         }
@@ -1819,7 +1820,7 @@ export class SessionWorkerManager {
       }
       return;
     }
-    // 服务关闭发生在 turn 副作用边界之前：任务仍是 queued，原样留给重启后续做。
+    // Shutdown occurred before the turn side-effect boundary: leave the queued task unchanged for restart recovery.
     const keepQueued = reason === "backend_stopping" && !launching.turnSubmitted;
     if (!keepQueued) {
       const stored = this.#store.tryFinish(
@@ -1954,8 +1955,8 @@ export class SessionWorkerManager {
   }
 
   /**
-   * 每次更新都换一个新对象，启动流程靠对象身份判断送出的那份是否已被后来的选择取代。
-   * 还没有 desired setting 的会话，补行时按这个 Worker 的 effective 状态写，不凭空写成关。
+   * Each update uses a new object so startup can use identity to detect replacement by a later selection.
+   * When adding a row for a session without desired settings, use this Worker's effective state rather than defaulting off.
    */
   #updatePendingTurnSettings(
     threadId: string,
@@ -2028,8 +2029,8 @@ export class SessionWorkerManager {
       }
     }
     this.#assertOpen();
-    // 这里只恢复已经接受任务的 effective 权限。它可能是旧快照，不能反写并
-    // 覆盖用户后来确认的会话 desired setting。
+    // Restore only the effective permissions of the accepted task. This may be an old snapshot and must not
+    // overwrite session desired settings confirmed later by the user.
     return enabled;
   }
 
@@ -2045,7 +2046,7 @@ export class SessionWorkerManager {
     return [...this.#clientSessions.values()].includes(threadId);
   }
 
-  /** 所有 Worker 关闭都经过这里登记，删 map 后的收尾仍由 Manager 持有到结束。 */
+  /** Register every Worker shutdown here so the Manager retains cleanup after map removal until completion. */
   #closeWorker(worker: SessionWorker): Promise<void> {
     return this.#holdClosing(worker.close());
   }
@@ -2057,7 +2058,7 @@ export class SessionWorkerManager {
     return work;
   }
 
-  /** 意外退出只作用于该实例此刻仍担任的角色；其余阶段由当时的所有者在 RPC 失败或发布前处理。 */
+  /** Unexpected exit affects only roles the instance still owns; current owners handle other stages on RPC failure or before publication. */
   #handleUnexpectedExit(worker: SessionWorker, error: Error): void {
     const threadId = worker.threadId;
     const active = this.#workers.get(threadId);
@@ -2196,8 +2197,8 @@ export class SessionWorkerManager {
   }
 
   /**
-   * 启动 Worker 前的内存判断。`blocked` 是拦截用的可信读数，`notice` 是降级放行时
-   * 要转给浏览器的说明；两者不会同时出现。
+   * Memory decision before starting a Worker. `blocked` is a reliable reading used to reject startup; `notice`
+   * explains a degraded allow decision to the browser. They are mutually exclusive.
    */
   async #memoryGate(): Promise<{ blocked: MemoryReading | null; notice: string | null }> {
     const reading = await this.#availableMemory();
@@ -2412,7 +2413,7 @@ function publicFileSystemEntryScope(
       ? `项目目录/${publicPathScope(special.subpath, mappings)}`
       : "项目目录";
   }
-  // unknown 的结构未定义，无法保证网页展示了完整授权范围。
+  // The structure of unknown is undefined, so the page cannot guarantee it displays the full authorization scope.
   if (special.kind === "unknown") return null;
   return null;
 }
@@ -2458,10 +2459,10 @@ function terminalReplayTask(
 ): WorkerTask | null {
   if (!task) return null;
   if (task.status === "interrupted" && task.interruptionReason) {
-    // 中断事件会补出 Codex 历史没有的工具过程和“任务已停止”提示。不过 turn
-    // 已被 /rewind（或其他客户端）删除后，继续重放会把刚删掉的消息重新画回来，
-    // 而且每次刷新都会复活。没有 native turn 的中断仍只能依靠事件日志展示；有
-    // native turn 的则以本次 thread/resume 返回的持久化历史为准。
+    // Interruption events add tool activity absent from Codex history and the “任务已停止” notice. If /rewind
+    // or another client removed the turn, replay would redraw those messages and revive them on every refresh.
+    // Interruptions without a native turn still rely on the event log; those with one use persisted history from
+    // this thread/resume response as authoritative.
     if (task.nativeTurnId === null || turns.some((turn) => turn.id === task.nativeTurnId)) {
       return task;
     }
@@ -2479,8 +2480,8 @@ function nonnegativeInteger(value: number | undefined, fallback: number): number
 }
 
 /**
- * 交给 Node 计时器的毫秒数。超过 `MAX_TIMER_DELAY_MS` 的值 Node 会告警后改成 1 ms，
- * 所以和其他无效值一样退回默认值，不让超长配置反过来变成立即到点。
+ * Milliseconds passed to a Node timer. Node warns and changes values above `MAX_TIMER_DELAY_MS` to 1 ms,
+ * so fall back to the default as for other invalid values instead of making an excessive delay expire immediately.
  */
 function timerDelay(value: number | undefined, minimum: number, fallback: number): number {
   return Number.isSafeInteger(value) && value! >= minimum && value! <= MAX_TIMER_DELAY_MS
@@ -2488,7 +2489,7 @@ function timerDelay(value: number | undefined, minimum: number, fallback: number
     : fallback;
 }
 
-/** 写日志用：非 Error 也保留原值，便于查清到底抛了什么。 */
+/** For logging: preserve non-Error values to reveal exactly what was thrown. */
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

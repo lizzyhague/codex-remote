@@ -111,7 +111,7 @@ test("operations queued before a deletion but run after it never recreate the in
 
   const first = index.register(SESSION, "message-1", [privateAttachment("one")]);
   await renames.reached;
-  // 已经发出、但排在删除之前还没轮到执行的旧操作。
+  // An older operation already issued but queued ahead of the deletion and not yet running.
   const lateRegister = index.register(SESSION, "message-2", [privateAttachment("two")]);
   const lateRebuild = index.rebuild(SESSION, [
     { messageId: "message-3", attachments: [privateAttachment("three")] },
@@ -198,7 +198,7 @@ function privateAttachment(name: string) {
   return { id: `id-${name}`, originalName: `${name}.txt`, path: `/example/private/${name}.txt` };
 }
 
-/** 让第一次 rename 停住，模拟索引写入正在进行时插进来的其他调用。 */
+/** Pause the first rename to simulate another call arriving during an index write. */
 function pauseFirstRename(context: TestContext) {
   const realRename = fs.rename.bind(fs);
   let calls = 0;

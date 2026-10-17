@@ -22,13 +22,13 @@ type AppServerProcessFactory = (options: AppServerClientOptions) => AppServerPro
 export type DirectoryAppServerOptions =
   & Omit<AppServerClientOptions, "onNotification" | "onServerRequest">
   & {
-    /** 测试替身入口；生产环境始终使用真实的 stdio app-server。 */
+    /** Test-double injection point; production always uses the real stdio app-server. */
     clientFactory?: AppServerProcessFactory;
   };
 
 /**
- * 目录 App Server 子进程。会话列表、恢复和账号额度走这一个共享进程；turn 属于
- * 每个会话自己的 Worker，不在这里执行，因此它不会加载可写的 rollout。
+ * Directory App Server child process. Session listing, resumption, and account limits use this
+ * shared process. Turns run in per-session Workers, so this process never loads writable rollouts.
  */
 export class DirectoryAppServer {
   readonly #clientOptions: Omit<
@@ -42,7 +42,7 @@ export class DirectoryAppServer {
   #resolveUnexpectedExit!: () => void;
   #unexpectedExitResolved = false;
   #ready: Promise<AppServerProcess> | null = null;
-  /** 已创建的子进程，不论初始化是否完成；close() 靠它打断永不返回的 initialize。 */
+  /** The spawned process, initialized or not; close() uses it to interrupt a stuck initialize. */
   #started: AppServerProcess | null = null;
   #current: AppServerProcess | null = null;
   #closed = false;
@@ -67,7 +67,7 @@ export class DirectoryAppServer {
 
     const started = this.#startClient(params);
     this.#ready = started.then(({ client }) => client);
-    // 失败由调用方从本次返回值拿到；#ready 只供后续 request() 使用，不能成为未处理拒绝。
+    // The caller receives failure from this result; #ready serves later request() calls and must not reject unhandled.
     this.#ready.catch(() => {});
     const { response } = await started;
     return response;
@@ -98,7 +98,7 @@ export class DirectoryAppServer {
     this.#current.respondToServerRequest(id, result);
   }
 
-  /** 只在子进程意外退出时完成；主动 close() 不触发。 */
+  /** Resolves only when the child exits unexpectedly; an explicit close() does not trigger it. */
   whenExited(): Promise<void> {
     return this.#unexpectedExit;
   }
@@ -107,7 +107,7 @@ export class DirectoryAppServer {
     if (this.#closed) return;
     this.#closed = true;
 
-    // 不等 #ready：初始化可能永远不返回。关闭子进程会拒绝在途 initialize。
+    // Do not await #ready: initialization may never return. Closing the child rejects the pending initialize.
     const client = this.#started;
     if (!client) return;
     if (this.#current === client) this.#current = null;
@@ -124,7 +124,7 @@ export class DirectoryAppServer {
     });
     this.#started = client;
     this.#current = client;
-    // close() 先把 #closed 置位，启动失败时先把 #current 清空，两种情况都不算意外退出。
+    // close() first sets #closed, while startup failure first clears #current; neither is an unexpected exit.
     void client.whenExited().then(() => {
       if (this.#closed || this.#current !== client) return;
       this.#markUnexpectedExit();

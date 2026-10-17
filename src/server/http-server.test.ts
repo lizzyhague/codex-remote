@@ -24,7 +24,7 @@ import type { SessionWorkerManager } from "../workers/manager.ts";
 import { SharedUploadClient } from "../shared-upload/client.ts";
 import type { PublicAttachment } from "../shared-upload/types.ts";
 
-// 服务启动时会发布并回收前端快照；测试用 public/ 的临时副本，不动部署目录里的 .web-assets。
+// Service startup publishes and prunes frontend snapshots; tests use a temporary public/ copy and leave deployed .web-assets untouched.
 const WEB_ROOT = await mkdtemp(path.join(tmpdir(), "codex-http-public-"));
 after(() => rm(WEB_ROOT, { recursive: true, force: true }));
 await cp(fileURLToPath(new URL("../../public/", import.meta.url)), WEB_ROOT, {
@@ -171,7 +171,7 @@ test("streams same-origin uploads through the local attachment adapter", async (
           sha256: "a".repeat(64),
           createdAtMs: 1,
           expiresAtMs: 2,
-          // 模拟跨仓库协议漂移：这些字段绝不能出现在浏览器响应里。
+          // Simulate cross-repository protocol drift: these fields must never appear in browser responses.
           path: "/srv/private/blobs/attachment-1",
           internalNote: "private",
         } as PublicAttachment;
@@ -209,7 +209,7 @@ test("streams same-origin uploads through the local attachment adapter", async (
   }
 });
 
-/** 读完请求体后永不响应的共享上传服务，记录下游连接何时被关闭。 */
+/** Shared upload service that reads the body but never responds, recording when the downstream connection closes. */
 async function stalledUploadService(t: test.TestContext) {
   const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-stalled-upload-"));
   const socketPath = path.join(directory, "upload.sock");
@@ -279,7 +279,7 @@ for (const [label, leave] of [
     t.after(() => server.close());
     const address = await server.listen(0);
     const cookie = await loginCookie(address);
-    // 用原始 TCP 模拟浏览器，避免 fetch 连接池预先建立空连接干扰 close 的判断。
+    // Simulate the browser with raw TCP so fetch pooling cannot pre-open idle connections and affect close assertions.
     const browser = connect(address.port, address.host);
     browser.on("error", () => {});
     await once(browser, "connect");
@@ -304,8 +304,8 @@ test("HTTP login survives restarts and token rotation revokes its cookie", async
   const transport = new EmptyTransport();
   const services = emptyServices(transport);
   const first = new RemoteWebSocketServer({ token: "test-secret", services, webRoot: WEB_ROOT });
-  // close() 可以重复调用；注册清理是为了断言失败时服务器不会留着不放，
-  // 否则测试进程不会退出，一次断言失败会表现成整套测试挂住。
+  // close() is idempotent. Register cleanup so assertion failures cannot leave the server open;
+  // otherwise the test process would not exit and one failed assertion would look like a hung suite.
   t.after(() => first.close());
   const firstAddress = await first.listen(0);
   const cookie = await loginCookie(firstAddress);
@@ -412,7 +412,7 @@ test("raw serves only caged Markdown and images with sandbox headers", async (t)
   }
 });
 
-/** 这些测试只验证 HTTP 与升级路径，Worker 管理器只需要能被订阅和断开。 */
+/** These tests cover only HTTP and upgrade paths; the Worker manager need only support subscribe and disconnect. */
 function stubWorkers(): SessionWorkerManager {
   return {
     onEvent: () => () => {},
@@ -565,7 +565,7 @@ test("only accepts WebSocket upgrades from its own page", async () => {
   const cookie = await loginCookie(address);
 
   try {
-    // 用户浏览的其它网站发起的连接：Origin 与 Host 不符，直接拒绝。
+    // A connection from another site the user visits: Origin differs from Host, so reject it.
     const attacker = new WebSocket(url, {
       headers: { origin: "https://attacker.example" },
     });
@@ -575,21 +575,21 @@ test("only accepts WebSocket upgrades from its own page", async () => {
     );
     assert.equal(rejected, "rejected");
 
-    // 页面自己发起的连接：Origin 与 Host 同源。
+    // A connection initiated by the page itself: Origin and Host share an origin.
     const sameOrigin = new WebSocket(url, {
       headers: { cookie, origin: `http://${address.host}:${address.port}` },
     });
     await withTimeout(once(sameOrigin, "open"), "打开同源 WebSocket");
     sameOrigin.close();
 
-    // 反向代理入口：Host 是内部地址，Origin 是对外域名，靠白名单放行。
+    // Reverse-proxy entry point: Host is internal and Origin is public, allowed through the allowlist.
     const proxied = new WebSocket(url, {
       headers: { cookie, origin: "https://vps.example.ts.net" },
     });
     await withTimeout(once(proxied, "open"), "打开白名单来源的 WebSocket");
     proxied.close();
 
-    // 冒烟脚本和命令行客户端不发 Origin，但仍要带登录 cookie。
+    // Smoke scripts and command-line clients send no Origin but must still include the login cookie.
     const headless = new WebSocket(url, { headers: { cookie } });
     await withTimeout(once(headless, "open"), "打开无 Origin 的 WebSocket");
     headless.close();
@@ -610,8 +610,8 @@ test("survives an oversized frame instead of taking the process down", async () 
   const cookie = await loginCookie(address);
 
   try {
-    // 超过 maxPayload 的帧会让 ws 在服务端的 WebSocket 上 emit error。没有监听
-    // 时那是一个未捕获异常，会带走整个后端；这里要求它只关掉这一条连接。
+    // A frame above maxPayload makes ws emit error on the server-side WebSocket. Without a listener it becomes
+    // an uncaught exception and terminates the backend; require it to close only this connection.
     const oversized = new WebSocket(url, { headers: { cookie } });
     oversized.on("error", () => {});
     await withTimeout(once(oversized, "open"), "打开将要超限的 WebSocket");
@@ -620,7 +620,7 @@ test("survives an oversized frame instead of taking the process down", async () 
     const [code] = await withTimeout(closed, "等待超限连接被关闭");
     assert.equal(code, 1009);
 
-    // 服务还在：另一条连接照常应答。
+    // The service remains alive and another connection responds normally.
     const survivor = new WebSocket(url, { headers: { cookie } });
     await withTimeout(once(survivor, "open"), "打开超限之后的 WebSocket");
     const answered = once(survivor, "message");
@@ -722,7 +722,7 @@ test("a running server keeps its startup frontend until restart; old module URLs
   const view = await (await fetch(`${base}/view`)).text();
   assert.match(view, /\/assets\/[a-f0-9]{64}\/viewer\.js/u);
 
-  // 相当于在运行中的工作树里 git pull：旧进程继续提供启动时的一整套。
+  // Equivalent to git pull in a live worktree: the old process keeps serving its complete startup snapshot.
   await writeFile(path.join(webRoot, "markdown.js"), "// dependency-B");
   await writeFile(path.join(webRoot, "index.html"), WEB_FILES["index.html"].replace("mark-A", "mark-B"));
   await writeFile(path.join(webRoot, "sw.js"), "// sw-B");
@@ -761,7 +761,7 @@ test("repeated releases keep only the current and two previous snapshots on disk
     const app = scriptUrl(await (await fetch(base)).text());
     apps.push(app);
     await server.close();
-    // 发布先后由目录时间决定；这里拉开间隔，不依赖文件系统时间戳精度。
+    // Directory times determine publication order; space them apart without relying on filesystem timestamp precision.
     const at = new Date(Date.now() - (10 - release) * 60_000);
     await utimes(path.join(webRoot, ".web-assets", app.split("/")[2]!), at, at);
   }

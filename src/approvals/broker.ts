@@ -43,8 +43,8 @@ export type ApprovalEvent =
   };
 
 /**
- * 把 app-server 的双向 JSON-RPC 审批请求翻译成前端协议。
- * 第一版只允许"本次允许"与"拒绝"，不会创建长期授权规则。
+ * Translates bidirectional JSON-RPC approval requests from app-server into the frontend protocol.
+ * The initial version only supports "本次允许" and "拒绝" and does not create persistent rules.
  */
 export class ApprovalBroker extends ServerRequestBroker<
   ApprovalRequest,
@@ -63,7 +63,7 @@ export class ApprovalBroker extends ServerRequestBroker<
     );
   }
 
-  /** 浏览器断线或任务停止时，取消该会话仍在等待的审批。 */
+  /** Cancels approvals still pending for the thread when the browser disconnects or the task stops. */
   cancelThread(threadId: string): number {
     return this.cancelWhere((approval) => approval.threadId === threadId);
   }

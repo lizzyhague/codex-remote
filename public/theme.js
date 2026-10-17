@@ -1,6 +1,6 @@
 /*
- * 在样式加载前同步决定深浅主题，避免页面先显示深色再切换。
- * 选择只保存在当前浏览器；未选择时跟随系统，并立即响应系统外观变化。
+ * Resolve the light or dark theme synchronously before styles load to avoid a flash of the dark theme.
+ * The choice is stored only in this browser. With no choice, follow the system and react to changes immediately.
  */
 (function () {
   var KEY = "codex-remote.theme";
@@ -41,7 +41,7 @@
         if (choice === "system") localStorage.removeItem(KEY);
         else localStorage.setItem(KEY, choice);
       } catch (error) {
-        // 浏览器禁用本地存储时，选择仍对当前页面生效。
+        // If the browser disables local storage, the choice still applies to the current page.
       }
       apply();
     },

@@ -1,8 +1,8 @@
 /*
- * HTML 每次回源；带内容版本的脚本和样式可以长期缓存。
- * 前端改动不需要手工升级这个名字：只有 SW 缓存格式改变时才换名字。
- * 会话、鉴权和文件内容不进入缓存。没有 push 或后台提醒。
- * 版本资源只保留当前离线页和上一套离线页引用的两份，每次成功切换离线页后清理其余。
+ * Always fetch HTML from the origin; content-versioned scripts and styles can remain cached long term.
+ * Frontend changes do not require bumping this name; change it only when the service-worker cache format changes.
+ * Sessions, authentication, and file contents never enter the cache. There are no push or background notifications.
+ * Keep versioned assets referenced by the current and previous offline pages, and clean up the rest after each switch.
  */
 const CACHE_NAME = "codex-remote-shell-v43";
 const ASSET_PATH = /^\/assets\/[a-f0-9]{64}\/[a-zA-Z0-9_.-]+\.(?:js|css)$/;
@@ -22,7 +22,7 @@ self.addEventListener("install", (event) => {
   }));
 });
 
-// 不强制接管已打开的旧页面；它们也能通过普通导航加载新的版本地址。
+// Do not forcibly take over existing pages; ordinary navigation can load the new versioned URLs.
 self.addEventListener("activate", (event) => {
   event.waitUntil(caches.keys().then((keys) => Promise.all(
     keys.filter((key) => key.startsWith("codex-remote-shell-") && key !== CACHE_NAME).map((key) => caches.delete(key)),
@@ -53,7 +53,7 @@ function offlineAssets(html) {
   return assets.every((asset) => ASSET_PATH.test(asset)) ? assets : null;
 }
 
-// 同一时刻只切换一次离线页，避免一次的清理删掉另一次刚确认齐全的资源。
+// Switch the offline page only once at a time so one cleanup cannot delete assets just validated by another.
 let offlineUpdate = Promise.resolve();
 
 function saveOfflinePage(response) {
@@ -72,9 +72,9 @@ async function replaceOfflinePage(response) {
   }));
   const previous = await cache.match("/");
   const previousAssets = previous ? offlineAssets(await previous.text()) ?? [] : [];
-  // 最后才切换离线 HTML：任何脚本下载失败都保留上一次完整页面。
+  // Switch the offline HTML last so any failed script download retains the previous complete page.
   await cache.put("/", response);
-  // 只保留新离线页和它替换掉的上一套；更早的版本资源不再有页面引用。
+  // Keep only the new offline page and the set it replaced; no page references older versioned assets.
   const keep = new Set([...assets, ...previousAssets].map((asset) => new URL(asset, self.location.origin).href));
   try {
     for (const request of await cache.keys()) {

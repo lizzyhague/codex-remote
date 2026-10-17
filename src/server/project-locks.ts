@@ -5,7 +5,7 @@ export type ProjectTaskLease = {
   taskId: string | null;
 };
 
-/** 后端进程内的项目级任务锁：一个项目同一时刻只能有一个 AI 任务。 */
+/** Process-local project turn lock: a project can run only one AI turn at a time. */
 export class ProjectTaskLocks {
   readonly #leases = new Map<string, ProjectTaskLease>();
 

@@ -415,8 +415,8 @@ test("requires an explicit project and session on every current-session request"
 });
 
 test("rejects a message that is too long instead of dropping the connection", () => {
-  // 40 万个汉字在 UTF-8 下超过 1 MiB，但整帧仍小于 ws 的 2 MiB 上限，
-  // 所以浏览器应该收到一条可读的错误，而不是被直接断开。
+  // 400,000 Han characters exceed 1 MiB in UTF-8, while the whole frame remains below ws's 2 MiB limit,
+  // so the browser should receive a readable error instead of being disconnected immediately.
   const source = JSON.stringify({
     type: "message.send",
     requestId: "too-long",

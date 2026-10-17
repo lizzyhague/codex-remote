@@ -14,7 +14,7 @@ type ProtocolCheckOptions = {
 };
 
 /**
- * 连接真实 App Server，但只执行初始化和只读目录查询；不会创建 thread 或调用模型。
+ * Connect to a real App Server, but only initialize and query read-only catalogs; never create a thread or invoke a model.
  */
 export async function runAppServerProtocolCheck(
   options: ProtocolCheckOptions = {},

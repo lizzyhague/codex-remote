@@ -9,12 +9,13 @@ import {
 
 export type TrashOrigin = "active" | "archived";
 /**
- * 条目所处阶段。`trashing` / `restoring` / `deleting` 都是先于 Codex 副作用落盘的
- * 过渡凭据：一旦写下就只向前推进，中途失败或退出后由下一次整理或清理续做。
+ * The entry's current phase. `trashing`, `restoring`, and `deleting` are transitional records
+ * persisted before Codex side effects. Once written, they only move forward; after a failure or
+ * interruption, the next organization or cleanup pass resumes the work.
  *
- * - `trashing`：active 会话移入回收站，`thread/archive` 可能尚未完成；完成后变 `trashed`。
- * - `restoring`：active 来源的会话恢复中，`thread/unarchive` 可能尚未完成；完成后删条目。
- * - `deleting`：永久删除中；所有附属数据清理完后才移除条目。
+ * - `trashing`: an active session is moving to trash; `thread/archive` may still be pending. It becomes `trashed` when done.
+ * - `restoring`: an active-source session is being restored; `thread/unarchive` may still be pending. The entry is removed when done.
+ * - `deleting`: permanent deletion is in progress; the entry is removed only after all associated data is cleaned up.
  */
 export type TrashState = "trashing" | "trashed" | "restoring" | "deleting";
 
@@ -50,7 +51,7 @@ const SHAPE: ThreadEntryStoreShape<TrashEntry> = {
     projectId: entry.projectId,
     deletedAt: entry.deletedAt,
     origin: entry.origin,
-    // 旧版 trash.json 没有 state；读入内存时迁移成普通回收站条目。
+    // Older trash.json files have no state; migrate them to regular trash entries when loading.
     state: entry.state ?? "trashed",
   }),
   isEntry: (value): value is TrashEntry =>
@@ -61,11 +62,11 @@ const SHAPE: ThreadEntryStoreShape<TrashEntry> = {
     value.deletedAt >= 0 &&
     (value.origin === "active" || value.origin === "archived") &&
     (value.state === undefined || TRASH_STATES.has(value.state)) &&
-    // 过渡阶段只为 active 来源存在：archived 来源进出回收站只改这份名单，没有 Codex 副作用。
+    // Transitional states exist only for active sources: moving archived sources changes only this list and has no Codex side effects.
     (value.origin === "active" || (value.state !== "trashing" && value.state !== "restoring")),
 };
 
-/** 回收站里有哪些会话、什么时候进来的、恢复时该放回哪。 */
+/** Sessions in trash, when they entered it, and where they should be restored. */
 export class TrashStore extends ThreadEntryStore<TrashEntry> {
   static async open(filePath: string): Promise<TrashStore> {
     const store = new TrashStore(path.resolve(filePath), SHAPE);

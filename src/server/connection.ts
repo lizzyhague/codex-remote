@@ -72,8 +72,8 @@ export type BrowserConnectionServices = {
   projects: ProjectsApi;
   sessions: SessionsApi;
   /**
-   * 目录 App Server。会话和任务属于 Worker，这个连接只用它读账号额度，
-   * 这样查询用量不需要先开一个 Worker。
+   * Directory App Server. Sessions and turns belong to Workers; this connection uses it only for
+   * account limits, so checking usage does not require starting a Worker.
    */
   turnTransport: AppServerTransport;
   locks: ProjectTaskLocks;
@@ -93,8 +93,8 @@ export class BrowserRequestError extends PublicError {
 }
 
 /**
- * 一个浏览器 WebSocket 的状态机。会改变会话或设置的请求按顺序处理，避免竞态；
- * 独立的模型目录读取并行执行，不能挡住设置保存。
+ * State machine for one browser WebSocket. Requests that mutate sessions or settings run sequentially
+ * to avoid races; independent model-catalog reads run concurrently and must not block setting saves.
  */
 export class BrowserConnection {
   readonly #id: string;
@@ -111,14 +111,14 @@ export class BrowserConnection {
   #sessionId: string | null = null;
   #olderTurns: Turn[] = [];
   /**
-   * 连接内打开会话的代次。每次新的打开意图都会领一个号；detach、切换项目、
-   * 断线或打开目标被归档/回收/删除都会让号作废。打开流程每次真实等待之后、
-   * 挂载和返回成功之前都要核对，作废了就明确失败。
+   * Generation of session-opening intent within this connection. Each new intent gets a number; detach,
+   * project switches, disconnects, or archiving/trashing/deleting the target invalidate it. The open flow
+   * checks after every real wait and before attachment or success, failing explicitly if invalidated.
    */
   #openGeneration = 0;
-  /** 正在打开的目标；新建会话在 Worker 返回之前还没有编号。 */
+  /** Target currently being opened; a new session has no ID until its Worker returns. */
   #pendingOpen: { generation: number; sessionId: string | null } | null = null;
-  /** 打开会话期间扣住的事件；响应发出之后再按正常规则转发。 */
+  /** Events held while opening a session; forwarded normally after the response is sent. */
   #deferredEvents: WorkerManagerEvent[] | null = null;
 
   constructor(
@@ -411,8 +411,8 @@ export class BrowserConnection {
     request: Extract<BrowserRequest, { type: "sessions.list" }>,
   ): Promise<ReturnType<typeof toBrowserSessionPage>> {
     if (this.#projectId && this.#projectId !== request.projectId) {
-      // 前端切换项目时没有单独的 detach 请求；第一次加载新项目列表就是释放
-      // 旧空会话临时 Worker 的明确边界。已经接受的后台任务不受 detach 影响。
+      // The frontend sends no separate detach when switching projects; the first new project-list load is
+      // the explicit boundary for releasing an old empty session's temporary Worker. Accepted background turns continue.
       this.#invalidateOpen();
       this.#detachSession();
     }
@@ -434,10 +434,10 @@ export class BrowserConnection {
     managed: ManagedSessionOpen,
     acceptLoadingStates = true,
   ): Promise<unknown> {
-    // Worker 的启动或恢复可能比 WebSocket 活得更久。断线后这个结果已经没有
-    // 接收者，不能再让完成得较晚的请求把死连接挂回会话。
+    // Worker startup or resumption may outlive the WebSocket. After disconnect, no receiver remains,
+    // so a late result must not attach a dead connection back to the session.
     if (this.#disconnected) return managed;
-    // 等 Worker 的这段时间里，目标可能已被另一台设备移走。
+    // Another device may move the target while this connection waits for the Worker.
     this.#requireOpenCurrent(generation);
     if (managed.loadState !== "ready") {
       if (managed.projectId !== projectId) {
@@ -462,9 +462,9 @@ export class BrowserConnection {
     if (openedProjectId !== projectId) {
       throw new WorkerManagerError("session_project_mismatch", "这个会话不属于所选项目。");
     }
-    // 这一句之后新会话的事件就会往这条连接上发，而“会话已打开”的响应还要等
-    // 下面那次附件同步才发得出去。页面此时还不知道自己被切过去了，收到的增量
-    // 无处安放，随后又会被首屏渲染清掉。扣住它们，等响应发完再补。
+    // After this line, new-session events flow to this connection, but the “会话已打开” response waits
+    // for attachment synchronization below. The page does not yet know it switched, so deltas have nowhere
+    // to land and initial rendering would clear them. Hold them until after sending the response.
     this.#deferredEvents = [];
     this.#detachSession();
     this.#projectId = openedProjectId;
@@ -474,9 +474,9 @@ export class BrowserConnection {
       managed.opened.session.id,
       managed.opened.turns,
     ) ?? [];
-    // 附件同步期间另一台设备可能已经把它归档或移入回收站，连接随之 detach；
-    // 这时不能再回一个与后端状态矛盾的“已打开”。作废时若仍挂着这次打开的会话，
-    // 一并放开，保证失败响应之后连接确实没有当前会话。
+    // During attachment synchronization, another device may archive or trash the session, detaching this
+    // connection. Do not then return an “已打开” result that contradicts backend state. On invalidation,
+    // release this session if still attached so the connection truly has no current session after failure.
     if (generation !== this.#openGeneration && this.#sessionId === managed.opened.session.id) {
       this.#detachSession();
     }
@@ -512,7 +512,7 @@ export class BrowserConnection {
       this.#olderTurns.length > 0,
       mappings,
     );
-    // Worker 快照可能早于最近一次钉住操作；发回页面前使用共享名单的当前值。
+    // The Worker snapshot may predate the latest pin operation; use the shared list's current value before sending it.
     result.session.marked = this.#services.sessions.isMarked(opened.session.id);
     return result;
   }
@@ -565,7 +565,7 @@ export class BrowserConnection {
     const closesCurrent = removes && currentSessionId !== null &&
       event.sessionIds.includes(currentSessionId);
     const pendingSessionId = this.#pendingOpen?.sessionId ?? null;
-    // 还没挂载的打开目标也要作废：恢复请求可能还在等 Worker。
+    // Also invalidate an unattached open target: its resume request may still be waiting for a Worker.
     if (
       closesCurrent ||
       (removes && pendingSessionId !== null && event.sessionIds.includes(pendingSessionId))
@@ -602,7 +602,7 @@ export class BrowserConnection {
     });
   }
 
-  /** 扣住期间攒下的事件按原顺序补发；此时会话编号已经是新的了。 */
+  /** Replay held events in their original order; the session ID has been updated by this point. */
   #flushDeferredEvents(): void {
     const deferred = this.#deferredEvents;
     if (!deferred) return;
@@ -613,8 +613,8 @@ export class BrowserConnection {
   async #handleDisconnect(): Promise<void> {
     this.#unsubscribeSessionChanges();
     this.#unsubscribeWorkerEvents();
-    // 在线状态属于 WebSocket 生命周期，不能被某个没有返回的业务请求扣住。
-    // 已经收到的请求仍可在队列里完成，但 #openSession 不会让它重新挂载。
+    // Online state belongs to the WebSocket lifecycle and cannot be held by a business request that never returns.
+    // Received requests may finish in the queue, but #openSession will not let them reattach it.
     this.#services.workers.clientDisconnected(this.#id);
     this.#invalidateOpen();
     this.#detachSession();
@@ -666,7 +666,7 @@ export class BrowserConnection {
     return current;
   }
 
-  /** 放开这个连接对当前会话的占用。已经接受的后台任务不受影响。 */
+  /** Release this connection's claim on the current session. Accepted background turns continue. */
   #detachSession(): void {
     this.#services.workers.detachSession(this.#id);
     this.#sessionId = null;
@@ -690,7 +690,7 @@ export class BrowserConnection {
   }
 }
 
-/** 只有明确标成 PublicError 的业务提示才能原样发给浏览器。 */
+/** Only business messages explicitly marked PublicError may be sent verbatim to the browser. */
 export function publicErrorMessage(error: unknown): string {
   if (isPublicError(error)) {
     if (redactHostPaths(error.message) === error.message) return error.message;

@@ -25,7 +25,7 @@ test("anything that is not a web address is refused a link", () => {
   for (
     const value of [
       "javascript:alert(1)",
-      // 浏览器解析前会丢掉控制字符，所以这种写法也必须挡住。
+      // Browsers discard control characters before parsing, so this form must also be blocked.
       "javascript:alert(1)",
       "data:text/html,<script>alert(1)</script>",
       "file:///home/someone/.ssh/id_ed25519",
@@ -46,6 +46,6 @@ test("the MCP login card only links an address that passed the check", () => {
   const card = app.slice(app.indexOf("const loginHref = externalLinkHref(interaction.url);"));
   assert.match(card, /link\.href = loginHref;/u);
   assert.equal(card.includes("link.href = interaction.url"), false);
-  // 没能打开的授权不该被回报成已完成。
+  // An authorization page that failed to open must not be reported as completed.
   assert.match(card.slice(0, card.indexOf("} else {")), /canSubmit = false;/u);
 });

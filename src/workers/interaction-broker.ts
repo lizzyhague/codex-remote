@@ -42,7 +42,7 @@ export type WorkerInteractionEvent =
 
 export type InteractionTransport = ServerRequestTransport;
 
-/** 必须由用户回答的选择题、表单和登录授权；Full access 不会自动处理。 */
+/** Choices, forms, and login authorization requiring user input; Full access does not handle them automatically. */
 export class InteractionBroker extends ServerRequestBroker<
   WorkerInteractionRequest,
   WorkerInteractionEvent,

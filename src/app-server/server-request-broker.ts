@@ -10,13 +10,13 @@ export interface ServerRequestTransport {
   respondToServerRequest(id: RequestId, result: unknown): void;
 }
 
-/** 待答项至少要能说出自己属于哪个会话，取消和列举都按会话走。 */
+/** Every pending request identifies its session; cancellation and listing are session-scoped. */
 export type BrokeredRequest = {
   id: string;
   threadId: string;
 };
 
-/** 不论哪种待答项，取消和"被 Codex 自己收回"这两种结局都一样。 */
+/** All pending request types share the same cancelled and withdrawn-by-Codex outcomes. */
 export type BrokerBaseResolution = "cancelled" | "cleared";
 
 type Pending<Item> = {
@@ -25,10 +25,11 @@ type Pending<Item> = {
 };
 
 /**
- * app-server 反过来向后端提问时的待答请求簿。
+ * Registry of pending requests initiated by app-server toward the backend.
  *
- * 审批和交互都要把请求存住、发给浏览器、等回答、再把结果送回 app-server，还要处理
- * Codex 自己撤回请求的通知。这里放的是这套骨架；子类只负责解析请求和组装回复。
+ * Approvals and interactions both store a request, send it to the browser, await an answer, return
+ * the result to app-server, and handle Codex withdrawing it. This class provides that framework;
+ * subclasses only parse requests and assemble replies.
  */
 export abstract class ServerRequestBroker<
   Item extends BrokeredRequest,
@@ -52,10 +53,10 @@ export abstract class ServerRequestBroker<
     });
   }
 
-  /** 认得这个方法就返回待答项（不含 id），认不得就返回 null。 */
+  /** Return a pending request without its ID for recognized methods, or null otherwise. */
   protected abstract parse(method: string, params: JsonObject): Omit<Item, "id"> | null;
 
-  /** 取消一个还没回答的请求时，回给 app-server 的内容。 */
+  /** Build the app-server reply used when an unanswered request is cancelled. */
   protected abstract cancelResponse(item: Item): JsonObject;
 
   protected abstract requestedEvent(item: Item): Event;
@@ -82,7 +83,7 @@ export abstract class ServerRequestBroker<
     this.#listeners.clear();
   }
 
-  /** 子类的 `answer()` 用：回复 app-server 并按自己的结局把待答项摘掉。 */
+  /** Used by subclass `answer()` methods to reply to app-server and remove the resolved request. */
   protected respond(
     id: string,
     toResponse: (item: Item) => JsonObject,
@@ -95,7 +96,7 @@ export abstract class ServerRequestBroker<
     return true;
   }
 
-  /** 取消所有满足条件的待答项，返回取消了几个。 */
+  /** Cancel all matching pending requests and return the number cancelled. */
   protected cancelWhere(predicate: (item: Item) => boolean): number {
     const matches = [...this.#pending.entries()].filter(([, pending]) =>
       predicate(pending.item)
@@ -110,7 +111,7 @@ export abstract class ServerRequestBroker<
       } catch (error) {
         firstError ??= error;
       } finally {
-        // Worker 已经退出时回复可能失败，但浏览器里的待答项仍必须终结。
+        // A reply may fail after the Worker exits, but the browser request must still be finalized.
         this.#remove(id, "cancelled");
       }
     }
@@ -135,7 +136,7 @@ export abstract class ServerRequestBroker<
     this.#emit(this.requestedEvent(item));
   }
 
-  /** app-server 自己收回了请求，这时不需要再回复。 */
+  /** app-server withdrew the request itself, so no reply is needed. */
   #handleNotification(message: JsonObject): void {
     if (message.method !== "serverRequest/resolved") return;
     const params = asObject(message.params);

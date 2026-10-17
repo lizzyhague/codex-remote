@@ -1,6 +1,7 @@
 /**
- * 只有明确由 Remote 写下、可以原样给浏览器看的业务错误才使用这个基类。
- * 外部服务、操作系统和未知异常不得为了保留原文而临时包装成 PublicError。
+ * Use this base class only for business errors explicitly authored by Remote and safe to show verbatim
+ * in the browser. Errors from external services, the operating system, and unknown exceptions must not
+ * be wrapped ad hoc as PublicError merely to preserve their original text.
  */
 export class PublicError extends Error {
   constructor(message: string) {

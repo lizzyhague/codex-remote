@@ -24,7 +24,7 @@ import type { ApplicationSettingsStore } from "../settings/store.ts";
 export type SessionWorkerOptions = {
   projectId: string;
   threadId?: string;
-  /** 只覆盖 Worker 创建、初始化和会话恢复；创建完成后不再监听。 */
+  /** Covers only Worker creation, initialization, and session resume; stops listening after creation. */
   startupSignal?: AbortSignal;
   projects: ProjectCatalog;
   trash: TrashStore;
@@ -34,7 +34,7 @@ export type SessionWorkerOptions = {
   onStreamEvent?: (event: CodexStreamEvent) => void;
   onApprovalEvent?: (event: ApprovalEvent) => void;
   onInteractionEvent?: (event: WorkerInteractionEvent) => void;
-  /** 传回具体实例，调用方据此核对当前所有权，旧实例的迟到退出不能误伤同 thread 的新实例。 */
+  /** Passes the instance so callers can verify ownership and ignore a stale instance's late exit. */
   onUnexpectedExit?: (worker: SessionWorker, error: Error) => void;
   settings?: ApplicationSettingsStore;
 };
@@ -47,10 +47,10 @@ export class SessionWorkerStartCancelledError extends Error {
 }
 
 /**
- * 一个会话对应的独立 codex app-server 进程。
+ * An independent codex app-server process for one session.
  *
- * Node 主管理器保留队列和事件日志；这个对象只持有当前会话的 writer、命令适配器
- * 与审批请求。关闭它就会释放该会话的 writer，而不会影响其他活动会话。
+ * The Node manager retains queues and event logs; this object holds only the session's writer,
+ * command adapter, and approval requests. Closing it releases this writer without affecting other sessions.
  */
 export class SessionWorker {
   readonly client: AppServerClient;
@@ -149,12 +149,12 @@ export class SessionWorker {
     return this.commands.fullAccessEnabled();
   }
 
-  /** 子进程已经结束。退出回调晚于这个事实送达，发布 Worker 前要看这里。 */
+  /** The child has exited. The callback arrives later, so check this before publishing the Worker. */
   get exited(): boolean {
     return this.#exited;
   }
 
-  /** 并发调用返回同一个 Promise，所有调用者都等到进程组真正关闭。 */
+  /** Concurrent calls return one Promise, and all callers wait for the process group to close. */
   close(): Promise<void> {
     this.#closing ??= this.#close();
     return this.#closing;
@@ -166,7 +166,7 @@ export class SessionWorker {
     this.turns.dispose();
     let cancellationError: unknown = null;
     try {
-      // Manager 仍订阅着 broker；先终结待答项，让所有浏览器都能收口卡片。
+      // The Manager still subscribes to the broker; settle pending prompts first so every browser can close its card.
       try {
         this.approvals.cancelAll();
       } catch (error) {

@@ -3,8 +3,8 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 /**
- * 合并项目各自计算出的基础查看根与服务级额外查看根。
- * 输入应当已经解析成真实绝对路径；这里仅负责形成独立、去重的白名单。
+ * Merge each project's computed base view roots with service-level additional roots.
+ * Inputs must already be resolved real absolute paths; this only builds an independent deduplicated allowlist.
  */
 export function buildViewableRoots(
   baseRoots: readonly string[],

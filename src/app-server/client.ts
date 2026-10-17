@@ -8,7 +8,7 @@ import type { RequestId } from "../generated/RequestId.ts";
 export type JsonObject = Record<string, unknown>;
 export type AppServerMessageListener = (message: JsonObject) => void;
 
-/** 非 JSONL 噪音只记录前几条，避免子进程刷屏时把日志撑爆。 */
+/** Log only the first few non-JSONL lines to prevent a noisy child from flooding the log. */
 const MAX_LOGGED_UNEXPECTED_LINES = 20;
 
 type PendingRequest = {
@@ -27,8 +27,8 @@ export type AppServerClientOptions = {
   environment?: NodeJS.ProcessEnv;
   workingDirectory?: string;
   /**
-   * 为这个 app-server 建立独立进程组。会话 Worker 使用它，确保异常清理时
-   * 可以终止该 Worker 启动的完整进程树；共享目录进程保持默认值 false。
+   * Create a separate process group for this app-server. Session Workers use it so exceptional
+   * cleanup can terminate the entire process tree they start; the shared directory process leaves it false.
    */
   processGroup?: boolean;
   onNotification?: AppServerMessageListener;
@@ -48,8 +48,8 @@ export class AppServerRpcError extends Error {
 }
 
 /**
- * 持有一个 codex app-server 子进程，并把 JSONL 请求与响应配对。
- * 浏览器协议不会直接接触这个类；后续由 Codex 适配器做翻译。
+ * Owns a codex app-server child process and pairs JSONL requests with responses.
+ * The browser protocol never touches this class directly; the Codex adapter translates later.
  */
 export class AppServerClient {
   readonly #child: ChildProcessWithoutNullStreams;
@@ -88,7 +88,7 @@ export class AppServerClient {
       },
     );
 
-    // 不用 node:readline 拆行：它把 U+2028、U+2029 也当换行，而它们在 JSON 字符串里是合法字符。
+    // Do not split with node:readline: it treats U+2028 and U+2029 as newlines, though both are valid in JSON strings.
     this.#child.stdout.setEncoding("utf8");
     this.#child.stdout.on("data", (chunk: string) => this.#onStdout(chunk));
 
@@ -97,8 +97,8 @@ export class AppServerClient {
       this.#stderrTail = `${this.#stderrTail}${chunk}`.slice(-16_384);
     });
 
-    // 子进程退出时 stdin 会变成断开的管道。没有这个监听器，正在进行的写入
-    // 会抛出未捕获的流错误，把整个网页后端一起带走。
+    // stdin becomes a broken pipe when the child exits. Without this listener, an in-flight write
+    // would throw an uncaught stream error and take down the entire web backend.
     this.#child.stdin.on("error", (error: Error) => this.#fail(error));
 
     this.#child.once("error", (error) => {
@@ -112,11 +112,11 @@ export class AppServerClient {
       this.#fail(new Error(this.#stderrTail.trim() || detail));
       this.#resolveExit();
     });
-    // spawn 失败时只有 error/close，没有 exit；close 兜底避免 whenExited() 永不落地。
+    // A failed spawn emits only error/close, not exit; close prevents whenExited() from hanging forever.
     this.#child.once("close", () => this.#resolveExit());
   }
 
-  /** 子进程结束后落地。调用方据此决定是否让整个服务退出，交给 systemd 重启。 */
+  /** Resolves after the child exits. Callers use it to decide whether the service should exit for its supervisor to restart. */
   whenExited(): Promise<void> {
     return this.#exitPromise;
   }
@@ -214,7 +214,7 @@ export class AppServerClient {
   async #terminateRemainingProcessGroup(): Promise<void> {
     const pid = this.#child.pid;
     if (!pid || !this.#processGroup || !processGroupExists(pid)) return;
-    // 组长退出后，仍可能有忽略 stdin 生命周期的工具孙进程留在同一组。
+    // Tool descendants that ignore stdin lifetime may remain in the group after its leader exits.
     try {
       process.kill(-pid, "SIGTERM");
     } catch {
@@ -228,7 +228,7 @@ export class AppServerClient {
     try {
       process.kill(-pid, "SIGKILL");
     } catch {
-      // ESRCH 表示整个组已经干净退出，正是期望状态。
+      // ESRCH means the entire group has already exited cleanly, which is the desired state.
     }
   }
 
@@ -236,11 +236,11 @@ export class AppServerClient {
     const pid = this.#child.pid;
     if (pid && this.#processGroup) {
       try {
-        // detached 子进程的 pid 同时是进程组 id；负 pid 会把工具子进程一起终止。
+        // A detached child's PID is also its process-group ID; a negative PID terminates tool descendants too.
         process.kill(-pid, signal);
         return;
       } catch {
-        // 非 Worker 客户端没有独立进程组，或者进程已先一步退出；退回单进程信号。
+        // Non-Worker clients lack a separate process group, or the process exited first; fall back to a single-process signal.
       }
     }
     this.#child.kill(signal);
@@ -270,8 +270,8 @@ export class AppServerClient {
     try {
       message = JSON.parse(line);
     } catch {
-      // Codex 偶尔会把告警写到 stdout。跳过这一行即可，不要因为一行噪音
-      // 就永久断开一个仍然健康的子进程。
+      // Codex occasionally writes warnings to stdout. Skip the line instead of permanently
+      // disconnecting an otherwise healthy child over one noisy line.
       this.#warnUnexpectedLine(line);
       return;
     }

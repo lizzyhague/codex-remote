@@ -22,7 +22,7 @@ export type CommandOption = {
   id: string;
   label: string;
   description: string;
-  /** 当前生效的那一项；前端据此高亮，不靠标签文字判断。 */
+  /** The currently active option; the frontend uses this flag for highlighting instead of inspecting labels. */
   selected?: boolean;
   disabled?: boolean;
   danger?: boolean;
@@ -54,8 +54,8 @@ const NEXT_TURN_LINE = "当前这一轮不受影响，下一条消息开始生�
 export type RewindOutcome = "reverted" | "already_reverted" | "stale";
 
 /**
- * 当前浏览器连接所打开会话的斜杠命令适配器。
- * 它只返回前端需要的菜单和展示数据，不透传 app-server 原始对象。
+ * Slash-command adapter for the session open in the current browser connection.
+ * Returns only menu and display data needed by the frontend, never raw app-server objects.
  */
 export class CommandRunner {
   readonly #transport: AppServerTransport;
@@ -83,7 +83,7 @@ export class CommandRunner {
     this.#unsubscribe();
   }
 
-  /** `pending` 是会话运行中选定、下一轮才生效的设置；菜单优先把它标成选中项。 */
+  /** `pending` is selected while a session is running and takes effect next turn; menus prefer it as selected. */
   async options(
     command: CommandName,
     pending: PendingTurnSettings | null = null,
@@ -148,7 +148,7 @@ export class CommandRunner {
     };
   }
 
-  /** 运行中选模型：只按当前列表校验，不碰 Codex；由调用方存成下一轮的设置。 */
+  /** Selects a model while running: validates against the current list without touching Codex; the caller stages it for the next turn. */
   async stageModel(
     modelId: string,
     effort?: string | null,
@@ -168,7 +168,7 @@ export class CommandRunner {
     const profile = await this.#resolvePermissionProfile(profileId);
     const settingsRevision = this.#settingsRevision;
     await this.#updateSettings(permissionSettings(profile.id));
-    // 通知到了就用它算出的结构化结果，只有没等到才退回认名字。
+    // Use the structured result when the notification arrives; fall back to recognizing the name only if it does not.
     if (this.#settingsRevision === settingsRevision) {
       this.#runtime.activePermissionProfile = { id: profile.id, extends: null };
       this.#fullAccessEnabled = isFullAccessProfile(profile.id);
@@ -182,8 +182,9 @@ export class CommandRunner {
   }
 
   /**
-   * 运行中选权限：只校验，不碰 Codex。`fullAccess` 是按名字认的预期，下一轮生效后
-   * 以 `thread/settings/updated` 的结构化沙箱策略为准。
+   * Selects permissions while running: validates without touching Codex. `fullAccess` is the expectation
+   * inferred from the name; once effective next turn, the structured sandbox policy from
+   * `thread/settings/updated` takes precedence.
    */
   async stagePermissions(
     profileId: string,
@@ -285,8 +286,9 @@ export class CommandRunner {
   }
 
   /**
-   * 只回退浏览器确认时看到的那一轮。响应丢失后重试仍带同一个 ID：
-   * 已经消失就当作完成；仍在但不再是最后一轮则拒绝，绝不改退新的最后一轮。
+   * Rewinds only the turn seen when the browser confirmed. A retry after a lost response carries the same ID:
+   * if it has disappeared, treat the operation as complete; if it remains but is no longer the last turn,
+   * reject the request rather than rewinding the new last turn.
    */
   async rewind(targetTurnId: string): Promise<RewindOutcome> {
     if (this.#runtime.historyMode !== "paginated") {
@@ -409,7 +411,7 @@ function turnIds(turns: unknown[]): string[] {
   });
 }
 
-/** `SandboxPolicy` 的判别值。参数侧用 `danger-full-access` 这种写法，一并归一。 */
+/** Discriminant values for `SandboxPolicy`; also normalizes parameter forms such as `danger-full-access`. */
 const SANDBOX_POLICY_TYPES = new Set([
   "dangerfullaccess",
   "readonly",
@@ -426,8 +428,9 @@ function normalizedSandboxType(policy: unknown): string | null {
 }
 
 /**
- * 沙箱策略是判别联合，直接就能回答"是不是完全访问"；权限方案的 id 只是名字。
- * 所以先认沙箱策略，认不出来才退回认名字——那说明 Codex 换了协议，值得记一条。
+ * The sandbox policy is a discriminated union that directly answers whether full access is active;
+ * a permission profile ID is only a name. Inspect the policy first and fall back to the name only when
+ * it is unrecognized, which indicates a Codex protocol change worth logging.
  */
 function runtimeUsesFullAccess(runtime: SessionRuntime): boolean {
   const sandboxType = normalizedSandboxType(runtime.sandboxPolicy);

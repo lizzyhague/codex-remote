@@ -109,7 +109,7 @@ test("persists next-turn settings beside the desired setting and upgrades old fi
   const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-worker-settings-"));
   context.after(() => rm(directory, { recursive: true, force: true }));
   const file = path.join(directory, "work.sqlite");
-  // 旧版本的表没有待生效设置这一列。
+  // Older table versions lack the pending-settings column.
   const legacy = new DatabaseSync(file);
   legacy.exec(`
     CREATE TABLE worker_session_settings (
@@ -127,7 +127,7 @@ test("persists next-turn settings beside the desired setting and upgrades old fi
     model: { id: "gpt-test", effort: null },
     permissions: ":read-only",
   }, false, 100);
-  // 已有行只改待生效设置，不动 desired setting。
+  // Existing rows update only pending settings without changing desired settings.
   assert.equal(store.sessionDesiredFullAccess("thread-1"), true);
   store.setSessionPendingTurnSettings("thread-2", { permissions: ":workspace" }, false, 100);
   assert.equal(store.sessionDesiredFullAccess("thread-2"), false);
@@ -327,7 +327,7 @@ test("drops a finished task's events and keeps the ones still replayable", async
     status: "interrupted",
   }, 230, { interruptionReason: "user_requested" });
 
-  // 中断的最后一个任务仍要能补上中断前那一屏。
+  // The final interrupted turn must still replay the screen preceding interruption.
   assert.equal(store.eventsForTask("task-2").length, 2);
 
   store.admit({
@@ -341,7 +341,7 @@ test("drops a finished task's events and keeps the ones still replayable", async
     createdAtMs: 300,
   });
 
-  // 有了更新的任务之后，那一屏不会再被回放。
+  // Once a newer turn exists, that screen is no longer replayed.
   assert.deepEqual(store.eventsForTask("task-2"), []);
 });
 
@@ -435,7 +435,7 @@ test("clears events left behind by older builds when the store reopens", async (
     taskId: "task-1",
     status: "completed",
   }, 120);
-  // 旧版本在任务结束后仍然留着事件。
+  // Older versions retained events after a turn ended.
   store.appendEvent("task-1", "thread-1", { type: "message.delta", delta: "残留" }, 130);
   assert.equal(store.eventsForTask("task-1").length, 1);
   store.close();
@@ -506,7 +506,7 @@ test("forgets a deleted session but leaves work that is still running", async (c
   assert.equal(store.sessionDesiredFullAccess("thread-1"), null);
   assert.equal(store.require("task-2").payload, "别动我");
 
-  // 还在排队的任务不该被清理打断。
+  // Cleanup must not interrupt a turn that is still queued.
   const busy = store.forgetThread("thread-2");
   assert.deepEqual(busy, { deleted: 0, keptActive: 1 });
   assert.equal(store.require("task-2").status, "queued");

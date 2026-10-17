@@ -58,8 +58,8 @@ export function redactKnownAttachmentPaths(
 }
 
 /**
- * 遮盖宿主绝对路径，同时保留 HTTP(S) 等普通 URL、相对项目路径和公开路由。
- * 只替换识别出的路径片段，不丢弃路径周围的用户或工具文字。
+ * Redacts absolute host paths while preserving regular URLs such as HTTP(S), relative project paths,
+ * and public routes. Replaces only recognized path fragments without discarding surrounding user or tool text.
  */
 export function redactHostPaths(text: string): string {
   if (!text) return text;
@@ -75,7 +75,7 @@ export function redactHostPaths(text: string): string {
   return redactRawPosixPaths(redacted, currentProtectedUrls);
 }
 
-/** 递归替换对象里的已知附件路径；只改显示副本，不改原值。 */
+/** Recursively replaces known attachment paths in an object; changes only the display copy, not the original. */
 export function redactKnownAttachmentPathsDeep<T>(
   value: T,
   mappings: readonly AttachmentDisplayMapping[],
@@ -85,8 +85,9 @@ export function redactKnownAttachmentPathsDeep<T>(
 }
 
 /**
- * 流式输出时先扣住可能构成已知附件路径的尾部前缀，完整匹配后再发给页面。
- * flush 用于完成、失败或中断，避免丢字、重复或一直缓冲。
+ * During streaming, holds back trailing prefixes that may form a known attachment path and sends them
+ * to the page only after a complete match. `flush` handles completion, failure, or interruption to avoid
+ * lost text, duplicates, or indefinite buffering.
  */
 export class AttachmentPathStreamRedactor {
   #mappings: AttachmentDisplayMapping[];
@@ -304,7 +305,7 @@ function isPercentHexAt(value: string, index: number): boolean {
     (value[index - 2] === "%" && /[0-9a-f]/iu.test(value[index - 1] ?? ""));
 }
 
-/** 百分号转义大小写等价；转换不改变字符串长度，命中位置可直接用于原文。 */
+/** Percent escapes are case-insensitive; normalization preserves length, so match offsets apply to the original. */
 function normalizePercentEscapes(value: string): string {
   return value.replace(/%[0-9a-f]{2}/giu, (escape) => escape.toUpperCase());
 }

@@ -3,9 +3,9 @@ import { asObject } from "../shared/json.ts";
 import { permissionSettings } from "./permissions.ts";
 
 /**
- * 会话运行中选定、还没交给 Codex 的模型和权限。下一轮 `turn/start` 时一起带上，
- * Codex 按 “for this turn and subsequent turns” 生效；正在跑的这一轮不受影响。
- * 没选过的一项不出现，沿用会话当前设置。
+ * Model and permission choices made during a session but not yet sent to Codex. They accompany the
+ * next `turn/start` and take effect “for this turn and subsequent turns”; the active turn is unchanged.
+ * Unselected fields are omitted so the session's current settings remain in effect.
  */
 export type PendingTurnSettings = {
   model?: { id: string; effort: string | null };
@@ -31,7 +31,7 @@ export function hasPendingTurnSettings(pending: PendingTurnSettings | null): boo
   return Boolean(pending?.model || pending?.permissions);
 }
 
-/** 读回持久化的待生效设置；认不出的部分丢掉，不让一条坏记录卡住下一轮。 */
+/** Read persisted pending settings, discarding unknown fields so a bad record cannot block the next turn. */
 export function parsePendingTurnSettings(value: unknown): PendingTurnSettings | null {
   const object = asObject(value);
   if (!object) return null;

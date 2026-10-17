@@ -2,7 +2,7 @@ import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { TestContext } from "node:test";
 
-/** 测试专用：在 `node:fs/promises` 默认对象上注入故障，记录原子写各阶段的调用顺序。 */
+/** Tests only: inject faults into the default `node:fs/promises` object and record each atomic-write stage in call order. */
 export type FsStage =
   | "file-write"
   | "file-sync"
@@ -11,14 +11,14 @@ export type FsStage =
   | "directory-sync";
 
 export type FsFaultPlan = {
-  /** 每个阶段第几次调用（从 1 开始）时抛错；`"always"` 表示每次都抛。 */
+  /** One-based invocation number on which each stage throws; `"always"` throws every time. */
   fail?: Partial<Record<FsStage, number | "always">>;
 };
 
 export type FsFaultRecorder = {
-  /** 按发生顺序记录的阶段，目录同步带目录名：`directory-sync:<path>`。 */
+  /** Stages in occurrence order; directory sync includes its path as `directory-sync:<path>`. */
   readonly events: string[];
-  /** 之后不再注入任何故障，用来验证失败后可以重试。 */
+  /** Stop injecting faults, used to verify that an operation can be retried after failure. */
   heal(): void;
 };
 
@@ -59,7 +59,7 @@ export function injectFsFaults(context: TestContext, plan: FsFaultPlan = {}): Fs
           return async (...args: Parameters<FileHandle["writeFile"]>) => {
             events.push("file-write");
             if (shouldFail("file-write")) {
-              // 模拟写到一半：已有部分私有数据进入临时文件。
+              // Simulate a partial write with some private data already in the temporary file.
               await target.writeFile("{\"partial\":", "utf8");
               throw fault("file-write");
             }
@@ -77,7 +77,7 @@ export function injectFsFaults(context: TestContext, plan: FsFaultPlan = {}): Fs
           return async () => {
             events.push("file-close");
             if (shouldFail("file-close")) {
-              // 描述符照常关闭，只把失败报给调用方，避免测试泄漏 fd。
+              // Close the descriptor normally and report only the failure to the caller, avoiding leaked FDs in tests.
               await target.close();
               throw fault("file-close");
             }
@@ -114,7 +114,7 @@ export function injectFsFaults(context: TestContext, plan: FsFaultPlan = {}): Fs
   };
 }
 
-/** 目录里残留的原子写临时文件。 */
+/** Atomic-write temporary files left behind in the directory. */
 export async function temporaryFiles(directory: string): Promise<string[]> {
   return (await fs.readdir(directory)).filter((name) => name.endsWith(".tmp"));
 }

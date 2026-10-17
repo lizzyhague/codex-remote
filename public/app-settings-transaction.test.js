@@ -38,7 +38,7 @@ class FakeElement {
   replaceChildren(...children) { this.children = children; }
 }
 
-/** 2026-01-15T12:00:00Z：上海 20:00，东京 21:00，纽约 07:00。 */
+/** At 2026-01-15T12:00:00Z: Shanghai 20:00, Tokyo 21:00, New York 07:00. */
 const STAMP = 1_768_478_400;
 const SHANGHAI = { followDevice: false, cityTimeZone: "Asia/Shanghai" };
 
@@ -155,7 +155,7 @@ function harness({ stored = SHANGHAI } = {}) {
 const closePaths = {
   "the cancel button": (h) => h.elements.appSettingsCancelButton.listeners.click(),
   "the close button": (h) => h.elements.appSettingsCloseButton.listeners.click(),
-  // Escape：dialog 先派发 cancel（未被阻止），再关闭并派发 close。
+  // Escape makes the dialog dispatch an unprevented cancel, then close and dispatch close.
   Escape: (h) => {
     const event = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
     h.elements.appSettingsDialog.listeners.cancel(event);

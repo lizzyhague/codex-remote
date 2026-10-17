@@ -102,7 +102,7 @@ lines.on("line", (line) => {
   }
 });
 lines.on("close", () => {
-  // 让关闭有可观察的耗时：第二个 close() 若不等待同一次关闭，会早于这里返回。
+  // Make closure observably slow: a second close() that does not share it would return before this point.
   setTimeout(exit, 150);
 });
 `, { mode: 0o755 });

@@ -18,8 +18,8 @@ import { asObject, isObject } from "../shared/json.ts";
 
 const token = "codex-remote-smoke-token-not-a-secret";
 const appServer = new AppServerClient({ workingDirectory: process.cwd() });
-// 这个脚本只读项目和会话列表，不启动任何任务，所以状态库放在临时目录，
-// 不碰主机上真正的 work.sqlite。
+// This script only reads project and session lists and starts no turns, so keep its state store
+// in a temporary directory without touching the host's real work.sqlite.
 const stateDirectory = await mkdtemp(path.join(tmpdir(), "codex-remote-smoke-"));
 let workerState: WorkerStateStore | null = null;
 let workers: SessionWorkerManager | null = null;

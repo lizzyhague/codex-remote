@@ -84,7 +84,7 @@ test("a loaded snapshot ignores later source edits; the next load publishes a ne
   await writeFile(path.join(root, "markdown.js"), 'export const render = () => "mark-B";');
   await writeFile(path.join(root, "index.html"), `${PAGE}edited`);
   await writeFile(path.join(root, "icon.svg"), "<svg>new</svg>");
-  // 运行中的一套不变：页面、当前版本资源、未版本化文件都是启动时的内容。
+  // The live set remains fixed: page, current-version assets, and unversioned files all retain startup content.
   assert.equal(assetUrl(page(first), "app.js"), firstApp);
   assert.doesNotMatch(page(first), /edited/u);
   assert.match((await first.read(firstModule))!.body.toString("utf8"), /mark-A/u);
@@ -143,7 +143,7 @@ test("keeps the current version and the most recent previous ones, and cleans st
     await writeFile(path.join(root, "boot.js"), `// boot ${release}`);
     const assets = await load(root);
     released.push(assets);
-    // 让每次发布的时间先后明确，不依赖文件系统时间戳精度。
+    // Make publication order explicit without relying on filesystem timestamp precision.
     const at = new Date(Date.now() - (10 - release) * hour);
     await utimes(path.join(root, ".web-assets", assets.version), at, at);
   }
@@ -162,11 +162,11 @@ test("keeps the current version and the most recent previous ones, and cleans st
   assert.deepEqual(await versions(root), [...expected, "README"].sort());
   assert.deepEqual((await readdir(directory)).filter((name) => name.startsWith(".")), [".staging-fresh"]);
 
-  // 被回收的旧版本不再提供，也不会回落到当前文件；仍保留的旧版本可取。
+  // A pruned old version is unavailable and does not fall back to current files; retained old versions remain accessible.
   assert.equal(await current.read(assetUrl(page(released[0]!), "app.js")), null);
   assert.ok(await current.read(assetUrl(page(released.at(-1)!), "app.js")));
 
-  // 回退到较早的版本时，它重新算作最近启动的版本，不会被当成最旧的删掉。
+  // Rolling back makes an earlier version the most recently started, so it is not pruned as the oldest.
   await writeFile(path.join(root, "boot.js"), `// boot ${RETAINED_PREVIOUS_VERSIONS + 1}`);
   const rolledBack = await load(root, { retainPrevious: 1 });
   assert.equal(rolledBack.version, released.at(-2)!.version);

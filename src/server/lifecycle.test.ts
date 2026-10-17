@@ -14,7 +14,7 @@ test("stop intent is recorded synchronously inside the signal callback", () => {
   const stop = new StopIntent(signals);
   assert.equal(stop.stopRequested, false);
   signals.emit("SIGTERM");
-  // 同一调用栈内即可见，不依赖任何微任务。
+  // Visible within the same call stack, without relying on any microtask.
   assert.equal(stop.stopRequested, true);
   stop.dispose();
   assert.equal(signals.listenerCount("SIGINT"), 0);

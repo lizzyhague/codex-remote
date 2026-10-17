@@ -1,8 +1,9 @@
 /**
- * 从 app-server 和状态文件里读松散 JSON 时公用的两个判断。
+ * Two shared guards for reading loosely typed JSON from app-server and state files.
  *
- * 此前这两个函数在后端被逐字抄了十几份，其中一份的失败返回值还不一样——同名不同
- * 契约最容易在以后咬人，所以统一放这里，失败一律是 `null`。
+ * These functions were previously copied verbatim across the backend more than a dozen times, with one
+ * copy even returning a different failure value. Identical names with different contracts invite future
+ * bugs, so they live here now and consistently return `null` on failure.
  */
 
 export function isObject(value: unknown): value is Record<string, unknown> {

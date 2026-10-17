@@ -734,7 +734,7 @@ test("keeps a durable trashing record when the trash write fails after archive",
     {},
   );
   const service = new CodexSessionService(transport, catalog, trash, { now: () => 1_000 });
-  // 第一次写是 `trashing` 凭据，第二次写 `trashed` 时失败。
+  // The first write persists the `trashing` credential; the second fails while writing `trashed`.
   const faults = injectFsFaults(context, { fail: { "file-write": 2 } });
 
   const result = await service.moveToTrash("workspace/alpha", ["thread-old"], "active");
@@ -742,7 +742,7 @@ test("keeps a durable trashing record when the trash write fails after archive",
     succeeded: [],
     failed: [{ sessionId: "thread-old", message: "会话整理失败，请查看服务日志。" }],
   });
-  // 不再尽力 unarchive：Codex 已归档，本地凭据负责把这次请求做完。
+  // Do not attempt a best-effort unarchive: Codex has archived the session, and the local credential will finish this request.
   assert.deepEqual(transport.requests.map((request) => request.method), [
     "thread/read",
     "thread/archive",
@@ -753,14 +753,14 @@ test("keeps a durable trashing record when the trash write fails after archive",
     trashEntry({ state: "trashing" }),
   );
 
-  // 回收站里能看到它，不会从三个列表同时消失。
+  // It remains visible in trash instead of disappearing from all three lists.
   transport.results.push({
     thread: thread("thread-old", project, { status: { type: "idle" } }),
   });
   const page = await service.list("workspace/alpha", { view: "trash" });
   assert.deepEqual(page.sessions.map((session) => session.id), ["thread-old"]);
 
-  // 重试同一请求：重复归档得到精确的 no rollout found，视为已完成。
+  // Retry the same request: repeated archiving returns the exact no rollout found error and counts as complete.
   faults.heal();
   transport.results.push(
     { thread: thread("thread-old", project, { status: { type: "idle" } }) },
@@ -782,7 +782,7 @@ test("keeps a durable trashing record when the trash write fails after archive",
 
 test("startup cleanup finishes a move to trash interrupted before or after archive", async (context) => {
   const { catalog, trash, trashPath } = await createFixture(context);
-  // 两条都停在 `trashing`：一条退出时还没归档，一条已归档但没来得及登记。
+  // Both entries stopped at `trashing`: one exited before archiving, and one archived but did not record completion.
   await trash.put(trashEntry({ threadId: "thread-before", state: "trashing" }));
   await trash.put(trashEntry({ threadId: "thread-after", state: "trashing" }));
   const transport = new FakeTransport();
@@ -835,7 +835,7 @@ test("a failed restore stays restorable and a retry tolerates an earlier unarchi
   const page = await service.list("workspace/alpha", { view: "trash" });
   assert.deepEqual(page.sessions.map((session) => session.id), ["thread-old"]);
 
-  // 断开前 Codex 其实已经恢复：重复 unarchive 得到精确的 no archived rollout found。
+  // Codex actually restored before disconnection: repeating unarchive returns the exact no archived rollout found error.
   transport.results.push(
     { thread: thread("thread-old", project, { status: { type: "idle" } }) },
     rpcError("no archived rollout found for thread id thread-old"),
@@ -853,7 +853,7 @@ test("a failed restore stays restorable and a retry tolerates an earlier unarchi
 
 test("startup cleanup finishes an interrupted restore instead of purging it", async (context) => {
   const { catalog, trash, trashPath } = await createFixture(context);
-  // 已超过 30 天，但用户最后的意图是恢复，不能被当成过期条目永久删除。
+  // More than 30 days have passed, but the user's latest intent was restoration, so this must not be permanently deleted as expired.
   await trash.put(trashEntry({ threadId: "thread-ok", deletedAt: 100, state: "restoring" }));
   await trash.put(trashEntry({ threadId: "thread-stuck", deletedAt: 100, state: "restoring" }));
   const transport = new FakeTransport();

@@ -43,7 +43,7 @@ function sendJson(response: ServerResponse, status: number, value: unknown): voi
   response.end(body);
 }
 
-/** 假共享服务：监听隔离目录里的 Unix socket，记录每个下游请求何时被关闭。 */
+/** Fake shared service that listens on a Unix socket in an isolated directory and records when downstream requests close. */
 async function fakeService(context: TestContext, handler: Handler) {
   const directory = await mkdtemp(path.join(tmpdir(), "codex-remote-upload-client-"));
   const socketPath = path.join(directory, "upload.sock");
@@ -54,7 +54,7 @@ async function fakeService(context: TestContext, handler: Handler) {
       request.on("data", (chunk: Buffer) => chunks.push(chunk));
       request.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     });
-    // 没有写响应时，ServerResponse 的 close 只会因为连接被对端关闭而触发。
+    // Without a response write, ServerResponse emits close only when the peer closes the connection.
     const closed = new Promise<void>((resolve) => response.once("close", () => resolve()));
     requests.push({ url: request.url ?? "", body, closed });
     handler(request, response);
@@ -71,8 +71,8 @@ async function fakeService(context: TestContext, handler: Handler) {
 }
 
 /**
- * 真实浏览器入口：在一个本地 HTTP 服务里把收到的请求体交给 `upload()`，这样 `source`
- * 是真正的 IncomingMessage，并且可以从“浏览器”这一侧中断。
+ * Realistic browser entry point: a local HTTP service passes the received request body to `upload()`,
+ * making `source` a real IncomingMessage that can be interrupted from the "browser" side.
  */
 async function uploadThroughFrontServer(
   context: TestContext,
@@ -346,7 +346,7 @@ test("leases must match owner, binding and the requested ID set; mismatches are 
     lease: { leaseId: "lease-1", ownerId: "task-1", expiresAtMs: 100, attachments, ...extra },
   });
 
-  // 服务端按首次出现去重并可能换顺序；客户端按请求顺序返回，并去掉未声明字段。
+  // The server deduplicates by first occurrence and may reorder; the client restores request order and drops undeclared fields.
   reply = lease([resolved("b", { storagePath: "/srv/x" }), resolved("a")], { internal: true });
   const accepted = await client.createLease(BINDING, "task-1", ["a", "b", "a"]);
   assert.deepEqual(accepted, {
@@ -376,7 +376,7 @@ test("leases must match owner, binding and the requested ID set; mismatches are 
     assert.deepEqual(released, [{ url: "/v1/leases/lease-1/release", body: '{"ownerId":"task-1"}' }], label);
   }
 
-  // 连 leaseId 都没有时无从释放，只能等共享服务按租约时限回收。
+  // Without even a leaseId, release is impossible; the shared service must reclaim it when the lease expires.
   reply = { lease: { ownerId: "task-1" } };
   released.length = 0;
   assertUploadError(

@@ -4,8 +4,8 @@ const MAX_FIELD_ID_LENGTH = 128;
 const MAX_ANSWER_CODE_UNITS = 4_096;
 
 /**
- * 把 MCP 的 typed form schema 收紧成浏览器和后端共同支持的子集。
- * 返回 null 表示整张表单只能取消，不能只呈现其中一部分。
+ * Narrow the MCP typed-form schema to the subset shared by the browser and backend.
+ * Returning null means the entire form can only be cancelled; do not render a partial form.
  */
 export function normalizeMcpFormSchema(schema) {
   if (!isRecord(schema) || !hasOnlyKeys(schema, ["$schema", "type", "properties", "required"])) {
@@ -40,7 +40,7 @@ export function normalizeMcpFormSchema(schema) {
   return { fields };
 }
 
-/** 后端最终边界和浏览器提交前都调用这一份答案校验。 */
+/** Shared answer validation used at the backend boundary and before browser submission. */
 export function validateMcpFormAnswers(form, answers) {
   if (!form || !Array.isArray(form.fields) || !isRecord(answers)) {
     return invalid(null, "这个 MCP 表单暂时不受支持，只能取消本轮。");
@@ -100,7 +100,7 @@ function normalizeStringField(common, schema) {
     return choices ? { ...common, type: "string", choices } : null;
   }
   if (!hasOnlyKeys(schema, ["type", "title", "description", "minLength", "maxLength", "default"])) {
-    // format/pattern 等约束没有完整实现时，整张表单保持只能取消。
+    // When constraints such as format/pattern are not fully implemented, keep the entire form cancel-only.
     return null;
   }
   const minLength = nonnegativeSafeInteger(schema.minLength, 0);

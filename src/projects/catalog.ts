@@ -33,11 +33,11 @@ class ProjectCatalogError extends PublicError {
   }
 }
 
-/** 目录扫描结果的缓存时长。短到用户察觉不到，长到能挡住一次操作里的重复扫描。 */
+/** Cache lifetime for directory scans: imperceptible to users but long enough to avoid repeats within one operation. */
 const SCAN_CACHE_TTL_MS = 1_000;
 
 /**
- * 扫描允许的项目根目录。浏览器只会看到项目 ID 和名称，不会提供任意路径。
+ * Scans allowed project roots. The browser sees only project IDs and names and cannot supply arbitrary paths.
  */
 export class ProjectCatalog {
   readonly #roots: ResolvedRoot[];
@@ -107,13 +107,13 @@ export class ProjectCatalog {
     return projects.map(({ path: _path, ...summary }) => summary);
   }
 
-  /** 仅供进程内的文件访问边界使用，不得发送给浏览器。 */
+  /** Used only as an in-process file access boundary; must never be sent to the browser. */
   rootPaths(): string[] {
     return this.#roots.map((root) => root.realPath);
   }
 
   /**
-   * 每次开始工作前重新扫描并解析 ID，不直接接受浏览器传来的文件路径。
+   * Rescans and resolves the ID before each operation instead of accepting a file path from the browser.
    */
   async resolve(projectId: string): Promise<ResolvedProject> {
     const projects = await this.#scan();
@@ -127,9 +127,9 @@ export class ProjectCatalog {
   }
 
   async #scan(): Promise<ResolvedProject[]> {
-    // 打开一个会话会连续多次解析项目 ID，每次都重新 readdir + realpath + stat
-    // 是没必要的。缓存只保留很短时间：新建的项目文件夹刷新一次就能看到，
-    // 而缓存里存的是扫描当时已经解析好的真实路径，不会放宽白名单边界。
+    // Opening a session resolves the project ID several times in succession, so repeating readdir + realpath + stat
+    // each time is unnecessary. The cache is very short-lived: one refresh reveals newly created project folders,
+    // while cached entries contain real paths resolved during the scan and do not weaken the allowlist boundary.
     const cached = this.#cache;
     if (cached && cached.expiresAt > Date.now()) {
       return cached.projects;
