@@ -7,6 +7,7 @@ const source = await readFile(new URL("./theme.js", import.meta.url), "utf8");
 
 function run({ stored = null, systemLight = false, storage = true } = {}) {
   const attributes = {};
+  const header = { content: "#141616", setAttribute(name, value) { if (name === "content") this.content = value; } };
   const store = new Map(stored === null ? [] : [["codex-remote.theme", stored]]);
   const mediaListeners = [];
   const windowListeners = {};
@@ -30,10 +31,14 @@ function run({ stored = null, systemLight = false, storage = true } = {}) {
   vm.runInNewContext(source, {
     window,
     localStorage,
-    document: { documentElement: { setAttribute: (name, value) => { attributes[name] = value; } } },
+    document: {
+      documentElement: { setAttribute: (name, value) => { attributes[name] = value; } },
+      querySelector: (selector) => (selector === 'meta[name="theme-color"]' ? header : null),
+    },
   });
   return {
     theme: () => attributes["data-theme"],
+    header: () => header.content,
     api: window.codexRemoteTheme,
     store,
     setSystem(light) {
@@ -86,6 +91,15 @@ test("changes from another tab synchronize the current page", () => {
   assert.equal(page.theme(), "light");
   page.storageEvent("codex-remote.theme", null);
   assert.equal(page.theme(), "dark");
+});
+
+test("the PWA header color follows the applied theme", () => {
+  const page = run({ systemLight: true });
+  assert.equal(page.header(), "#f8f4ea");
+  page.setSystem(false);
+  assert.equal(page.header(), "#141616");
+  page.api.set("light");
+  assert.equal(page.header(), "#f8f4ea");
 });
 
 test("every page loads the theme script before stylesheets", async () => {
