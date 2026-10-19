@@ -21,7 +21,7 @@ export function resolveMarkStatePath(
 }
 
 const SHAPE: ThreadEntryStoreShape<MarkEntry> = {
-  label: "钉住状态文件",
+  label: "Pin state file",
   clone: (entry) => ({
     threadId: entry.threadId,
     projectId: entry.projectId,

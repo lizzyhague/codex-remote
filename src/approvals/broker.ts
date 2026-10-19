@@ -44,7 +44,7 @@ export type ApprovalEvent =
 
 /**
  * Translates bidirectional JSON-RPC approval requests from app-server into the frontend protocol.
- * The initial version only supports "本次允许" and "拒绝" and does not create persistent rules.
+ * The initial version only supports "allow once" and "decline" and does not create persistent rules.
  */
 export class ApprovalBroker extends ServerRequestBroker<
   ApprovalRequest,

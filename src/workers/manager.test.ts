@@ -2362,7 +2362,7 @@ test("permanent deletion fails without changing artifacts while a task is active
 
   await assert.rejects(
     fixture.manager.forgetSession("thread-1"),
-    /仍有 1 个任务在进行/u,
+    /still has tasks in progress \(1\)/u,
   );
 
   assert.equal(fixture.store.require("task-active").status, "queued");

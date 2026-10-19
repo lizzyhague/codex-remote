@@ -25,8 +25,8 @@ test("isolated generation reports the installed and verified versions, experimen
     log: fixture.logs.push.bind(fixture.logs),
   });
 
-  assert.match(fixture.logs.join("\n"), /codex-cli 1\.2\.3.*完全一致.*experimental surface/);
-  assert.match(fixture.logs.join("\n"), /已验证版本是 Codex CLI 1\.2\.3/);
+  assert.match(fixture.logs.join("\n"), /codex-cli 1\.2\.3 matches .* exactly.*experimental surface/);
+  assert.match(fixture.logs.join("\n"), /records Codex CLI 1\.2\.3 as verified/);
   const invocations = await fixture.invocations();
   assert.deepEqual(invocations.map((entry) => entry.arguments), [
     ["--version"],
@@ -44,7 +44,7 @@ test("a different installed CLI is allowed and identified", async (context) => {
     log: fixture.logs.push.bind(fixture.logs),
   });
   assert.match(fixture.logs.join("\n"), /codex-cli 1\.2\.4/);
-  assert.match(fixture.logs.join("\n"), /已验证版本是 Codex CLI 1\.2\.3/);
+  assert.match(fixture.logs.join("\n"), /records Codex CLI 1\.2\.3 as verified/);
   const invocations = await fixture.invocations();
   assert.deepEqual(invocations.map((entry) => entry.arguments), [
     ["--version"],
@@ -81,7 +81,7 @@ test("write replaces the exact generated tree and refuses unknown generated edit
       repositoryRoot: fixture.root,
       environment: fixture.environment,
     }),
-    /有未提交改动；--write 不会覆盖/,
+    /has uncommitted changes; --write will not overwrite/,
   );
 
   await rm(path.join(fixture.outputDirectory, "unknown.ts"));

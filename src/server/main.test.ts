@@ -156,7 +156,7 @@ async function directoryPid(service: Service): Promise<number> {
 }
 
 async function waitForReady(service: Service): Promise<void> {
-  await waitFor(() => service.output().stdout.includes("正在监听"), "服务开始监听");
+  await waitFor(() => service.output().stdout.includes("is listening"), "服务开始监听");
 }
 
 /** Wait for the service to exit, record surviving directory children, then force-clean test leftovers. */
@@ -190,8 +190,8 @@ test("an initialize that never answers ends startup with a failure", async () =>
   await directoryPid(service);
   const { code, leftovers } = await finish(service);
   assert.equal(code, 1);
-  assert.match(service.output().stderr, /启动超过/);
-  assert.doesNotMatch(service.output().stdout, /正在监听/);
+  assert.match(service.output().stderr, /Startup was not ready after/);
+  assert.doesNotMatch(service.output().stdout, /is listening/);
   assert.deepEqual(leftovers, [], "半成品目录子进程已被清理");
 });
 
@@ -204,7 +204,7 @@ test("a stop signal during startup ends the half-started service successfully", 
   service.child.kill("SIGTERM");
   const { code, leftovers } = await finish(service);
   assert.equal(code, 0);
-  assert.match(service.output().stdout, /启动期间收到停止信号/);
+  assert.match(service.output().stdout, /A stop signal arrived during startup/);
   assert.deepEqual(leftovers, []);
 });
 
@@ -227,7 +227,7 @@ test("startup cleanup that never finishes is bounded and stays resumable", async
     );
   });
   assert.equal(code, 1);
-  assert.match(service.output().stderr, /启动超过/);
+  assert.match(service.output().stderr, /Startup was not ready after/);
   assert.deepEqual(leftovers, []);
   assert.equal(
     (reopened as TrashStore | null)?.get("thread-stuck")?.state,
@@ -247,7 +247,7 @@ test("a planned stop after ready exits successfully", async () => {
   const { code, leftovers } = await finish(service);
   assert.equal(code, 0);
   assert.deepEqual(leftovers, []);
-  assert.doesNotMatch(service.output().stderr, /已经结束/);
+  assert.doesNotMatch(service.output().stderr, /has ended/);
 });
 
 test("Node handling the stop signal first keeps a planned stop successful", async () => {
@@ -261,7 +261,7 @@ test("Node handling the stop signal first keeps a planned stop successful", asyn
   service.child.kill("SIGTERM");
   process.kill(pid, "SIGTERM");
   assert.equal((await finish(service)).code, 0);
-  assert.doesNotMatch(service.output().stderr, /已经结束/);
+  assert.doesNotMatch(service.output().stderr, /has ended/);
 });
 
 test("the directory child exiting before Node sees the signal is still a planned stop", async () => {
@@ -276,7 +276,7 @@ test("the directory child exiting before Node sees the signal is still a planned
   await waitFor(() => !alive(pid), "目录子进程被回收");
   service.child.kill("SIGTERM");
   assert.equal((await finish(service)).code, 0);
-  assert.doesNotMatch(service.output().stderr, /已经结束/);
+  assert.doesNotMatch(service.output().stderr, /has ended/);
 });
 
 test("an unexpected directory exit without a stop signal is still a failure", async () => {
@@ -288,7 +288,7 @@ test("an unexpected directory exit without a stop signal is still a failure", as
   const pid = await directoryPid(service);
   process.kill(pid, "SIGKILL");
   assert.equal((await finish(service)).code, 1);
-  assert.match(service.output().stderr, /codex app-server 已经结束/);
+  assert.match(service.output().stderr, /codex app-server has ended/);
 });
 
 test("the offline grace accepts exactly the range a Node timer can hold", () => {
@@ -309,7 +309,7 @@ test("the offline grace accepts exactly the range a Node timer can hold", () => 
   ]) {
     assert.throws(
       () => readOfflineGraceMs(source),
-      new RegExp(`CODEX_REMOTE_OFFLINE_GRACE_MS 必须是 0 到 ${MAX_TIMER_DELAY_MS}`),
+      new RegExp(`CODEX_REMOTE_OFFLINE_GRACE_MS must be an integer number of milliseconds from 0 to ${MAX_TIMER_DELAY_MS}`),
       source,
     );
   }
@@ -321,8 +321,8 @@ test("an offline grace beyond the timer limit fails startup with the allowed ran
   const service = startService(prepared, { startupTimeoutMs: 10_000, stopSignalGraceMs: 50 });
   const { code, leftovers } = await finish(service);
   assert.equal(code, 1);
-  assert.match(service.output().stderr, /CODEX_REMOTE_OFFLINE_GRACE_MS 必须是 0 到 2147483647/);
+  assert.match(service.output().stderr, /CODEX_REMOTE_OFFLINE_GRACE_MS must be an integer number of milliseconds from 0 to 2147483647/);
   assert.doesNotMatch(service.output().stderr, /TimeoutOverflowWarning/);
-  assert.doesNotMatch(service.output().stdout, /正在监听/);
+  assert.doesNotMatch(service.output().stdout, /is listening/);
   assert.deepEqual(leftovers, [], "目录子进程已被清理");
 });

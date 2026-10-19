@@ -53,7 +53,7 @@ test("rejects two root IDs that resolve to the same canonical physical root", as
         { id: "secondary", path: secondPath },
       ]),
       (error: unknown) => {
-        assert.match(String((error as Error).message), /primary 与 secondary/u);
+        assert.match(String((error as Error).message), /primary and secondary/u);
         assert.equal(String((error as Error).message).includes(temporaryDirectory), false);
         return true;
       },

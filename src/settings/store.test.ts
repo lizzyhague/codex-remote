@@ -127,7 +127,7 @@ test("rejects values over the character limit and malformed files", async (conte
   await writeFile(filePath, JSON.stringify({ version: 1, developerInstructions: 12 }));
   await assert.rejects(
     () => ApplicationSettingsStore.open(filePath),
-    /格式不正确/u,
+    /invalid format/u,
   );
 });
 

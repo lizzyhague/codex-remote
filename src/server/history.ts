@@ -108,7 +108,7 @@ function toBrowserTask(
     status: turn.status,
     error: publicTurnErrorMessage(
       turn.error?.message,
-      `未向浏览器透传的历史 turn ${turn.id} 错误`,
+      `Error of history turn ${turn.id} withheld from the browser`,
     ),
     restoresInput: restoresInput(turn),
     items: turn.items.flatMap((item) => toBrowserTimelineItem(item, mappings)),

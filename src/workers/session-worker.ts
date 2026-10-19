@@ -41,7 +41,7 @@ export type SessionWorkerOptions = {
 
 export class SessionWorkerStartCancelledError extends Error {
   constructor() {
-    super("会话 Worker 启动已取消。");
+    super("The session worker start was cancelled.");
     this.name = "SessionWorkerStartCancelledError";
   }
 }
@@ -125,7 +125,7 @@ export class SessionWorker {
         if (!worker.#closing) {
           options.onUnexpectedExit?.(
             worker,
-            new Error("会话 Worker 的 codex app-server 已退出。"),
+            new Error("The session worker's codex app-server exited."),
           );
         }
       });

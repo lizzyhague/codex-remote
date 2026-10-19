@@ -293,7 +293,7 @@ export class SessionWorkerManager {
     if (this.#closed) throw new WorkerManagerError("worker_manager_closed", "后端正在停止。");
     const { keptActive } = this.#store.forgetThread(threadId);
     if (keptActive > 0) {
-      throw new Error(`会话仍有 ${keptActive} 个任务在进行，工作记录没有删除。`);
+      throw new Error(`The session still has tasks in progress (${keptActive}); its work records were not deleted.`);
     }
     this.#clearPathRedactors(threadId);
     this.#sessionDesiredFullAccess.delete(threadId);
@@ -384,7 +384,7 @@ export class SessionWorkerManager {
       if (!queued.duplicate) {
         await this.#registerPreparedAttachments(threadId, clientMessageId, prepared).catch(
           (error: unknown) => {
-            console.error(`登记附件显示映射失败：${errorMessage(error)}`);
+            console.error(`Registering attachment display mappings failed: ${errorMessage(error)}`);
           },
         );
       }
@@ -1163,7 +1163,7 @@ export class SessionWorkerManager {
     if (this.#closed) return;
     const scheduled = this.#scheduleTail.then(() => this.#drainQueue());
     this.#scheduleTail = scheduled.catch((error: unknown) => {
-      console.error(`Worker 调度失败：${errorMessage(error)}`);
+      console.error(`Worker scheduling failed: ${errorMessage(error)}`);
     });
   }
 
@@ -1599,7 +1599,7 @@ export class SessionWorkerManager {
       return await active.worker.turns.interruptActiveTurn();
     } catch (error) {
       if (!(error instanceof CodexInterruptTimeoutError)) throw error;
-      console.error(`会话 ${active.task.threadId} 的 turn/interrupt 超时，强制关闭 Worker。`);
+      console.error(`turn/interrupt timed out for session ${active.task.threadId}; closing the worker forcibly.`);
       this.#forceFinishInterrupted(active);
       return true;
     }
@@ -1684,7 +1684,7 @@ export class SessionWorkerManager {
   async #failActive(active: ActiveWorker, error: unknown): Promise<void> {
     if (active.finishing) return;
     active.finishing = true;
-    console.error(`会话 Worker ${active.task.threadId} 失败：${errorMessage(error)}`);
+    console.error(`Session worker ${active.task.threadId} failed: ${errorMessage(error)}`);
     this.#cancelPendingRequests(active);
     const stored = this.#store.tryFinish(active.task.id, [
       "queued",
@@ -1709,7 +1709,7 @@ export class SessionWorkerManager {
       try {
         await this.#closeWorker(active.worker);
       } catch (error) {
-        console.error(`关闭会话 Worker 失败：${errorMessage(error)}`);
+        console.error(`Closing a session worker failed: ${errorMessage(error)}`);
       } finally {
         // close() synchronously cancels pending broker prompts. Keep the active mapping until here so the Manager
         // can broadcast the corresponding resolved event to every device.
@@ -1727,12 +1727,12 @@ export class SessionWorkerManager {
     try {
       active.worker.approvals.cancelThread(active.task.threadId);
     } catch (error) {
-      console.error(`取消会话审批失败：${errorMessage(error)}`);
+      console.error(`Cancelling session approvals failed: ${errorMessage(error)}`);
     }
     try {
       active.worker.interactions.cancelThread(active.task.threadId);
     } catch (error) {
-      console.error(`取消会话交互失败：${errorMessage(error)}`);
+      console.error(`Cancelling session interactions failed: ${errorMessage(error)}`);
     }
   }
 
@@ -1835,7 +1835,7 @@ export class SessionWorkerManager {
     }
     if (launching.worker) {
       await this.#closeWorker(launching.worker).catch((error: unknown) => {
-        console.error(`关闭启动中的会话 Worker 失败：${errorMessage(error)}`);
+        console.error(`Closing a starting session worker failed: ${errorMessage(error)}`);
       });
     }
     this.#locks.release(task.projectId, launching.ownerId);
@@ -1900,7 +1900,7 @@ export class SessionWorkerManager {
         const renewed = await this.#uploads.renewLease(lease.leaseId, lease.ownerId);
         lease.expiresAtMs = renewed.expiresAtMs;
       } catch (error) {
-        console.error(`附件租约 ${taskId} 续期失败：${errorMessage(error)}`);
+        console.error(`Renewing the attachment lease of ${taskId} failed: ${errorMessage(error)}`);
       }
     }
   }
@@ -1916,7 +1916,7 @@ export class SessionWorkerManager {
       this.#attachmentLeases.delete(taskId);
     }
     await this.#uploads?.releaseLease(lease.leaseId, lease.ownerId).catch((error: unknown) => {
-      console.error(`释放附件租约 ${taskId} 失败：${errorMessage(error)}`);
+      console.error(`Releasing the attachment lease of ${taskId} failed: ${errorMessage(error)}`);
     });
   }
 
@@ -2067,7 +2067,7 @@ export class SessionWorkerManager {
       return;
     }
     if (this.#provisionalWorkers.get(threadId)?.worker === worker) {
-      console.error(`空会话 Worker ${threadId} 意外退出：${errorMessage(error)}`);
+      console.error(`Idle session worker ${threadId} exited unexpectedly: ${errorMessage(error)}`);
       void this.#closeProvisional(threadId, worker);
     }
   }
@@ -2088,7 +2088,7 @@ export class SessionWorkerManager {
     this.#provisionalWorkers.delete(threadId);
     await this.#holdClosing((async () => {
       await this.#closeWorker(worker).catch((error: unknown) => {
-        console.error(`关闭空会话 Worker 失败：${errorMessage(error)}`);
+        console.error(`Closing an idle session worker failed: ${errorMessage(error)}`);
       });
       this.#sessionDesiredFullAccess.delete(threadId);
       this.#sessionPendingTurnSettings.delete(threadId);
@@ -2449,7 +2449,7 @@ function uploadManagerError(error: unknown): WorkerManagerError {
   if (error instanceof SharedUploadError) {
     return new WorkerManagerError(error.code, error.message);
   }
-  console.error(`附件准入失败：${errorMessage(error)}`);
+  console.error(`Admitting attachments failed: ${errorMessage(error)}`);
   return new WorkerManagerError("attachment_failed", "附件处理失败，请查看服务日志。");
 }
 
@@ -2459,7 +2459,7 @@ function terminalReplayTask(
 ): WorkerTask | null {
   if (!task) return null;
   if (task.status === "interrupted" && task.interruptionReason) {
-    // Interruption events add tool activity absent from Codex history and the “任务已停止” notice. If /rewind
+    // Interruption events add tool activity absent from Codex history and the “task stopped” notice. If /rewind
     // or another client removed the turn, replay would redraw those messages and revive them on every refresh.
     // Interruptions without a native turn still rely on the event log; those with one use persisted history from
     // this thread/resume response as authoritative.

@@ -49,7 +49,7 @@ test("persists accepted messages and deduplicates clientMessageId", async (conte
     payload: "不同内容",
     permissionMode: "manual",
     createdAtMs: 300,
-  }), /另一条消息/u);
+  }), /another message/u);
 });
 
 test("keeps ordered browser events and marks live work interrupted after restart", async (context) => {
@@ -501,7 +501,7 @@ test("forgets a deleted session but leaves work that is still running", async (c
 
   const forgotten = store.forgetThread("thread-1");
   assert.deepEqual(forgotten, { deleted: 1, keptActive: 0 });
-  assert.throws(() => store.require("task-1"), /找不到/u);
+  assert.throws(() => store.require("task-1"), /not found/u);
   assert.deepEqual(store.eventsForTask("task-1"), []);
   assert.equal(store.sessionDesiredFullAccess("thread-1"), null);
   assert.equal(store.require("task-2").payload, "别动我");

@@ -49,7 +49,7 @@ test("rejects malformed state instead of silently discarding it", async (context
   await writeFile(filePath, JSON.stringify({ version: 1, entries: [{ bad: true }] }));
   await assert.rejects(
     () => TrashStore.open(filePath),
-    /格式不正确/u,
+    /invalid format/u,
   );
 });
 
@@ -86,7 +86,7 @@ test("reloads transition states and rejects them for archived-origin entries", a
       version: 1,
       entries: [{ ...entry(), origin: state === "unknown" ? "active" : "archived", state }],
     }));
-    await assert.rejects(() => TrashStore.open(filePath), /格式不正确/u);
+    await assert.rejects(() => TrashStore.open(filePath), /invalid format/u);
   }
 });
 

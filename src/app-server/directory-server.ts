@@ -59,10 +59,10 @@ export class DirectoryAppServer {
 
   async initialize(params: InitializeParams): Promise<InitializeResponse> {
     if (this.#closed) {
-      throw new Error("codex app-server 运行时已经关闭。");
+      throw new Error("The codex app-server runtime is closed.");
     }
     if (this.#ready) {
-      throw new Error("codex app-server 运行时已经初始化。");
+      throw new Error("The codex app-server runtime is already initialized.");
     }
 
     const started = this.#startClient(params);
@@ -75,7 +75,7 @@ export class DirectoryAppServer {
 
   async request<Result = unknown>(method: string, params: unknown): Promise<Result> {
     if (this.#closed) {
-      throw new Error("codex app-server 运行时已经关闭。");
+      throw new Error("The codex app-server runtime is closed.");
     }
     const client = await this.#requireReady();
     return client.request<Result>(method, params);
@@ -93,7 +93,7 @@ export class DirectoryAppServer {
 
   respondToServerRequest(id: RequestId, result: unknown): void {
     if (this.#closed || !this.#current) {
-      throw new Error("codex app-server 当前不可用。");
+      throw new Error("codex app-server is unavailable.");
     }
     this.#current.respondToServerRequest(id, result);
   }
@@ -142,7 +142,7 @@ export class DirectoryAppServer {
 
   #requireReady(): Promise<AppServerProcess> {
     return this.#ready ?? Promise.reject(
-      new Error("codex app-server 运行时尚未初始化。"),
+      new Error("The codex app-server runtime is not initialized yet."),
     );
   }
 

@@ -315,14 +315,14 @@ export class CommandRunner {
         !Array.isArray(page.data) ||
         !(page.nextCursor === null || typeof page.nextCursor === "string")
       ) {
-        throw new Error("Codex 返回了无法识别的分页历史。");
+        throw new Error("Codex returned unrecognized paged history.");
       }
       const ids = turnIds(page.data);
       if (firstPage && ids[0] === targetTurnId) break;
       if (ids.includes(targetTurnId)) return "stale";
       if (page.nextCursor === null) return "already_reverted";
       if (seenCursors.has(page.nextCursor)) {
-        throw new Error("Codex 返回了重复的分页标记。");
+        throw new Error("Codex returned a repeated page cursor.");
       }
       seenCursors.add(page.nextCursor);
       cursor = page.nextCursor;
@@ -335,7 +335,7 @@ export class CommandRunner {
     ));
     const thread = asObject(reverted?.thread);
     if (!thread || thread.id !== this.#threadId) {
-      throw new Error("Codex 返回了无法识别的回退结果。");
+      throw new Error("Codex returned an unrecognized rollback result.");
     }
 
     return "reverted";
@@ -438,8 +438,8 @@ function runtimeUsesFullAccess(runtime: SessionRuntime): boolean {
 
   const profileId = runtime.activePermissionProfile?.id ?? "";
   console.warn(
-    "codex app-server 返回了无法识别的沙箱策略，改按权限方案名称判断 Full access：" +
-      `sandboxPolicy=${JSON.stringify(runtime.sandboxPolicy)} profile=${profileId || "(无)"}`,
+    "codex app-server returned an unrecognized sandbox policy; judging full access by the permission profile name: " +
+      `sandboxPolicy=${JSON.stringify(runtime.sandboxPolicy)} profile=${profileId || "(none)"}`,
   );
   return isFullAccessProfile(profileId);
 }

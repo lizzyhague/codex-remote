@@ -62,7 +62,7 @@ try {
     body: JSON.stringify({ token }),
   });
   const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
-  if (!login.ok || !cookie) throw new Error("HTTP 登录没有签发 cookie。");
+  if (!login.ok || !cookie) throw new Error("HTTP sign-in issued no cookie.");
   webSocket = new WebSocket(`ws://${address.host}:${address.port}/ws`, {
     headers: { cookie },
   });
@@ -73,12 +73,12 @@ try {
   });
   const projectList = asObject(projectResponse.data)?.projects;
   if (!Array.isArray(projectList)) {
-    throw new Error("WebSocket 没有返回项目列表。");
+    throw new Error("The WebSocket returned no project list.");
   }
   const project = projectList.find((value) => asObject(value)?.name === "codex-remote");
   const projectId = asObject(project)?.id;
   if (typeof projectId !== "string") {
-    throw new Error("项目列表里没有 codex-remote。");
+    throw new Error("The project list has no codex-remote.");
   }
 
   const sessionResponse = await sendRequest(webSocket, {
@@ -88,10 +88,10 @@ try {
   });
   const sessionList = asObject(sessionResponse.data)?.sessions;
   if (!Array.isArray(sessionList)) {
-    throw new Error("WebSocket 没有返回会话列表。");
+    throw new Error("The WebSocket returned no session list.");
   }
   console.log(
-    `真实 WebSocket 联调成功：${projectList.length} 个项目，codex-remote 有 ${sessionList.length} 个会话。`,
+    `Real WebSocket smoke test passed: ${projectList.length} projects; codex-remote has ${sessionList.length} sessions.`,
   );
 } finally {
   if (webSocket && webSocket.readyState !== WebSocket.CLOSED) {
@@ -114,7 +114,7 @@ async function sendRequest(
   socket.send(JSON.stringify(request));
   const value = JSON.parse(String((await response)[0]));
   if (!isObject(value) || value.type !== "response" || value.ok !== true) {
-    throw new Error("WebSocket 请求失败。");
+    throw new Error("The WebSocket request failed.");
   }
   return value;
 }

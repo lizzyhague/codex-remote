@@ -83,7 +83,7 @@ export async function readJsonIfPresent(filePath: string): Promise<unknown | nul
   try {
     return JSON.parse(source) as unknown;
   } catch (error) {
-    throw new Error(`状态文件不是有效 JSON：${filePath}`, { cause: error });
+    throw new Error(`The state file is not valid JSON: ${filePath}`, { cause: error });
   }
 }
 

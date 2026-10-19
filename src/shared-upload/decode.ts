@@ -44,7 +44,7 @@ export function decodeTicket(
   };
   assertBinding(decoded.attachment, expected, "ticket.attachment");
   if (decoded.attachment.expectedSize !== expected.expectedSize) {
-    throw new SharedUploadProtocolError("ticket.attachment.expectedSize 与请求不一致");
+    throw new SharedUploadProtocolError("ticket.attachment.expectedSize does not match the request");
   }
   return decoded;
 }
@@ -58,11 +58,11 @@ export function decodePublicAttachment(value: unknown, label = "attachment"): Pu
   const object = record(value, label);
   const kind = object.kind;
   if (kind !== "image" && kind !== "file") {
-    throw new SharedUploadProtocolError(`${label}.kind 无效`);
+    throw new SharedUploadProtocolError(`${label}.kind is invalid`);
   }
   const sha256 = nonEmptyString(object.sha256, `${label}.sha256`);
   if (!/^[0-9a-f]{64}$/u.test(sha256)) {
-    throw new SharedUploadProtocolError(`${label}.sha256 无效`);
+    throw new SharedUploadProtocolError(`${label}.sha256 is invalid`);
   }
   return {
     id: nonEmptyString(object.id, `${label}.id`),
@@ -111,9 +111,9 @@ export function decodeLeaseResponse(
 ): AttachmentLease {
   const lease = record(record(value, "lease response").lease, "lease");
   const leaseOwner = nonEmptyString(lease.ownerId, "lease.ownerId");
-  if (leaseOwner !== ownerId) throw new SharedUploadProtocolError("lease.ownerId 与请求不一致");
+  if (leaseOwner !== ownerId) throw new SharedUploadProtocolError("lease.ownerId does not match the request");
   if (!Array.isArray(lease.attachments)) {
-    throw new SharedUploadProtocolError("lease.attachments 不是数组");
+    throw new SharedUploadProtocolError("lease.attachments is not an array");
   }
   const byId = new Map<string, ResolvedAttachment>();
   lease.attachments.forEach((entry, index) => {
@@ -121,11 +121,11 @@ export function decodeLeaseResponse(
     const publicValue = decodePublicAttachment(entry, label);
     assertBinding(publicValue, expected, label);
     if (byId.has(publicValue.id)) {
-      throw new SharedUploadProtocolError(`${label}.id 重复`);
+      throw new SharedUploadProtocolError(`${label}.id is duplicated`);
     }
     const attachmentPath = nonEmptyString(record(entry, label).path, `${label}.path`);
     if (!path.isAbsolute(attachmentPath)) {
-      throw new SharedUploadProtocolError(`${label}.path 不是绝对路径`);
+      throw new SharedUploadProtocolError(`${label}.path is not an absolute path`);
     }
     byId.set(publicValue.id, { ...publicValue, path: attachmentPath });
   });
@@ -133,7 +133,7 @@ export function decodeLeaseResponse(
   // then arrange it in request order.
   const requested = [...new Set(attachmentIds)];
   if (byId.size !== requested.length || requested.some((id) => !byId.has(id))) {
-    throw new SharedUploadProtocolError("lease.attachments 与请求的附件 ID 集合不一致");
+    throw new SharedUploadProtocolError("lease.attachments does not match the requested attachment IDs");
   }
   return {
     leaseId: nonEmptyString(lease.leaseId, "lease.leaseId"),
@@ -149,7 +149,7 @@ export function decodeRenewResponse(
 ): { leaseId: string; expiresAtMs: number } {
   const object = record(value, "renew");
   if (object.leaseId !== leaseId) {
-    throw new SharedUploadProtocolError("renew.leaseId 与请求不一致");
+    throw new SharedUploadProtocolError("renew.leaseId does not match the request");
   }
   return { leaseId, expiresAtMs: timestamp(object.expiresAtMs, "renew.expiresAtMs") };
 }
@@ -162,7 +162,7 @@ function binding(object: Record<string, unknown>, label: string): AttachmentBind
   const caller = object.caller;
   if (typeof caller !== "string" ||
       !(SHARED_UPLOAD_CALLERS as readonly string[]).includes(caller)) {
-    throw new SharedUploadProtocolError(`${label}.caller 无效`);
+    throw new SharedUploadProtocolError(`${label}.caller is invalid`);
   }
   return {
     caller: caller as SharedUploadCaller,
@@ -174,7 +174,7 @@ function binding(object: Record<string, unknown>, label: string): AttachmentBind
 function assertBinding(actual: AttachmentBinding, expected: AttachmentBinding, label: string): void {
   for (const key of ["caller", "projectId", "sessionId"] as const) {
     if (actual[key] !== expected[key]) {
-      throw new SharedUploadProtocolError(`${label}.${key} 与请求不一致`);
+      throw new SharedUploadProtocolError(`${label}.${key} does not match the request`);
     }
   }
 }
@@ -184,20 +184,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) throw new SharedUploadProtocolError(`${label} 不是对象`);
+  if (!isRecord(value)) throw new SharedUploadProtocolError(`${label} is not an object`);
   return value;
 }
 
 function nonEmptyString(value: unknown, label: string): string {
   if (typeof value !== "string" || !value) {
-    throw new SharedUploadProtocolError(`${label} 不是非空字符串`);
+    throw new SharedUploadProtocolError(`${label} is not a non-empty string`);
   }
   return value;
 }
 
 function timestamp(value: unknown, label: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw new SharedUploadProtocolError(`${label} 不是有效时间`);
+    throw new SharedUploadProtocolError(`${label} is not a valid time`);
   }
   return value;
 }
@@ -205,7 +205,7 @@ function timestamp(value: unknown, label: string): number {
 function size(value: unknown, label: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) ||
       value < 0 || value > MAX_UPLOAD_BYTES) {
-    throw new SharedUploadProtocolError(`${label} 不是有效大小`);
+    throw new SharedUploadProtocolError(`${label} is not a valid size`);
   }
   return value;
 }

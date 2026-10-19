@@ -50,14 +50,14 @@ export async function main(options: MainOptions = {}): Promise<number> {
     const outcome = await serve(stop, options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS);
     if (outcome === "stopped") return 0;
     if (stop.stopRequested || await stop.arrivesWithin(grace)) return 0;
-    console.error("codex app-server 已经结束，Codex Remote 一同退出以便重启。");
+    console.error("codex app-server has ended; Codex Remote exits too so it can be restarted.");
     return 1;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (stop.stopRequested || await stop.arrivesWithin(grace)) {
       console.log(error instanceof StartupAbortedError
         ? message
-        : `收到停止信号，启动未完成：${message}`);
+        : `A stop signal arrived before startup finished: ${message}`);
       return 0;
     }
     console.error(message);
@@ -74,7 +74,7 @@ async function serve(
   const startup = new StartupDeadline(stop, startupTimeoutMs);
   const token = process.env.CODEX_REMOTE_TOKEN;
   if (!token || token.length < 32) {
-    throw new Error("请设置至少 32 个字符的 CODEX_REMOTE_TOKEN。");
+    throw new Error("Set CODEX_REMOTE_TOKEN to at least 32 characters.");
   }
   const port = readPort(process.env.CODEX_REMOTE_PORT ?? "3000");
   const configPath = process.env.CODEX_REMOTE_PROJECTS_CONFIG ??
@@ -155,7 +155,7 @@ async function serve(
     startup.check();
     startup.finish();
     workers.start();
-    console.log(`Codex Remote 正在监听 http://${address.host}:${address.port}/`);
+    console.log(`Codex Remote is listening on http://${address.host}:${address.port}/`);
 
     // Once codex app-server disappears, this process cannot serve requests. Continuing would only return failures,
     // so exit and let the supervisor restart it. Signal handlers set stop intent synchronously; if the child exits
@@ -184,13 +184,13 @@ async function serve(
 async function cleanExpiredTrash(sessions: CodexSessionService): Promise<void> {
   const result = await sessions.purgeExpired();
   if (result.settled > 0) {
-    console.log(`回收站续做完成了 ${result.settled} 个中断的移入或恢复。`);
+    console.log(`Trash recovery finished ${result.settled} interrupted moves or restores.`);
   }
   if (result.deleted > 0) {
-    console.log(`回收站自动清除了 ${result.deleted} 个过期会话。`);
+    console.log(`Trash cleanup permanently deleted ${result.deleted} expired sessions.`);
   }
   for (const failure of result.failed) {
-    console.error(`回收站无法清除会话 ${failure.sessionId}：${failure.message}`);
+    console.error(`Trash cleanup could not delete session ${failure.sessionId}: ${failure.message}`);
   }
 }
 
@@ -205,7 +205,7 @@ function readAllowedOrigins(source: string | undefined): string[] {
 function readPort(source: string): number {
   const port = Number(source);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new Error("CODEX_REMOTE_PORT 必须是 1 到 65535 之间的整数。");
+    throw new Error("CODEX_REMOTE_PORT must be an integer from 1 to 65535.");
   }
   return port;
 }
@@ -214,7 +214,7 @@ function readPositiveInteger(source: string | undefined): number | undefined {
   if (source === undefined || source.trim() === "") return undefined;
   const value = Number(source);
   if (!Number.isInteger(value) || value <= 0) {
-    throw new Error("Worker 数量必须是正整数。");
+    throw new Error("The worker count must be a positive integer.");
   }
   return value;
 }
@@ -223,7 +223,7 @@ function readNonnegativeInteger(source: string | undefined): number | undefined 
   if (source === undefined || source.trim() === "") return undefined;
   const value = Number(source);
   if (!Number.isInteger(value) || value < 0) {
-    throw new Error("离线宽限时间必须是非负整数毫秒。");
+    throw new Error("The offline grace period must be a non-negative integer number of milliseconds.");
   }
   return value;
 }
@@ -234,7 +234,7 @@ export function readOfflineGraceMs(source: string | undefined): number | undefin
   const value = Number(source);
   if (!Number.isSafeInteger(value) || value < 0 || value > MAX_TIMER_DELAY_MS) {
     throw new Error(
-      `CODEX_REMOTE_OFFLINE_GRACE_MS 必须是 0 到 ${MAX_TIMER_DELAY_MS} 之间的整数毫秒（上限约 24.8 天）。`,
+      `CODEX_REMOTE_OFFLINE_GRACE_MS must be an integer number of milliseconds from 0 to ${MAX_TIMER_DELAY_MS} (about 24.8 days).`,
     );
   }
   return value;

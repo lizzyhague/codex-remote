@@ -54,11 +54,11 @@ export class ProjectCatalog {
     try {
       parsed = JSON.parse(source);
     } catch {
-      throw new Error(`项目根目录配置不是有效 JSON：${configPath}`);
+      throw new Error(`The project roots config is not valid JSON: ${configPath}`);
     }
 
     if (!isProjectConfigFile(parsed)) {
-      throw new Error(`项目根目录配置格式不正确：${configPath}`);
+      throw new Error(`The project roots config has an invalid format: ${configPath}`);
     }
 
     return ProjectCatalog.fromRoots(parsed.roots);
@@ -66,7 +66,7 @@ export class ProjectCatalog {
 
   static async fromRoots(roots: ProjectRootConfig[]): Promise<ProjectCatalog> {
     if (roots.length === 0) {
-      throw new Error("至少需要配置一个项目根目录。");
+      throw new Error("Configure at least one project root.");
     }
 
     const seenIds = new Set<string>();
@@ -75,23 +75,23 @@ export class ProjectCatalog {
 
     for (const root of roots) {
       if (!/^[a-z0-9][a-z0-9_-]*$/u.test(root.id)) {
-        throw new Error(`项目根目录 ID 不合法：${root.id}`);
+        throw new Error(`Invalid project root ID: ${root.id}`);
       }
       if (seenIds.has(root.id)) {
-        throw new Error(`项目根目录 ID 重复：${root.id}`);
+        throw new Error(`Duplicate project root ID: ${root.id}`);
       }
       if (!path.isAbsolute(root.path)) {
-        throw new Error(`项目根目录必须使用绝对路径：${root.path}`);
+        throw new Error(`A project root must be an absolute path: ${root.path}`);
       }
 
       const rootRealPath = await realpath(root.path);
       const rootStats = await stat(rootRealPath);
       if (!rootStats.isDirectory()) {
-        throw new Error(`项目根目录不是文件夹：${root.path}`);
+        throw new Error(`A project root is not a directory: ${root.path}`);
       }
       const conflictingRootId = rootsByRealPath.get(rootRealPath);
       if (conflictingRootId) {
-        throw new Error(`项目根目录指向同一位置：${conflictingRootId} 与 ${root.id}`);
+        throw new Error(`Project roots point to the same location: ${conflictingRootId} and ${root.id}`);
       }
 
       seenIds.add(root.id);
@@ -165,7 +165,7 @@ export class ProjectCatalog {
         const projectId = `${root.id}/${encodeURIComponent(entry.name)}`;
         const conflictingProjectId = projectsByRealPath.get(candidateRealPath);
         if (conflictingProjectId) {
-          throw new Error(`项目目录身份重复：${conflictingProjectId} 与 ${projectId}`);
+          throw new Error(`Duplicate project directory identity: ${conflictingProjectId} and ${projectId}`);
         }
         projectsByRealPath.set(candidateRealPath, projectId);
         projects.push({

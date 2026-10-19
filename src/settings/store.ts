@@ -196,7 +196,7 @@ function normalizeNullableString(
 
 function parseSettings(raw: unknown, filePath: string): ApplicationSettings {
   if (!isObject(raw) || raw.version !== 1 || typeof raw.developerInstructions !== "string") {
-    throw new Error(`设置文件格式不正确：${filePath}`);
+    throw new Error(`The settings file has an invalid format: ${filePath}`);
   }
   const defaultModel = raw.defaultModel === undefined
     ? null
@@ -209,7 +209,7 @@ function parseSettings(raw: unknown, filePath: string): ApplicationSettings {
       MAX_REASONING_EFFORT_LENGTH,
     );
   if (defaultModel === null && defaultReasoningEffort !== null) {
-    throw new Error(`设置文件格式不正确：${filePath}`);
+    throw new Error(`The settings file has an invalid format: ${filePath}`);
   }
   const defaultPermissions = raw.defaultPermissions === undefined
     ? null

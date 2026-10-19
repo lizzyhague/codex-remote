@@ -33,18 +33,18 @@ export async function runAppServerProtocolCheck(
       includeHidden: false,
     });
     if (!models || !Array.isArray(models.data)) {
-      throw new Error("model/list 返回了无法识别的结果。");
+      throw new Error("model/list returned an unrecognized result.");
     }
     const permissionProfiles = await client.request<PermissionProfileListResponse>(
       "permissionProfile/list",
       { cursor: null, limit: 1, cwd: workingDirectory },
     );
     if (!permissionProfiles || !Array.isArray(permissionProfiles.data)) {
-      throw new Error("permissionProfile/list 返回了无法识别的结果。");
+      throw new Error("permissionProfile/list returned an unrecognized result.");
     }
     log(
-      `真实 App Server 协议检查通过：${initialized.userAgent}；` +
-        "experimentalApi 初始化、model/list 和 permissionProfile/list 均可用；未调用模型。",
+      `Real App Server protocol check passed: ${initialized.userAgent}; ` +
+        "experimentalApi initialize, model/list and permissionProfile/list all work; no model was called.",
     );
   } finally {
     await client.close();

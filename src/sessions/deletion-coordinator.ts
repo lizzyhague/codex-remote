@@ -15,7 +15,7 @@ export interface ThreadDeleteRequester {
  *
  * `deleting` is persisted before any irreversible operation, and the trash entry is removed last.
  * After an interruption, the caller only needs to pass the same entry again. All local cleanup is
- * idempotent, and Codex's exact “不存在” response is treated as a prior successful deletion.
+ * idempotent, and Codex's exact “not found” response is treated as a prior successful deletion.
  */
 export class SessionDeletionCoordinator {
   readonly #transport: ThreadDeleteRequester;

@@ -308,7 +308,7 @@ test("rejects a second message while a turn is active", async () => {
 
   await assert.rejects(
     session.startTextTurn("第二条"),
-    /已有任务正在运行/,
+    /already has a running task/,
   );
   assert.equal(transport.requests.length, 0);
 });
@@ -324,7 +324,7 @@ test("rejects a second message while the first start request is pending", async 
   const firstStart = session.startTextTurn("第一条");
   await assert.rejects(
     session.startTextTurn("第二条"),
-    /已有任务正在运行/,
+    /already has a running task/,
   );
   finishStart({ turn: { id: "turn-1" } });
   assert.equal(await firstStart, "turn-1");

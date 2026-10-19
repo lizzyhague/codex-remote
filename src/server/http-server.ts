@@ -106,7 +106,7 @@ export class RemoteWebSocketServer {
 
   constructor(options: RemoteWebSocketServerOptions) {
     if (!options.token) {
-      throw new Error("WebSocket 访问令牌不能为空。");
+      throw new Error("The WebSocket access token must not be empty.");
     }
     this.#token = options.token;
     this.#auth = new CookieAuth(options.token);
@@ -139,10 +139,10 @@ export class RemoteWebSocketServer {
       // connect to this port on localhost or the tailnet. The token remains the primary defense; this is a second layer.
       if (!this.#originAllowed(request)) {
         console.warn(
-          `拒绝了来源不匹配的 WebSocket 升级请求：origin=${
+          `Rejected a WebSocket upgrade from a mismatched origin: origin=${
             String(request.headers.origin)
-          } host=${String(request.headers.host)}。` +
-            "如果这是你自己的入口，请把它加入 CODEX_REMOTE_ALLOWED_ORIGINS。",
+          } host=${String(request.headers.host)}. ` +
+            "If this is your own entry point, add it to CODEX_REMOTE_ALLOWED_ORIGINS.",
         );
         socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
         socket.destroy();
@@ -439,7 +439,7 @@ export class RemoteWebSocketServer {
 
   async listen(port: number): Promise<RemoteServerAddress> {
     if (this.#listening) {
-      throw new Error("WebSocket 服务已经启动。");
+      throw new Error("The WebSocket server is already listening.");
     }
     // Read the frontend once before listening; an incomplete set fails startup instead of being served.
     this.#webAssets ??= await WebAssets.load(
@@ -556,7 +556,7 @@ export class RemoteWebSocketServer {
     // listener, EventEmitter throws it uncaught and terminates the backend. ws sends protocol close frames itself;
     // only log here.
     webSocket.on("error", (error: Error) => {
-      console.warn(`浏览器连接出错：${error.message}`);
+      console.warn(`Browser connection error: ${error.message}`);
     });
 
     webSocket.on("message", (data, isBinary) => {
@@ -571,7 +571,7 @@ export class RemoteWebSocketServer {
       this.#connections.delete(webSocket);
       void connection.disconnect().catch((error: unknown) => {
         console.error(
-          `浏览器断线清理失败：${error instanceof Error ? error.message : String(error)}`,
+          `Cleaning up after a browser disconnect failed: ${error instanceof Error ? error.message : String(error)}`,
         );
       });
     });

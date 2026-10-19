@@ -25,7 +25,7 @@ export async function listModels(transport: AppServerTransport): Promise<ModelSu
       includeHidden: false,
     }));
     if (!response || !Array.isArray(response.data)) {
-      throw new Error("Codex 返回了无法识别的模型列表。");
+      throw new Error("Codex returned an unrecognized model list.");
     }
     for (const value of response.data) {
       const model = asObject(value);

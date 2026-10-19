@@ -46,7 +46,7 @@ test("rejects malformed state instead of silently discarding it", async (context
   await writeFile(filePath, JSON.stringify({ version: 1, entries: [{ bad: true }] }));
   await assert.rejects(
     () => MarkStore.open(filePath),
-    /格式不正确/u,
+    /invalid format/u,
   );
 });
 

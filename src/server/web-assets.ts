@@ -158,6 +158,6 @@ async function prune(directory: string, current: string, retainPrevious: number)
       await rm(path.join(directory, name), { recursive: true, force: true });
     }
   } catch (error) {
-    console.warn("旧前端快照清理失败", error);
+    console.warn("Cleaning up old frontend snapshots failed", error);
   }
 }

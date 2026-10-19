@@ -383,7 +383,7 @@ export class BrowserConnection {
         succeeded: result.succeeded,
         failed: result.failed.map((failure) => {
           if (redactHostPaths(failure.message) === failure.message) return failure;
-          console.error(`未向浏览器透传的会话整理失败文字：${failure.message}`);
+          console.error(`Session mutation failure text withheld from the browser: ${failure.message}`);
           return {
             sessionId: failure.sessionId,
             message: "会话整理失败，请查看服务日志。",
@@ -462,7 +462,7 @@ export class BrowserConnection {
     if (openedProjectId !== projectId) {
       throw new WorkerManagerError("session_project_mismatch", "这个会话不属于所选项目。");
     }
-    // After this line, new-session events flow to this connection, but the “会话已打开” response waits
+    // After this line, new-session events flow to this connection, but the “session opened” response waits
     // for attachment synchronization below. The page does not yet know it switched, so deltas have nowhere
     // to land and initial rendering would clear them. Hold them until after sending the response.
     this.#deferredEvents = [];
@@ -475,7 +475,7 @@ export class BrowserConnection {
       managed.opened.turns,
     ) ?? [];
     // During attachment synchronization, another device may archive or trash the session, detaching this
-    // connection. Do not then return an “已打开” result that contradicts backend state. On invalidation,
+    // connection. Do not then return an “opened” result that contradicts backend state. On invalidation,
     // release this session if still attached so the connection truly has no current session after failure.
     if (generation !== this.#openGeneration && this.#sessionId === managed.opened.session.id) {
       this.#detachSession();
@@ -694,14 +694,14 @@ export class BrowserConnection {
 export function publicErrorMessage(error: unknown): string {
   if (isPublicError(error)) {
     if (redactHostPaths(error.message) === error.message) return error.message;
-    console.error(`公开业务错误意外含有宿主路径：${error.message}`);
+    console.error(`A public business error unexpectedly contains a host path: ${error.message}`);
     return "请求失败，请查看服务日志。";
   }
   if (isSystemError(error)) {
-    console.error(`未向浏览器透传的系统错误：${error.message}`);
+    console.error(`System error withheld from the browser: ${error.message}`);
     return "服务器无法访问本地文件，请查看服务日志。";
   }
-  console.error(`未向浏览器透传的请求错误：${privateErrorMessage(error)}`);
+  console.error(`Request error withheld from the browser: ${privateErrorMessage(error)}`);
   return "请求失败，请查看服务日志。";
 }
 

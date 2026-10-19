@@ -70,8 +70,8 @@ export class StartupAbortedError extends Error {
 
   constructor(reason: "stop" | "timeout", timeoutMs: number) {
     super(reason === "stop"
-      ? "启动期间收到停止信号，已放弃启动。"
-      : `启动超过 ${Math.round(timeoutMs / 1_000)} 秒仍未就绪，放弃启动。`);
+      ? "A stop signal arrived during startup; startup was abandoned."
+      : `Startup was not ready after ${Math.round(timeoutMs / 1_000)} seconds; startup was abandoned.`);
     this.name = "StartupAbortedError";
     this.reason = reason;
   }

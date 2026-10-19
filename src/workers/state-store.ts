@@ -226,7 +226,7 @@ export class WorkerStateStore {
           existing.kind !== task.kind || existing.payload !== task.payload ||
           JSON.stringify(existing.attachments) !== JSON.stringify(task.attachments ?? [])
         ) {
-          throw new Error("clientMessageId 已被另一条消息使用。");
+          throw new Error("clientMessageId is already used by another message.");
         }
         this.#database.exec("COMMIT");
         return { outcome: "duplicate", task: existing };
@@ -276,7 +276,7 @@ export class WorkerStateStore {
       "SELECT * FROM worker_tasks WHERE id = ?",
     ).get(taskId);
     const task = row ? readTaskRow(row) : null;
-    if (!task) throw new Error(`找不到 Worker 任务：${taskId}`);
+    if (!task) throw new Error(`Worker task not found: ${taskId}`);
     return task;
   }
 
@@ -565,14 +565,14 @@ function readAttachments(value: unknown): PublicAttachment[] {
   try {
     parsed = JSON.parse(typeof value === "string" ? value : "[]");
   } catch {
-    throw new Error("Worker 状态库包含无效附件数据。");
+    throw new Error("The worker state store contains invalid attachment data.");
   }
   if (!Array.isArray(parsed) || parsed.some((entry) =>
     typeof entry !== "object" || entry === null || Array.isArray(entry) ||
     typeof (entry as Record<string, unknown>).id !== "string" ||
     "path" in (entry as Record<string, unknown>)
   )) {
-    throw new Error("Worker 状态库包含无效附件数据。");
+    throw new Error("The worker state store contains invalid attachment data.");
   }
   return parsed as PublicAttachment[];
 }
@@ -580,7 +580,7 @@ function readAttachments(value: unknown): PublicAttachment[] {
 function readEventRow(value: unknown): StoredWorkerEvent {
   const row = asRow(value);
   const parsed: unknown = JSON.parse(String(row.payload_json));
-  if (!isEvent(parsed)) throw new Error("Worker 事件日志包含无效数据。");
+  if (!isEvent(parsed)) throw new Error("The worker event log contains invalid data.");
   return {
     sequence: Number(row.sequence),
     taskId: String(row.task_id),
@@ -592,7 +592,7 @@ function readEventRow(value: unknown): StoredWorkerEvent {
 
 function readKind(value: unknown): WorkerTaskKind {
   if (value === "message" || value === "compact") return value;
-  throw new Error("Worker 任务类型无法识别。");
+  throw new Error("Unknown worker task kind.");
 }
 
 function readStatus(value: unknown): WorkerTaskStatus {
@@ -600,7 +600,7 @@ function readStatus(value: unknown): WorkerTaskStatus {
     value === "queued" || value === "running" || value === "waiting_for_permission" ||
     value === "completed" || value === "interrupted" || value === "failed"
   ) return value;
-  throw new Error("Worker 任务状态无法识别。");
+  throw new Error("Unknown worker task status.");
 }
 
 function nullableString(value: unknown): string | null {
@@ -609,7 +609,7 @@ function nullableString(value: unknown): string | null {
 
 function asRow(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("Worker 状态库返回了无效行。");
+    throw new Error("The worker state store returned an invalid row.");
   }
   return value as Record<string, unknown>;
 }

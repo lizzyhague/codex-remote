@@ -78,7 +78,7 @@ export abstract class ThreadEntryStore<Entry extends ThreadScopedEntry> {
     const value = await readJsonIfPresent(this.#filePath);
     if (value === null) return;
     if (!this.#isEntryFile(value)) {
-      throw new Error(`${this.#shape.label}格式不正确：${this.#filePath}`);
+      throw new Error(`${this.#shape.label} has an invalid format: ${this.#filePath}`);
     }
     for (const entry of value.entries) {
       this.#entries.set(entry.threadId, this.#shape.clone(entry));

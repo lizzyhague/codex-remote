@@ -284,7 +284,7 @@ test("allows at most 1000 session IDs in one protective batch", () => {
       action: "archive",
     })),
     (error: unknown) => error instanceof ProtocolError &&
-      error.code === "invalid_field" && /最多 1000 项/u.test(error.message),
+      error.code === "invalid_field" && /at most 1000 items/u.test(error.message),
   );
 });
 

@@ -30,7 +30,7 @@ export function toBrowserStreamEvent(
       ...payload,
       error: publicTurnErrorMessage(
         event.error,
-        `未向浏览器透传的实时 turn ${event.turnId} 完成错误`,
+        `Completion error of live turn ${event.turnId} withheld from the browser`,
       ),
     }
     : event.type === "turn_error"
@@ -38,7 +38,7 @@ export function toBrowserStreamEvent(
       ...payload,
       message: publicTurnErrorMessage(
         event.message,
-        `未向浏览器透传的实时 turn ${event.turnId} 错误通知`,
+        `Error notification of live turn ${event.turnId} withheld from the browser`,
       ),
     }
     : payload;

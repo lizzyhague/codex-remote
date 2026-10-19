@@ -110,7 +110,7 @@ export class CodexAttachmentError extends Error {
 
 export class CodexTurnCancelledError extends Error {
   constructor() {
-    super("任务在启动前已取消。");
+    super("The task was cancelled before it started.");
     this.name = "CodexTurnCancelledError";
   }
 }
@@ -118,7 +118,7 @@ export class CodexTurnCancelledError extends Error {
 /** `turn/interrupt` was not acknowledged by the deadline; the caller should force-close the Worker. */
 export class CodexInterruptTimeoutError extends Error {
   constructor(timeoutMs: number) {
-    super(`Codex 在 ${timeoutMs} ms 内没有确认停止请求。`);
+    super(`Codex did not confirm the stop request within ${timeoutMs} ms.`);
     this.name = "CodexInterruptTimeoutError";
   }
 }
@@ -157,7 +157,7 @@ export class CodexTurnSession {
     options: { interruptTimeoutMs?: number } = {},
   ) {
     if (!threadId) {
-      throw new Error("Codex 会话 ID 不能为空。");
+      throw new Error("The Codex session ID must not be empty.");
     }
 
     this.#transport = transport;
@@ -193,10 +193,10 @@ export class CodexTurnSession {
     settings: TurnSettingsOverride = {},
   ): Promise<string> {
     if (this.#activeTurnId || this.#starting) {
-      throw new Error("这个会话已有任务正在运行。");
+      throw new Error("This session already has a running task.");
     }
     if (!text.trim() && attachments.length === 0) {
-      throw new Error("消息和附件不能同时为空。");
+      throw new Error("The message text and attachments cannot both be empty.");
     }
 
     validateCodexTurnAttachments(attachments, text);
@@ -243,7 +243,7 @@ export class CodexTurnSession {
       const turnId = readTurnStartId(response);
 
       if (this.#activeTurnId && this.#activeTurnId !== turnId) {
-        throw new Error("Codex 返回的任务 ID 与启动通知不一致。");
+        throw new Error("The task ID returned by Codex does not match the start notification.");
       }
       if (!this.#completedBeforeStartResponse.delete(turnId)) {
         this.#activeTurnId = turnId;
@@ -608,7 +608,7 @@ function readTurnStartId(value: unknown): string {
   const response = asObject(value);
   const turn = response && asObject(response.turn);
   if (!turn || typeof turn.id !== "string") {
-    throw new Error("Codex 返回了无法识别的任务启动结果。");
+    throw new Error("Codex returned an unrecognized turn start result.");
   }
   return turn.id;
 }

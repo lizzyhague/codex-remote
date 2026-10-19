@@ -56,5 +56,5 @@ lines.on("line", (line) => {
   assert.equal(requests.some((request) => request.method === "thread/start"), false);
   assert.equal(requests.some((request) => request.method === "turn/start"), false);
   assert.match(logs.join("\n"), /fake-codex\/9\.9\.9/);
-  assert.match(logs.join("\n"), /未调用模型/);
+  assert.match(logs.join("\n"), /no model was called/);
 });

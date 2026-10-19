@@ -100,7 +100,7 @@ export type SessionSummary = {
 
 export type SessionPage = {
   sessions: SessionSummary[];
-  /** Cross-project pinned entries in “最近会话”; excluded from pagination. Empty for archive and trash views. */
+  /** Cross-project pinned entries in “Recent sessions”; excluded from pagination. Empty for archive and trash views. */
   marked: SessionSummary[];
   nextCursor: string | null;
 };
@@ -231,7 +231,7 @@ export class CodexSessionService {
     );
 
     // The archive view excludes trash entries. If an entire page is filtered out, continue scanning to avoid
-    // showing the browser an intermediate “空列表但还能加载更多” state. Page count must be bounded or a
+    // showing the browser an intermediate “empty list that can still load more” state. Page count must be bounded or a
     // project full of trash entries could make one browser request issue unlimited RPCs.
     for (let page = 0; page < MAX_LIST_PAGES_PER_REQUEST; page += 1) {
       const response = await this.#transport.request<ThreadListResponse>(
@@ -263,7 +263,7 @@ export class CodexSessionService {
       }
       params.cursor = response.nextCursor;
     }
-    // Reaching here means several consecutive pages were filtered empty. Return the cursor so the browser can continue with “加载更多”.
+    // Reaching here means several consecutive pages were filtered empty. Return the cursor so the browser can continue with “Load more”.
     const marked = view === "active" ? await this.#listMarked(searchTerm) : [];
     await this.#populateLastReplyTimes(marked);
     return {
@@ -333,7 +333,7 @@ export class CodexSessionService {
     );
     assertOpenedThreadResponse(stored);
     if (stored.thread.id !== threadId) {
-      throw new Error("Codex 返回了错误的会话。");
+      throw new Error("Codex returned the wrong session.");
     }
     await assertThreadBelongsToProject(stored.thread, project.path);
 
@@ -348,7 +348,7 @@ export class CodexSessionService {
     );
     assertOpenedThreadResponse(response);
     if (response.thread.id !== threadId) {
-      throw new Error("Codex 返回了错误的会话。");
+      throw new Error("Codex returned the wrong session.");
     }
     await assertThreadBelongsToProject(response.thread, project.path);
     return toOpenedSession(response, projectId, this.isMarked(threadId));
@@ -679,7 +679,7 @@ export class CodexSessionService {
   }
 
   /**
-   * Determines which pinned sessions cannot appear in “最近”: archived sessions and those whose state
+   * Determines which pinned sessions cannot appear in “Recent”: archived sessions and those whose state
    * cannot be confirmed within the page limit.
    *
    * Search the archived list first; a session is confirmed active only after that list is exhausted without
@@ -835,7 +835,7 @@ export class CodexSessionService {
         params,
       );
       if (!response || !Array.isArray(response.data)) {
-        throw new Error("Codex 返回了无法识别的会话轮次列表。");
+        throw new Error("Codex returned an unrecognized turn list.");
       }
 
       const lastReplyAt = replyTimeFromTurns(response.data);
@@ -845,7 +845,7 @@ export class CodexSessionService {
         typeof response.nextCursor !== "string" ||
         seenCursors.has(response.nextCursor)
       ) {
-        throw new Error("Codex 返回了无法识别的会话轮次游标。");
+        throw new Error("Codex returned an unrecognized turn cursor.");
       }
       seenCursors.add(response.nextCursor);
       cursor = response.nextCursor;
@@ -898,7 +898,7 @@ export class CodexSessionService {
     const response = await this.#transport.request<ThreadReadResponse>("thread/read", params);
     assertOpenedThreadResponse(response);
     if (response.thread.id !== threadId) {
-      throw new Error("Codex 返回了错误的会话。");
+      throw new Error("Codex returned the wrong session.");
     }
     await assertThreadBelongsToProject(response.thread, projectPath);
     return response.thread;
@@ -1004,7 +1004,7 @@ function parseTrashCursor(cursor: string | null): number {
  */
 function describeFailure(error: unknown): string {
   if (isPublicError(error)) return error.message;
-  console.error(`未向浏览器透传的会话整理错误：${privateErrorMessage(error)}`);
+  console.error(`Session mutation error withheld from the browser: ${privateErrorMessage(error)}`);
   return "会话整理失败，请查看服务日志。";
 }
 
@@ -1055,7 +1055,7 @@ function assertThreadListResponse(value: unknown): asserts value is ThreadListRe
     !(value.nextCursor === null || typeof value.nextCursor === "string") ||
     !value.data.every(isThread)
   ) {
-    throw new Error("Codex 返回了无法识别的会话列表。");
+    throw new Error("Codex returned an unrecognized session list.");
   }
 }
 
@@ -1063,7 +1063,7 @@ function assertOpenedThreadResponse(
   value: unknown,
 ): asserts value is ThreadStartResponse | ThreadResumeResponse | ThreadReadResponse {
   if (!isObject(value) || !isThread(value.thread)) {
-    throw new Error("Codex 返回了无法识别的会话数据。");
+    throw new Error("Codex returned unrecognized session data.");
   }
 }
 

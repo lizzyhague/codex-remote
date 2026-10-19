@@ -144,7 +144,7 @@ export class AttachmentDisplayIndex {
   }
 
   #filePath(sessionId: string): string {
-    if (!SESSION_ID_PATTERN.test(sessionId)) throw new Error("会话 ID 不是合法的附件索引键。");
+    if (!SESSION_ID_PATTERN.test(sessionId)) throw new Error("The session ID is not a valid attachment index key.");
     return path.join(this.#directory, `${sessionId}.json`);
   }
 }

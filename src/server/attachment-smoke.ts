@@ -31,12 +31,12 @@ async function main(): Promise<void> {
     const projects = asArray((await socket.request("projects.list", {})).projects);
     const project = projects.map(asObject).find((entry) => entry?.name === projectName);
     if (typeof project?.id !== "string") {
-      throw new Error(`项目列表中没有 ${projectName}。`);
+      throw new Error(`The project list has no ${projectName}.`);
     }
     cleanupProjectId = project.id;
     const opened = asObject(await socket.request("session.start", { projectId: project.id }));
     const session = asObject(opened?.session);
-    if (typeof session?.id !== "string") throw new Error("新会话没有返回 ID。");
+    if (typeof session?.id !== "string") throw new Error("The new session returned no ID.");
     cleanupSessionId = session.id;
 
     const imageAttachment = await uploadAttachment(socket, baseUrl, project.id, session.id, {
@@ -57,14 +57,14 @@ async function main(): Promise<void> {
       sessionId: session.id,
       clientMessageId,
       text: [
-        "这是附件路径输入的自动冒烟测试。请使用可用工具打开图片和文本文件。",
-        "只回复一行，依次写：图片中央的像素文字、彩色按钮的颜色和位置、文本文件等号后的值。",
-        "第二项必须使用 COLOR_POSITION 格式，例如 RED_TOP_LEFT；三项用空格分隔。",
-        "回复中使用附件原名，不要写出存储路径。",
+        "This is an automated smoke test of attachment path input. Use the available tools to open the image and the text file.",
+        "Reply with one line containing, in order: the pixel text in the center of the image, the color and position of the colored button, and the value after the equals sign in the text file.",
+        "The second item must use the COLOR_POSITION format, for example RED_TOP_LEFT; separate the three items with spaces.",
+        "Refer to the attachments by their original names and do not write their storage paths.",
       ].join("\n"),
       attachmentIds: [imageAttachment.id, noteAttachment.id],
     }));
-    if (typeof accepted?.taskId !== "string") throw new Error("消息没有返回任务 ID。");
+    if (typeof accepted?.taskId !== "string") throw new Error("The message returned no task ID.");
     socket.bindTask(clientMessageId, accepted.taskId);
     const answer = await completion;
     const leaked = socket.eventDump();
@@ -75,22 +75,22 @@ async function main(): Promise<void> {
       "/blobs/",
     ]) {
       if (leaked.includes(fragment)) {
-        throw new Error(`浏览器事件泄露了附件内部信息：${fragment}`);
+        throw new Error(`Browser events leaked internal attachment details: ${fragment}`);
       }
     }
     for (const expected of ["CODEX-7319", "GREEN_BOTTOM_RIGHT", "ORCHID-5824"]) {
       if (!answer.includes(expected)) {
-        throw new Error(`Codex 的附件回答缺少 ${expected}：${answer}`);
+        throw new Error(`Codex's attachment answer is missing ${expected}: ${answer}`);
       }
     }
     console.log(
-      `附件端到端冒烟成功：图片 ${imageAttachment.id}，文件 ${noteAttachment.id}；` +
-        "Codex 通过路径输入后的工具读取返回了图片文字、控件位置/颜色和文件内容。",
+      `Attachment end-to-end smoke test passed: image ${imageAttachment.id}, file ${noteAttachment.id}; ` +
+        "after path input, Codex read the image text, the control position and color, and the file contents with its tools.",
     );
   } finally {
     if (cleanupProjectId && cleanupSessionId) {
       await archiveSmokeSession(socket, cleanupProjectId, cleanupSessionId).catch((error: unknown) => {
-        console.warn(`无法自动归档附件冒烟会话：${error instanceof Error ? error.message : String(error)}`);
+        console.warn(`Could not archive the attachment smoke session automatically: ${error instanceof Error ? error.message : String(error)}`);
       });
     }
     socket.close();
@@ -136,7 +136,7 @@ async function uploadAttachment(
     declaredMime: fixture.mime,
     expectedSize: fixture.bytes.byteLength,
   }));
-  if (typeof ticket?.ticket !== "string") throw new Error("没有收到上传票据。");
+  if (typeof ticket?.ticket !== "string") throw new Error("No upload ticket was received.");
   const response = await fetch(new URL("/attachments/upload", remoteUrl), {
     method: "POST",
     headers: {
@@ -150,11 +150,11 @@ async function uploadAttachment(
   const value = asObject(await response.json());
   if (!response.ok) {
     const error = asObject(value?.error);
-    throw new Error(typeof error?.message === "string" ? error.message : "附件上传失败。");
+    throw new Error(typeof error?.message === "string" ? error.message : "The attachment upload failed.");
   }
   const attachment = asObject(value?.attachment);
   if (typeof attachment?.id !== "string" || "path" in attachment) {
-    throw new Error("上传响应缺少附件 ID 或错误地暴露了服务器路径。");
+    throw new Error("The upload response has no attachment ID or wrongly exposes a server path.");
   }
   return attachment;
 }
@@ -200,7 +200,7 @@ class SmokeSocket {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#taskWaiters.delete(clientMessageId);
-        reject(new Error("等待附件冒烟任务完成超时。"));
+        reject(new Error("Timed out waiting for the attachment smoke task to finish."));
       }, durationMs);
       this.#taskWaiters.set(clientMessageId, { resolve, reject, timer, answers: [] });
     });
@@ -218,11 +218,11 @@ class SmokeSocket {
 
   close(): void {
     this.#socket.close();
-    for (const pending of this.#pending.values()) pending.reject(new Error("冒烟连接已关闭。"));
+    for (const pending of this.#pending.values()) pending.reject(new Error("The smoke test connection is closed."));
     this.#pending.clear();
     for (const waiter of this.#taskWaiters.values()) {
       clearTimeout(waiter.timer);
-      waiter.reject(new Error("冒烟连接已关闭。"));
+      waiter.reject(new Error("The smoke test connection is closed."));
     }
     this.#taskWaiters.clear();
   }
@@ -237,7 +237,7 @@ class SmokeSocket {
       if (message.ok === true) pending.resolve(asObject(message.data) ?? {});
       else {
         const error = asObject(message.error);
-        pending.reject(new Error(typeof error?.message === "string" ? error.message : "请求失败。"));
+        pending.reject(new Error(typeof error?.message === "string" ? error.message : "The request failed."));
       }
       return;
     }
@@ -256,7 +256,7 @@ class SmokeSocket {
     this.#taskWaiters.delete(key!);
     this.#taskAliases.delete(event.taskId);
     if (event.status === "completed") waiter.resolve(waiter.answers.join("\n"));
-    else waiter.reject(new Error(`附件冒烟任务以 ${String(event.status)} 结束。`));
+    else waiter.reject(new Error(`The attachment smoke task ended with ${String(event.status)}.`));
   }
 }
 
@@ -267,7 +267,7 @@ async function loginCookie(remoteUrl: string, credential: string): Promise<strin
     body: JSON.stringify({ token: credential }),
   });
   const cookie = response.headers.get("set-cookie")?.split(";", 1)[0];
-  if (!response.ok || !cookie) throw new Error("HTTP 登录没有签发 cookie。");
+  if (!response.ok || !cookie) throw new Error("HTTP sign-in issued no cookie.");
   return cookie;
 }
 
@@ -344,7 +344,7 @@ function drawText(
   let cursor = left;
   for (const character of text) {
     const glyph = FONT[character];
-    if (!glyph) throw new Error(`图片字体缺少字符 ${character}。`);
+    if (!glyph) throw new Error(`The image font has no glyph for ${character}.`);
     for (let row = 0; row < glyph.length; row += 1) {
       for (let column = 0; column < glyph[row]!.length; column += 1) {
         if (glyph[row]![column] === "1") {

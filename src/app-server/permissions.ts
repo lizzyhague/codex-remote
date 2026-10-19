@@ -15,7 +15,7 @@ export type PermissionOption = PermissionProfileSummary & {
 
 /**
  * Set permission profiles and approval policies together, matching Codex Desktop: Full access means
- * `danger-full-access` plus `never`; all other profiles use “需要时询问”. Otherwise, selecting a
+ * `danger-full-access` plus `never`; all other profiles use “ask when needed”. Otherwise, selecting a
  * restricted profile while config.toml specifies `never` would block out-of-bounds operations without
  * showing an approval card.
  */
@@ -41,7 +41,7 @@ export async function listPermissionProfiles(
     ...(cwd ? { cwd } : {}),
   }));
   if (!response || !Array.isArray(response.data)) {
-    throw new Error("Codex 返回了无法识别的权限列表。");
+    throw new Error("Codex returned an unrecognized permission list.");
   }
   return response.data.flatMap((value) => {
     const profile = asObject(value);

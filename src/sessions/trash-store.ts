@@ -45,7 +45,7 @@ export function resolveTrashStatePath(
 }
 
 const SHAPE: ThreadEntryStoreShape<TrashEntry> = {
-  label: "回收站状态文件",
+  label: "Trash state file",
   clone: (entry) => ({
     threadId: entry.threadId,
     projectId: entry.projectId,
