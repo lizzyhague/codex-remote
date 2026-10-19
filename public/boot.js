@@ -3,15 +3,16 @@
   var status = document.getElementById("login-status");
   var button = document.getElementById("connect-button");
   if (!form || !status || !button) return;
+  var t = window.codexRemoteI18n ? window.codexRemoteI18n.t : function (key) { return key; };
 
   button.disabled = true;
   status.dataset.tone = "progress";
-  status.textContent = "页面正在启动……";
+  status.textContent = t("boot.starting");
 
   var startupTimer = window.setTimeout(function () {
     if (window.codexRemoteReady === true) return;
     status.dataset.tone = "error";
-    status.textContent = "页面脚本未能启动，请刷新页面；如果仍然出现此提示，请更新浏览器。";
+    status.textContent = t("boot.failed");
   }, 5000);
 
   window.codexRemoteMarkReady = function () {
@@ -26,7 +27,7 @@
     if (window.codexRemoteReady === true) return;
 
     status.dataset.tone = "progress";
-    status.textContent = "页面仍在启动，请稍候……";
+    status.textContent = t("boot.stillStarting");
   });
 }());
 
@@ -46,6 +47,7 @@
 /* Nested scrolling lists do not depend on whether the browser provides native pull-to-refresh. */
 (function () {
   if (!("ontouchstart" in window)) return;
+  var t = window.codexRemoteI18n ? window.codexRemoteI18n.t : function (key) { return key; };
   var start = null;
   var distance = 0;
   var threshold = 90;
@@ -87,7 +89,7 @@
     if (!event.cancelable) { reset(); return; }
     event.preventDefault();
     indicator.hidden = false;
-    indicator.textContent = distance >= threshold ? "松开刷新" : "下拉刷新";
+    indicator.textContent = distance >= threshold ? t("boot.releaseToRefresh") : t("boot.pullToRefresh");
   }, { passive: false });
 
   document.addEventListener("touchend", function () {

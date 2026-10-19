@@ -770,6 +770,12 @@ button.icon-button svg {
   color: var(--text);
 }
 
+.language-options button {
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
 .theme-options svg {
   width: 18px;
   height: 18px;

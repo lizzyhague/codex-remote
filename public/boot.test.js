@@ -18,8 +18,8 @@ test("service worker registration stays in boot.js and does not auto-reload", ()
 
 test("pull-to-refresh uses the same surfaces and copy as Relayu", () => {
   assert.match(boot, /closest\("\.timeline, \.session-list, \.app-header, \.login-view"\)/u);
-  assert.match(boot, /下拉刷新/u);
-  assert.match(boot, /松开刷新/u);
+  assert.match(boot, /t\("boot\.pullToRefresh"\)/u);
+  assert.match(boot, /t\("boot\.releaseToRefresh"\)/u);
   assert.match(boot, /window\.location\.reload\(\)/u);
   assert.match(boot, /ontouchstart/u);
   assert.match(styles, /html\.pull-refresh-enabled/u);

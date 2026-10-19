@@ -40,6 +40,7 @@ function harness() {
   const element = () => ({ value: "", hidden: false, replaceChildren() {}, append() {} });
   const context = vm.createContext({
     URL, URLSearchParams, AbortController,
+    t: (key) => key,
     projectDisplayLabel,
     location: { protocol: "https:", host: "example.com", search: "" },
     RECONNECT_DELAY_MS: 2500, REQUEST_TIMEOUT_MS: 15000, SESSION_LOADING_RETRY_MS: 1000,

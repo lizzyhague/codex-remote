@@ -28,6 +28,9 @@ import {
   setComposerDraft,
 } from "./recovery-state.js";
 
+/** Interface text from i18n.js, which loads in <head> before this module. */
+const t = window.codexRemoteI18n ? window.codexRemoteI18n.t : (key) => key;
+
 const LEGACY_TOKEN_KEY = "codex-remote.token";
 const PROJECT_KEY = "codex-remote.project";
 const OUTBOX_KEY = "codex-remote.outbox-v2";
@@ -130,6 +133,8 @@ const elements = {
   appSettingsStatus: byId("app-settings-status"),
   themeSetting: byId("theme-setting"),
   themeOptions: byId("theme-options"),
+  languageSetting: byId("language-setting"),
+  languageOptions: byId("language-options"),
   defaultModelSelect: byId("default-model-select"),
   defaultReasoningEffortSelect: byId("default-reasoning-effort-select"),
   defaultPermissionsSelect: byId("default-permissions-select"),
@@ -331,7 +336,7 @@ elements.tokenForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const token = elements.tokenInput.value.trim();
   if (!token) {
-    setLoginStatus("请输入访问令牌。", "error");
+    setLoginStatus(t("login.tokenMissing"), "error");
     return;
   }
   state.reconnectAllowed = true;
@@ -364,6 +369,11 @@ elements.themeOptions.addEventListener("click", (event) => {
   window.codexRemoteTheme.set(button.dataset.themeChoice);
   renderThemeChoice();
 });
+elements.languageOptions.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-language-choice]");
+  if (button && window.codexRemoteI18n) window.codexRemoteI18n.set(button.dataset.languageChoice);
+});
+window.addEventListener("codex-remote-languagechange", renderLanguageChoice);
 elements.appSettingsForm.addEventListener("submit", (event) => {
   event.preventDefault();
   void saveAppSettings();
@@ -488,7 +498,7 @@ if (typeof window.codexRemoteMarkReady === "function") {
 }
 
 removeStored(LEGACY_TOKEN_KEY);
-setLoginStatus("正在连接主机……", "progress");
+setLoginStatus(t("login.connecting"), "progress");
 void connect();
 
 async function connect(token) {
@@ -506,7 +516,7 @@ async function connect(token) {
   state.authenticated = false;
   updateControls();
   elements.connectButton.disabled = true;
-  setLoginStatus("正在连接主机……", "progress");
+  setLoginStatus(t("login.connecting"), "progress");
   setConnectionStatus("connecting", "正在连接");
 
   try {
@@ -521,19 +531,17 @@ async function connect(token) {
         })
         : await fetch("/auth/session", { cache: "no-store" });
     } catch {
-      throw new Error(
-        "没有收到服务器响应。请求可能未到达服务器，或者连接在服务器响应前中断。请检查网络或代理设置后重试。",
-      );
+      throw new Error(t("login.noResponse"));
     }
     if (generation !== state.generation) return;
     if (response.status === 401) {
       state.reconnectAllowed = false;
       elements.connectButton.disabled = false;
       showLogin();
-      setLoginStatus(token ? "访问令牌有误，请重新输入。" : "请登录。", token ? "error" : null);
+      setLoginStatus(token ? t("login.tokenInvalid") : t("login.required"), token ? "error" : null);
       return;
     }
-    if (!response.ok) throw new Error("登录服务暂时不可用。");
+    if (!response.ok) throw new Error(t("login.unavailable"));
     const authentication = await response.json();
     if (generation !== state.generation) return;
     elements.tokenInput.value = "";
@@ -630,7 +638,7 @@ async function connect(token) {
 
   socket.addEventListener("error", () => {
     if (generation === state.generation && !state.authenticated) {
-      setLoginStatus("现在无法连接主机。", "error");
+      setLoginStatus(t("login.hostUnreachable"), "error");
       elements.connectButton.disabled = false;
     }
   });
@@ -3634,6 +3642,7 @@ async function openAppSettings() {
   const generation = ++state.appSettingsLoadGeneration;
   discardDisplayTimezoneDraft();
   renderThemeChoice();
+  renderLanguageChoice();
   syncAppSettingsForm();
   setAppSettingsStatus("");
   state.settingsModelsState = "loading";
@@ -3660,6 +3669,17 @@ function renderThemeChoice() {
   const current = theme.get();
   for (const button of elements.themeOptions.querySelectorAll("[data-theme-choice]")) {
     button.setAttribute("aria-pressed", String(button.dataset.themeChoice === current));
+  }
+}
+
+// Language is stored only in the current browser; i18n.js owns the preference and applies it to the page.
+function renderLanguageChoice() {
+  const i18n = window.codexRemoteI18n;
+  elements.languageSetting.hidden = !i18n;
+  if (!i18n) return;
+  const current = i18n.get();
+  for (const button of elements.languageOptions.querySelectorAll("[data-language-choice]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.languageChoice === current));
   }
 }
 
