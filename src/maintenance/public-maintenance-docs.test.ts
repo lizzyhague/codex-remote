@@ -7,7 +7,7 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
 test("launchd documentation names every template placeholder exactly", async () => {
   const [deployment, template] = await Promise.all([
-    readFile(path.join(repositoryRoot, "docs/deployment.md"), "utf8"),
+    readFile(path.join(repositoryRoot, "docs/deployment.zh-CN.md"), "utf8"),
     readFile(path.join(repositoryRoot, "deploy/launchd/codex-remote.plist.example"), "utf8"),
   ]);
   const placeholders = [...new Set(template.match(/__[A-Z_]+__/g) ?? [])];
@@ -19,8 +19,8 @@ test("launchd documentation names every template placeholder exactly", async () 
 
 test("public maintenance docs point to the reproducible protocol workflow", async () => {
   const [readme, operations, manifestSource] = await Promise.all([
-    readFile(path.join(repositoryRoot, "README.md"), "utf8"),
-    readFile(path.join(repositoryRoot, "docs/operations.md"), "utf8"),
+    readFile(path.join(repositoryRoot, "README.zh-CN.md"), "utf8"),
+    readFile(path.join(repositoryRoot, "docs/operations.zh-CN.md"), "utf8"),
     readFile(path.join(repositoryRoot, "codex-protocol.json"), "utf8"),
   ]);
   for (const source of [readme, operations]) {
