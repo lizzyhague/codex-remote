@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 
@@ -47,6 +47,7 @@ function run({ stored = null, languages = ["zh-CN"], storage = true, nodes = [] 
     codexRemoteStrings: {
       greeting: { zh: "你好，{name}", en: "Hello, {name}" },
       "only.zh": { zh: "只有中文" },
+      items: { zh: "{count} 项", en: { one: "1 item", other: "{count} items" } },
     },
     addEventListener: (type, listener) => { listeners[type] = listener; },
     dispatchEvent: (event) => events.push(event.type),
@@ -131,6 +132,14 @@ test("t fills placeholders, falls back to Chinese, and shows unknown keys as is"
   assert.equal(page.api.t("missing.key"), "missing.key");
 });
 
+test("t picks the singular or plural form by count", () => {
+  const page = run({ languages: ["en"] });
+  assert.equal(page.api.t("items", { count: 1 }), "1 item");
+  assert.equal(page.api.t("items", { count: 3 }), "3 items");
+  page.api.set("zh");
+  assert.equal(page.api.t("items", { count: 1 }), "1 项");
+});
+
 test("marked text and attributes are filled in and refilled on switching", () => {
   const text = new FakeNode({ "data-i18n": "greeting" });
   const button = new FakeNode({ "data-i18n-aria-label": "greeting", "data-i18n-title": "greeting" });
@@ -146,7 +155,10 @@ test("every string has both languages and the same placeholders in each", () => 
   for (const [key, entry] of Object.entries(loadStrings())) {
     assert.deepEqual(Object.keys(entry).sort(), ["en", "zh"], key);
     const names = (text) => [...text.matchAll(/\{(\w+)\}/gu)].map((match) => match[1]).sort();
-    assert.deepEqual(names(entry.en), names(entry.zh), key);
+    // A { one, other } translation is checked through its "other" form, which keeps every placeholder.
+    const forms = (text) => typeof text === "string" ? { other: text } : text;
+    assert.deepEqual(names(forms(entry.en).other), names(forms(entry.zh).other), key);
+    for (const form of Object.values(forms(entry.en))) assert.equal(typeof form, "string", key);
   }
 });
 
@@ -167,6 +179,28 @@ test("markup keeps the Chinese text as its default, and every key used exists", 
   }
   for (const match of `${app}\n${boot}`.matchAll(/\bt\("([^"]+)"/gu)) {
     assert.ok(strings[match[1]], match[1]);
+  }
+});
+
+test("every key the page scripts look up exists", async () => {
+  const strings = loadStrings();
+  const directory = new URL("./", import.meta.url);
+  const scripts = (await readdir(directory))
+    .filter((name) => name.endsWith(".js") && !name.includes(".test") && name !== "strings.js");
+  // Keys passed to t() directly, and keys handed to helpers or stored in state for a later t() call.
+  const patterns = [
+    /\bt\("([^"]+)"/gu,
+    /\b(?:showEmpty|showThinking)\("([^"]+)"/gu,
+    /\bsetConnectionStatus\("[a-z]+", "([^"]+)"/gu,
+    /\bsetKeyedText\([^,]+, "([^"]+)"/gu,
+    /\b(?:statusKey|labelKey|doneKey)(?::| =) (?:[^"\n]*\? )?"([^"]+)"/gu,
+    /\bmodelDefaultsMessage = "([^"]+)"/gu,
+  ];
+  for (const name of scripts) {
+    const script = await readFile(new URL(name, directory), "utf8");
+    for (const pattern of patterns) {
+      for (const match of script.matchAll(pattern)) assert.ok(strings[match[1]], `${name}: ${match[1]}`);
+    }
   }
 });
 

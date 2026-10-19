@@ -50,36 +50,21 @@ const TEMPORARY_WARNING = Object.freeze({ lifetime: "temporary", tone: "warning"
 const TEMPORARY_ERROR = Object.freeze({ lifetime: "temporary", tone: "error" });
 const CONNECTION_NOTICE_KEY = "connection";
 const RECOVERY_NOTICE_KEY = "recovery-storage";
-const SESSION_ORGANIZING_BUSY_MESSAGE = "这个项目有正在执行的任务，暂时不能整理会话。";
 const SESSION_SELECTION_VIEWS = Object.freeze({
   active: { actions: [
-    { id: "archive", label: "归档", resultLabel: "归档", icon: "archive" },
-    {
-      id: "trash-active",
-      label: "删除",
-      resultLabel: "删除",
-      icon: "delete",
-      danger: true,
-      retention: true,
-    },
+    { id: "archive", labelKey: "selection.archive", doneKey: "selection.doneArchive", icon: "archive" },
+    { id: "trash-active", labelKey: "common.delete", doneKey: "selection.doneTrash", icon: "delete", danger: true },
   ] },
   archived: { actions: [
-    { id: "unarchive", label: "取消归档", resultLabel: "取消归档", icon: "unarchive" },
-    {
-      id: "trash-archived",
-      label: "删除",
-      resultLabel: "删除",
-      icon: "delete",
-      danger: true,
-      retention: true,
-    },
+    { id: "unarchive", labelKey: "selection.unarchive", doneKey: "selection.doneUnarchive", icon: "unarchive" },
+    { id: "trash-archived", labelKey: "common.delete", doneKey: "selection.doneTrash", icon: "delete", danger: true },
   ] },
   trash: { actions: [
-    { id: "restore-trash", label: "恢复", resultLabel: "恢复", icon: "restore" },
+    { id: "restore-trash", labelKey: "selection.restore", doneKey: "selection.doneRestore", icon: "restore" },
     {
       id: "delete-trash",
-      label: "永久删除",
-      resultLabel: "永久删除",
+      labelKey: "selection.purge",
+      doneKey: "selection.donePurge",
       icon: "purge",
       danger: true,
       permanent: true,
@@ -285,9 +270,6 @@ const selectionBar = createSelectionBar({
   container: elements.selectionHeading,
   views: SESSION_SELECTION_VIEWS,
   initialView: state.sessionView,
-  noun: "会话",
-  untitledLabel: "新会话",
-  permanentDeleteDetail: "会话原文会一并删除",
   getId: (session) => session.id,
   getTitle: (session) => session.title,
   isSelectable: sessionSelectable,
@@ -307,6 +289,7 @@ const selectionBar = createSelectionBar({
 elements.appView.dataset.sidebarCollapsed = String(state.sidebarCollapsed);
 syncSidebarState();
 syncAppSettingsForm();
+labelScriptedText();
 const slashCommandOptions = {
   input: elements.messageInput,
   element: elements.slashMenu,
@@ -315,8 +298,8 @@ const slashCommandOptions = {
   onResult: (result) => { addCommandResult(result); void refreshPickerLabels(); },
   onRename: openRenameDialog,
   actions: [
-    { label: "添加附件", description: "上传图片、PDF 或文本，可一次选择多个文件。", disabled: () => state.pendingAttachments.length >= MAX_MESSAGE_ATTACHMENTS, onSelect: () => elements.attachmentInput.click() },
-    { label: "重命名", description: "修改当前会话的名称。", onSelect: () => openRenameDialog() },
+    { get label() { return t("composer.addAttachment"); }, get description() { return t("composer.addAttachmentHint"); }, disabled: () => state.pendingAttachments.length >= MAX_MESSAGE_ATTACHMENTS, onSelect: () => elements.attachmentInput.click() },
+    { get label() { return t("rename.title"); }, get description() { return t("composer.renameHint"); }, onSelect: () => openRenameDialog() },
   ],
   onError: (error) => showNotice(errorMessage(error), TEMPORARY_ERROR),
   onBusy: (busy) => {
@@ -351,7 +334,7 @@ elements.projectSelect.addEventListener("change", () => {
   elements.sessionSearchInput.value = "";
   setSessionView("active", false);
   stateSet(PROJECT_KEY, state.projectId ?? "");
-  showEmpty("选择以前的会话，或者新建一个会话。");
+  showEmpty("empty.chooseSession");
   void loadSessions();
 });
 
@@ -373,7 +356,10 @@ elements.languageOptions.addEventListener("click", (event) => {
   const button = event.target.closest("[data-language-choice]");
   if (button && window.codexRemoteI18n) window.codexRemoteI18n.set(button.dataset.languageChoice);
 });
-window.addEventListener("codex-remote-languagechange", renderLanguageChoice);
+window.addEventListener("codex-remote-languagechange", () => {
+  renderLanguageChoice();
+  relabelInterface();
+});
 elements.appSettingsForm.addEventListener("submit", (event) => {
   event.preventDefault();
   void saveAppSettings();
@@ -401,7 +387,7 @@ elements.defaultModelSelect.addEventListener("change", () => {
     state.defaultReasoningEffortDraft = null;
   } else if (!effortStillSupported) {
     state.defaultReasoningEffortDraft = null;
-    state.modelDefaultsMessage = "原先的思考强度不适用于这个模型，已改为跟随模型默认。";
+    state.modelDefaultsMessage = "settings.effortReset";
   }
   renderModelDefaults();
 });
@@ -506,7 +492,7 @@ async function connect(token) {
   state.connectionReady = false;
   clearTimeout(state.reconnectTimer);
   state.reconnectTimer = null;
-  rejectPending(new Error("连接已重新建立。"));
+  rejectPending(new Error(t("connection.reestablished")));
 
   if (state.socket) {
     state.socket.onclose = null;
@@ -517,7 +503,7 @@ async function connect(token) {
   updateControls();
   elements.connectButton.disabled = true;
   setLoginStatus(t("login.connecting"), "progress");
-  setConnectionStatus("connecting", "正在连接");
+  setConnectionStatus("connecting", "connection.connecting");
 
   try {
     let response;
@@ -557,7 +543,7 @@ async function connect(token) {
     if (generation !== state.generation) return;
     setLoginStatus(errorMessage(error), "error");
     elements.connectButton.disabled = false;
-    setConnectionStatus("disconnected", "连接已断开");
+    setConnectionStatus("disconnected", "connection.disconnected");
     scheduleReconnect();
     return;
   }
@@ -577,7 +563,7 @@ async function connect(token) {
       setLoginStatus("");
       elements.connectButton.disabled = false;
       showApp();
-      setConnectionStatus("connecting", "正在恢复连接");
+      setConnectionStatus("connecting", "connection.restoring");
       void slashCommands.load();
       await loadProjects(generation);
       if (generation !== state.generation || socket.readyState !== WebSocket.OPEN) return;
@@ -619,7 +605,7 @@ async function connect(token) {
       await flushQueuedAttachments();
       await retryDeferredActionsForCurrentSession();
       if (generation !== state.generation || socket.readyState !== WebSocket.OPEN) return;
-      setConnectionStatus("connected", "已连接");
+      setConnectionStatus("connected", "connection.connected");
       clearNotice(CONNECTION_NOTICE_KEY);
       updateControls();
     } catch (error) {
@@ -627,7 +613,7 @@ async function connect(token) {
       const message = errorMessage(error);
       setLoginStatus(message, "error");
       elements.connectButton.disabled = false;
-      showNotice(`${message}正在重新连接，当前会话和附件已保留。`, {
+      showNotice(t("connection.retrying", { message }), {
         lifetime: "state",
         tone: "warning",
         key: CONNECTION_NOTICE_KEY,
@@ -657,14 +643,14 @@ async function connect(token) {
     clearSessionResumeTimer();
     hideThinking();
     slashCommands.close();
-    rejectPending(new Error("连接已断开。"));
+    rejectPending(new Error(t("connection.lost")));
     elements.approvalList.replaceChildren();
-    setConnectionStatus("disconnected", "连接已断开");
+    setConnectionStatus("disconnected", "connection.disconnected");
     updateControls();
 
     if (state.reconnectAllowed) {
       if (!elements.appView.hidden) {
-        showNotice("连接中断；已接受的任务会由主机后台继续处理。正在重新连接……", {
+        showNotice(t("connection.interrupted"), {
           lifetime: "state",
           tone: "warning",
           key: CONNECTION_NOTICE_KEY,
@@ -688,7 +674,7 @@ function handleSocketMessage(source) {
   try {
     message = JSON.parse(String(source));
   } catch {
-    showNotice("主机返回了一条无法识别的消息。", TEMPORARY_ERROR);
+    showNotice(t("connection.badMessage"), TEMPORARY_ERROR);
     return;
   }
 
@@ -700,7 +686,7 @@ function handleSocketMessage(source) {
     if (message.ok) {
       pending.resolve(message.data);
     } else {
-      const error = new Error(message.error?.message || "请求失败。");
+      const error = new Error(message.error?.message || t("request.failed"));
       error.code = message.error?.code;
       pending.reject(error);
     }
@@ -708,7 +694,7 @@ function handleSocketMessage(source) {
   }
 
   if (message.type === "error") {
-    showNotice(message.error?.message || "连接发生错误。", TEMPORARY_ERROR);
+    showNotice(message.error?.message || t("connection.error"), TEMPORARY_ERROR);
     return;
   }
 
@@ -720,7 +706,7 @@ function handleSocketMessage(source) {
 function request(type, payload = {}) {
   const socket = state.socket;
   if (!socket || socket.readyState !== WebSocket.OPEN) {
-    return Promise.reject(new Error("尚未连接主机。"));
+    return Promise.reject(new Error(t("connection.notConnected")));
   }
 
   const requestId = `${Date.now().toString(36)}-${++state.requestNumber}`;
@@ -729,7 +715,7 @@ function request(type, payload = {}) {
       const pending = state.pendingRequests.get(requestId);
       if (!pending) return;
       state.pendingRequests.delete(requestId);
-      const error = new Error("主机请求超时，正在重新连接。");
+      const error = new Error(t("request.timeout"));
       error.code = "request_timeout";
       reject(error);
       if (state.socket === socket) {
@@ -771,7 +757,7 @@ async function loadProjects(generation = state.generation) {
   if (state.sessionId && !savedAvailable) {
     invalidateOpenIntent();
     resetCurrentSession();
-    showNotice("当前会话所在的项目已不可用，已退出该会话。", TEMPORARY_WARNING);
+    showNotice(t("session.projectGone"), TEMPORARY_WARNING);
   }
 
   if (projects.length === 0) {
@@ -781,7 +767,7 @@ async function loadProjects(generation = state.generation) {
     state.sessionCursor = null;
     state.sessionLoadError = null;
     renderSessionList();
-    showEmpty("项目白名单里暂时没有可用项目。");
+    showEmpty("empty.noProjects");
     updateControls();
     return;
   }
@@ -793,7 +779,7 @@ async function loadProjects(generation = state.generation) {
     elements.sessionSearchInput.value = "";
     setSessionView("active", false);
     resetCurrentSession();
-    showEmpty("选择以前的会话，或者新建一个会话。");
+    showEmpty("empty.chooseSession");
   }
   await loadSessions();
 }
@@ -843,7 +829,7 @@ async function loadSessions({ append = false } = {}) {
       showNotice(errorMessage(error), TEMPORARY_ERROR);
     } else {
       // The list has already been cleared. Render failures as errors rather than authoritative empty-state copy
-      // such as “还没有会话”.
+      // such as “no sessions yet”.
       state.sessionLoadError = errorMessage(error);
     }
   } finally {
@@ -876,7 +862,7 @@ function finishOpenIntent(generation) {
 
 /**
  * Another device archived, trashed, or deleted the target being opened: invalidate this open and return
- * to “还没选会话” without waiting for a late result. When the target has not yet attached on the backend,
+ * to “no session selected” without waiting for a late result. When the target has not yet attached on the backend,
  * the event has no closedSessionId, so only this path can finish the transition.
  */
 function cancelRemovedOpenIntent(event) {
@@ -889,7 +875,7 @@ function cancelRemovedOpenIntent(event) {
   invalidateOpenIntent();
   setNavigationBusy(false);
   resetCurrentSession();
-  showEmpty("这个会话已经移出当前列表。请选择其他会话。");
+  showEmpty("empty.sessionRemoved");
   return true;
 }
 
@@ -922,9 +908,9 @@ async function startSession() {
     if (generation !== state.openGeneration) return;
     showNotice(errorMessage(error), TEMPORARY_ERROR);
     // The old session has already been removed and cannot be restored. Rather than leave the composer
-    // pointing at an invisible session, return to “还没选会话”.
+    // pointing at an invisible session, return to “no session selected”.
     resetCurrentSession();
-    showEmpty("选择以前的会话，或者新建一个会话。");
+    showEmpty("empty.chooseSession");
   } finally {
     if (finishOpenIntent(generation)) setNavigationBusy(false);
     updateControls();
@@ -934,7 +920,7 @@ async function startSession() {
 async function resumeSession(sessionId) {
   const selected = findSessionSummary(sessionId);
   if (selected && !directoryAvailable(selected.projectId)) {
-    showAlert("这个会话的工作目录已经不在了。", "无法打开会话");
+    showAlert(t("session.directoryGone"), t("session.cannotOpen"));
     return;
   }
   if (selected?.projectId && selected.projectId !== state.projectId) {
@@ -974,7 +960,7 @@ async function resumeSession(sessionId) {
     showNotice(errorMessage(error), TEMPORARY_ERROR);
     if (switching) {
       resetCurrentSession();
-      showEmpty("选择以前的会话，或者新建一个会话。");
+      showEmpty("empty.chooseSession");
     }
   } finally {
     if (finishOpenIntent(generation)) setNavigationBusy(false);
@@ -1009,7 +995,7 @@ function applyLoadingSession(
   state.sessionId = sessionId;
   state.sessionOpenState = loading.loadState;
   state.sessionTitle = findSessionSummary(sessionId)?.title ||
-    (previousSessionId === sessionId ? state.sessionTitle : "") || "会话";
+    (previousSessionId === sessionId ? state.sessionTitle : "") || t("session.fallbackTitle");
   state.running = true;
   state.stopping = false;
   state.controlsTask = loading.controlsActiveTask === true;
@@ -1084,7 +1070,7 @@ function applyOpenedSession(opened, { preserveAttachments = false, retryDeferred
   state.sessionId = opened.session.id;
   void refreshPickerLabels();
   renderSessionMetrics();
-  state.sessionTitle = opened.session.title || "新会话";
+  state.sessionTitle = opened.session.title || t("session.untitled");
   state.running = Boolean(opened.activeTaskId);
   state.controlsTask = Boolean(opened.controlsActiveTask);
   if (!state.running) state.stopping = false;
@@ -1108,7 +1094,7 @@ function applyOpenedSession(opened, { preserveAttachments = false, retryDeferred
     hideThinking();
   }
   if (state.running && !state.controlsTask) {
-    showNotice("这个任务仍在结束过程中，当前连接暂时不能控制它。", {
+    showNotice(t("task.stillEnding"), {
       lifetime: "state",
       tone: "warning",
       key: taskNoticeKey("control"),
@@ -1127,17 +1113,21 @@ function setSessionView(view, load = true) {
   state.markedSessions = [];
   state.sessionCursor = null;
   state.sessionLoadError = null;
-  elements.sessionViewTitle.textContent = view === "active"
-    ? "最近会话"
-    : view === "archived"
-    ? "已归档"
-    : "回收站";
+  renderSessionViewTitle();
   const activeView = view === "active";
   elements.sessionViewBackButton.hidden = activeView;
   elements.archivedSessionsButton.hidden = !activeView;
   elements.trashSessionsButton.hidden = !activeView;
   renderSessionList();
   if (load) void loadSessions();
+}
+
+function renderSessionViewTitle() {
+  elements.sessionViewTitle.textContent = t(state.sessionView === "active"
+    ? "sidebar.recent"
+    : state.sessionView === "archived"
+    ? "sidebar.archived"
+    : "sidebar.trash");
 }
 
 function renderSessionList() {
@@ -1159,7 +1149,7 @@ function renderSessionList() {
   if (state.sessionLoading && listEmpty) {
     const loading = document.createElement("p");
     loading.className = "session-list-empty";
-    loading.textContent = "正在加载会话……";
+    loading.textContent = t("sessions.loading");
     elements.sessionList.append(loading);
   } else if (state.sessionLoadError && listEmpty) {
     elements.sessionList.append(createSessionLoadError(state.sessionLoadError));
@@ -1169,12 +1159,12 @@ function renderSessionList() {
       empty.className = "session-list-empty";
       const searching = Boolean(elements.sessionSearchInput.value.trim());
       empty.textContent = searching
-        ? "没有找到匹配的会话。"
+        ? t("sessions.noMatch")
         : state.sessionView === "active"
-        ? "这个项目还没有会话。"
+        ? t("sessions.noneInProject")
         : state.sessionView === "archived"
-        ? "还没有归档会话。"
-        : "回收站是空的。";
+        ? t("sessions.noneArchived")
+        : t("sessions.trashEmpty");
       elements.sessionList.append(empty);
     }
   } else {
@@ -1191,11 +1181,11 @@ function createSessionLoadError(message) {
   container.className = "session-list-empty session-list-error";
   container.setAttribute("role", "alert");
   const text = document.createElement("p");
-  text.textContent = `会话列表没有读取成功：${message}`;
+  text.textContent = t("sessions.loadFailed", { message });
   const retry = document.createElement("button");
   retry.type = "button";
   retry.className = "quiet";
-  retry.textContent = "重试";
+  retry.textContent = t("common.retry");
   retry.addEventListener("click", () => {
     void loadSessions();
   });
@@ -1219,11 +1209,11 @@ function createSessionItem(session) {
     item.dataset.selectable = String(selectable);
     checkbox.checked = selectable && selectionBar.isSelected(session.id);
     checkbox.disabled = !selectable;
-    checkbox.setAttribute("aria-label", `选择 ${session.title || "新会话"}`);
+    checkbox.setAttribute("aria-label", t("sessions.selectOne", { title: session.title || t("session.untitled") }));
     if (session.state === "active") {
-      label.title = SESSION_ORGANIZING_BUSY_MESSAGE;
+      label.title = t("session.organizingBusy");
     } else if (!selectable) {
-      label.title = "这个会话属于其他项目，切换到它的项目后再整理。";
+      label.title = t("sessions.otherProject");
     }
     checkbox.addEventListener("change", () => {
       selectionBar.toggle(session.id);
@@ -1255,7 +1245,7 @@ function createSessionItem(session) {
 function appendSessionText(container, session) {
   const title = document.createElement("span");
   title.className = "session-item-title";
-  title.textContent = session.title || "新会话";
+  title.textContent = session.title || t("session.untitled");
   const project = document.createElement("span");
   project.className = "session-item-project";
   project.textContent = projectDirectoryName(session.projectId);
@@ -1282,8 +1272,8 @@ function createSessionRename(session) {
   const button = document.createElement("button");
   button.className = "session-rename-trigger quiet";
   button.type = "button";
-  button.setAttribute("aria-label", `重命名 ${session.title || "新会话"}`);
-  button.title = "重命名";
+  button.setAttribute("aria-label", t("sessions.renameOne", { title: session.title || t("session.untitled") }));
+  button.title = t("rename.title");
   button.append(sessionRenameIcon());
   button.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -1300,10 +1290,10 @@ function createSessionMark(session) {
   button.setAttribute(
     "aria-label",
     session.marked
-      ? `取消钉住 ${session.title || "新会话"}`
-      : `钉住 ${session.title || "新会话"}`,
+      ? t("sessions.unpinOne", { title: session.title || t("session.untitled") })
+      : t("sessions.pinOne", { title: session.title || t("session.untitled") }),
   );
-  button.title = session.marked ? "取消钉住" : "钉住后会一直显示在最近会话顶部";
+  button.title = session.marked ? t("sessions.unpin") : t("sessions.pinHint");
   button.append(sessionMarkIcon(Boolean(session.marked)));
   button.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -1392,7 +1382,7 @@ function directoryAvailable(projectId) {
   return Boolean(projectId) && state.projects.some((project) => project.id === projectId);
 }
 
-function showAlert(message, title = "提示") {
+function showAlert(message, title = t("alert.title")) {
   elements.appAlertTitle.textContent = title;
   elements.appAlertMessage.textContent = message;
   if (!elements.appAlertDialog.open) elements.appAlertDialog.showModal();
@@ -1418,7 +1408,7 @@ function visibleSessionSummaries() {
 
 /**
  * Bulk organization applies only to the current project. Sessions pinned across projects appear at the top
- * of “最近” but must not enter a request targeting the current project.
+ * of “Recent” but must not enter a request targeting the current project.
  */
 function sessionSelectable(session) {
   return session.state !== "active" &&
@@ -1432,7 +1422,7 @@ function syncCurrentSessionTitle() {
     candidate.id === state.sessionId && candidate.projectId === state.projectId
   );
   if (!session) return;
-  const title = session.title || "新会话";
+  const title = session.title || t("session.untitled");
   if (title === state.sessionTitle) return;
   state.sessionTitle = title;
   updateConversationTitle();
@@ -1441,7 +1431,7 @@ function syncCurrentSessionTitle() {
 async function executeSessionSelectionAction(action, sessionIds) {
   const projectId = state.projectId;
   if (!projectId || sessionIds.length === 0) {
-    throw new Error("当前没有可以整理的会话。");
+    throw new Error(t("sessions.nothingToOrganize"));
   }
   const result = await request("sessions.mutate", { projectId, sessionIds, action });
   const succeeded = Array.isArray(result?.succeeded) ? result.succeeded : [];
@@ -1451,13 +1441,13 @@ async function executeSessionSelectionAction(action, sessionIds) {
     (action === "archive" || action.startsWith("trash-") || action === "delete-trash")
   ) {
     resetCurrentSession();
-    showEmpty("选择以前的会话，或者新建一个会话。");
+    showEmpty("empty.chooseSession");
   }
   return {
     succeeded,
     failed: failed.map((failure) => ({
       id: failure?.sessionId,
-      reason: failure?.message || "操作失败。",
+      reason: failure?.message || t("selection.failed"),
     })),
   };
 }
@@ -1501,8 +1491,8 @@ function resetCurrentSession() {
   state.sessionId = null;
   state.sessionOpenState = null;
   closeComposerPicker();
-  elements.modelPickerLabel.textContent = "默认";
-  elements.permissionPickerLabel.textContent = "默认";
+  elements.modelPickerLabel.textContent = t("composer.default");
+  elements.permissionPickerLabel.textContent = t("composer.default");
   state.metrics = null;
   renderSessionMetrics();
   state.sessionTitle = "";
@@ -1528,7 +1518,7 @@ function openSidebar() {
     state.mobileSidebarOpen = true;
     elements.appView.dataset.mobileSidebarOpen = "true";
     syncSidebarState();
-    // Once the drawer covers the page, move focus into the sidebar and onto “收起” so keyboard users can exit in one step.
+    // Once the drawer covers the page, move focus into the sidebar and onto “Collapse” so keyboard users can exit in one step.
     elements.collapseSidebarButton.focus();
     return;
   }
@@ -1607,7 +1597,7 @@ function renderHistory(tasks, hasOlder) {
   const rendered = renderTasks(tasks);
 
   if (rendered === 0 && !hasOlder) {
-    showEmpty("这是一个新会话，可以发送第一条消息了。");
+    showEmpty("empty.newSession");
   } else {
     scrollToBottom(true);
   }
@@ -1623,7 +1613,7 @@ function renderTasks(tasks) {
       }
     }
     if (task.error) {
-      addTaskNote(`任务失败：${task.error}`);
+      addTaskNote(t("task.failed", { error: task.error }));
       rendered += 1;
     }
   }
@@ -1642,7 +1632,7 @@ async function loadOlderHistory() {
   const oldTop = elements.timeline.scrollTop;
   const existingNodes = new Set(elements.timeline.children);
   elements.loadOlderButton.disabled = true;
-  elements.loadOlderButton.textContent = "加载中……";
+  elements.loadOlderButton.textContent = t("timeline.loadingOlder");
 
   try {
     const data = await request("history.older", { projectId, sessionId });
@@ -1661,7 +1651,7 @@ async function loadOlderHistory() {
     showNotice(errorMessage(error), TEMPORARY_ERROR);
   } finally {
     elements.loadOlderButton.disabled = false;
-    elements.loadOlderButton.textContent = "加载更早";
+    elements.loadOlderButton.textContent = t("timeline.loadOlder");
   }
 }
 
@@ -1685,7 +1675,7 @@ async function sendMessage() {
     createdAtMs: Date.now(),
   };
   if (!storeMessageForDelivery(outbox)) {
-    showNotice("无法安全保存待发送消息，因此没有发送；正文和附件仍留在输入框。", {
+    showNotice(t("delivery.cannotStore"), {
       lifetime: "persistent",
       tone: "error",
       key: RECOVERY_NOTICE_KEY,
@@ -1725,7 +1715,7 @@ async function sendMessage() {
   } catch (error) {
     const uncertainDelivery = error?.code === "request_timeout" || !state.authenticated;
     if (uncertainDelivery) {
-      showNotice("连接在确认消息前中断。消息 ID 已保留；重新打开这个会话后会安全重试。", {
+      showNotice(t("delivery.uncertain"), {
         lifetime: "state",
         tone: "warning",
         key: deliveryNoticeKey(outbox.clientMessageId),
@@ -1750,10 +1740,10 @@ async function sendMessage() {
       updateControls();
     }
     showNotice(recovered === "persisted"
-      ? `${errorMessage(error)}消息已经放回原会话的输入草稿。`
+      ? t("delivery.restoredToDraft", { message: errorMessage(error) })
       : recovered === "volatile"
-      ? `${errorMessage(error)}消息仍由当前页面和待确认记录共同保留。`
-      : `${errorMessage(error)}消息仍保留在原会话的待确认记录中。`, {
+      ? t("delivery.keptVolatile", { message: errorMessage(error) })
+      : t("delivery.keptPending", { message: errorMessage(error) }), {
       lifetime: "persistent",
       tone: "error",
       key: deliveryNoticeKey(outbox.clientMessageId),
@@ -1766,11 +1756,11 @@ async function uploadFiles(files) {
   if (!state.sessionId || !state.projectId || files.length === 0) return;
   const available = MAX_MESSAGE_ATTACHMENTS - state.pendingAttachments.length;
   if (available <= 0) {
-    showNotice(`一条消息最多附加 ${MAX_MESSAGE_ATTACHMENTS} 个文件。`, TEMPORARY_WARNING);
+    showNotice(t("attachment.limit", { count: MAX_MESSAGE_ATTACHMENTS }), TEMPORARY_WARNING);
     return;
   }
   if (files.length > available) {
-    showNotice(`一条消息最多附加 ${MAX_MESSAGE_ATTACHMENTS} 个文件，只处理了前 ${available} 个。`, TEMPORARY_WARNING);
+    showNotice(t("attachment.limitPartial", { count: MAX_MESSAGE_ATTACHMENTS, available }), TEMPORARY_WARNING);
   }
   await Promise.all(files.slice(0, available).map((file) => uploadFile(file)));
 }
@@ -1781,10 +1771,10 @@ async function uploadFile(file) {
   const sessionId = state.sessionId;
   const draft = {
     clientId,
-    originalName: file.name || "未命名文件",
+    originalName: file.name || t("attachment.untitled"),
     size: file.size,
     status: "preparing",
-    statusText: "正在申请上传票据",
+    statusKey: "attachment.preparing",
     file,
     projectId,
     sessionId,
@@ -1793,7 +1783,7 @@ async function uploadFile(file) {
   renderAttachmentList();
   updateControls();
   if (file.size > MAX_ATTACHMENT_BYTES) {
-    Object.assign(draft, { status: "failed", statusText: "超过 25 MiB 上限", file: null });
+    Object.assign(draft, { status: "failed", statusKey: "attachment.tooLarge", file: null });
     renderAttachmentList();
     updateControls();
     return;
@@ -1807,7 +1797,7 @@ async function startUpload(draft) {
       state.attachmentUploads.has(draft.clientId)) return;
   if (draft.projectId !== state.projectId || draft.sessionId !== state.sessionId) return;
   if (!state.connectionReady || state.socket?.readyState !== WebSocket.OPEN) {
-    Object.assign(draft, { status: "queued", statusText: "等待重新连接" });
+    Object.assign(draft, { status: "queued", statusKey: "attachment.waitingReconnect", statusText: "" });
     renderAttachmentList();
     updateControls();
     return;
@@ -1817,25 +1807,25 @@ async function startUpload(draft) {
   const generation = state.generation;
   const controller = new AbortController();
   state.attachmentUploads.set(clientId, controller);
-  Object.assign(draft, { status: "preparing", statusText: "正在申请上传票据" });
+  Object.assign(draft, { status: "preparing", statusKey: "attachment.preparing", statusText: "" });
   renderAttachmentList();
   updateControls();
   try {
     const ticket = await request("attachment.ticket.create", {
       projectId,
       sessionId,
-      originalName: file.name || "未命名文件",
+      originalName: file.name || t("attachment.untitled"),
       declaredMime: file.type || "application/octet-stream",
       expectedSize: file.size,
     });
     if (projectId !== state.projectId || sessionId !== state.sessionId) {
-      throw new Error("上传期间切换了会话，请重新选择文件。");
+      throw new Error(t("attachment.sessionChanged"));
     }
     if (controller.signal.aborted || !state.pendingAttachments.includes(draft)) return;
     if (generation !== state.generation || !state.connectionReady) {
-      throw new Error("连接已断开。");
+      throw new Error(t("connection.lost"));
     }
-    Object.assign(draft, { status: "uploading", statusText: "正在上传" });
+    Object.assign(draft, { status: "uploading", statusKey: "attachment.uploading", statusText: "" });
     renderAttachmentList();
     const response = await fetch("/attachments/upload", {
       method: "POST",
@@ -1845,28 +1835,30 @@ async function startUpload(draft) {
     });
     const body = await response.json().catch(() => null);
     if (!response.ok) {
-      const error = new Error(body?.error?.message || "附件上传失败。");
+      const error = new Error(body?.error?.message || t("attachment.failed"));
       error.code = body?.error?.code;
       throw error;
     }
-    if (!body?.attachment?.id) throw new Error("上传服务没有返回附件 ID。");
+    if (!body?.attachment?.id) throw new Error(t("attachment.noId"));
     if (controller.signal.aborted || !state.pendingAttachments.includes(draft) ||
         projectId !== state.projectId || sessionId !== state.sessionId) return;
     Object.assign(draft, body.attachment, {
       clientId,
       status: "ready",
-      statusText: "上传完成",
+      statusKey: "attachment.uploaded",
+      statusText: "",
       file: null,
     });
     persistCurrentComposerDraft();
   } catch (error) {
     if (!controller.signal.aborted && (generation !== state.generation ||
         !state.connectionReady || state.socket?.readyState !== WebSocket.OPEN)) {
-      Object.assign(draft, { status: "queued", statusText: "等待重新连接" });
+      Object.assign(draft, { status: "queued", statusKey: "attachment.waitingReconnect", statusText: "" });
     } else {
       Object.assign(draft, {
         status: "failed",
-        statusText: error?.name === "AbortError" ? "已取消" : errorMessage(error),
+        statusKey: error?.name === "AbortError" ? "attachment.cancelled" : "",
+        statusText: error?.name === "AbortError" ? "" : errorMessage(error),
       });
     }
   } finally {
@@ -1898,17 +1890,17 @@ function renderAttachmentList() {
     item.dataset.status = attachment.status;
     const name = document.createElement("span");
     name.className = "attachment-name";
-    name.textContent = attachment.originalName || "未命名文件";
+    name.textContent = attachment.originalName || t("attachment.untitled");
     const meta = document.createElement("small");
     meta.className = "attachment-meta";
     meta.textContent = attachment.status === "ready"
-      ? `${attachment.id} · 上传完成`
-      : attachment.statusText || "处理中";
+      ? `${attachment.id} · ${t("attachment.uploaded")}`
+      : attachment.statusText || t(attachment.statusKey || "attachment.processing");
     const remove = document.createElement("button");
     remove.className = "quiet attachment-remove";
     remove.type = "button";
-    remove.textContent = "移除";
-    remove.setAttribute("aria-label", `移除附件 ${attachment.originalName || "未命名文件"}`);
+    remove.textContent = t("attachment.remove");
+    remove.setAttribute("aria-label", t("attachment.removeOne", { name: attachment.originalName || t("attachment.untitled") }));
     remove.addEventListener("click", () => removeAttachment(attachment));
     item.append(name, meta, remove);
     elements.attachmentList.append(item);
@@ -1963,19 +1955,19 @@ async function stopTask() {
   state.stopping = true;
   elements.taskButton.disabled = true;
   elements.taskButton.dataset.action = "stop";
-  elements.taskButton.setAttribute("aria-label", "停止中");
-  elements.taskButton.title = "停止中";
+  elements.taskButton.setAttribute("aria-label", t("task.stopping"));
+  elements.taskButton.title = t("task.stopping");
   try {
     const result = await request("task.stop", { projectId, sessionId });
     if (result?.requested === false) {
       state.stopping = false;
       // The compaction command has reached the model and the backend will not interrupt it; the timeline is unchanged and needs no reload.
       if (result.reason === "compact_started") {
-        showNotice("压缩已经开始，不能中途停止", TEMPORARY_WARNING);
+        showNotice(t("task.compactStarted"), TEMPORARY_WARNING);
         return;
       }
       if (state.sessionId) await resumeSession(state.sessionId);
-      showNotice("任务已经结束或状态已变化", TEMPORARY_WARNING);
+      showNotice(t("task.changed"), TEMPORARY_WARNING);
       return;
     }
   } catch (error) {
@@ -2029,7 +2021,7 @@ function handleServerEvent(event, replay = false) {
         }
         pending.taskId = event.taskId;
       }
-      showThinking("正在排队");
+      showThinking("thinking.queued");
       updateControls();
       break;
     }
@@ -2037,14 +2029,14 @@ function handleServerEvent(event, replay = false) {
       state.running = true;
       state.controlsTask = true;
       setCurrentSessionState("active");
-      showThinking("正在启动 Codex");
+      showThinking("thinking.starting");
       updateControls();
       break;
     case "sessions.changed":
       cancelRemovedOpenIntent(event);
       if (event.closedSessionId === state.sessionId) {
         resetCurrentSession();
-        showEmpty("这个会话已经移出当前列表。请选择其他会话。");
+        showEmpty("empty.sessionRemoved");
       }
       if (
         event.change === "mark" || event.change === "unmark" || event.change === "rename" ||
@@ -2086,7 +2078,7 @@ function handleServerEvent(event, replay = false) {
       sealAssistantStreams(event.taskId);
       hideThinking();
       startTool(event);
-      showThinking(event.tool?.kind === "think" ? "正在思考" : "正在执行工具");
+      showThinking(event.tool?.kind === "think" ? "thinking.thinking" : "thinking.tool");
       break;
     case "tool.output.delta":
       appendToolOutput(event.itemId, event.delta || "");
@@ -2112,16 +2104,16 @@ function handleServerEvent(event, replay = false) {
       setCurrentSessionState("idle");
       hideThinking();
       if (event.error) {
-        addTaskNote(`任务失败：${event.error}`);
+        addTaskNote(t("task.failed", { error: event.error }));
         if (!replay) showNotice(event.error, TEMPORARY_ERROR);
       }
-      if (event.status === "interrupted") addTaskNote("任务已停止。");
+      if (event.status === "interrupted") addTaskNote(t("task.stopped"));
       updateControls();
       break;
     case "task.error":
       if (!event.willRetry) hideThinking();
       if (event.willRetry) {
-        showNotice(`${event.message} Codex 将重试。`, {
+        showNotice(t("task.retrying", { message: event.message }), {
           lifetime: "state",
           tone: "warning",
           key: taskNoticeKey("retry", event.taskId || event.sessionId),
@@ -2260,7 +2252,7 @@ function renderMessageAttachments(attachments) {
   for (const attachment of attachments) {
     const chip = document.createElement("span");
     chip.className = "message-attachment";
-    chip.textContent = attachment.originalName || "未命名文件";
+    chip.textContent = attachment.originalName || t("attachment.untitled");
     list.append(chip);
   }
   return list;
@@ -2551,28 +2543,28 @@ function renderToolEntry(command) {
     return;
   }
   command.details.dataset.kind = command.kind;
-  const exit = typeof command.exitCode === "number" ? ` · 退出码 ${command.exitCode}` : "";
+  const exit = typeof command.exitCode === "number" ? ` · ${t("tool.exitCode", { code: command.exitCode })}` : "";
   command.summary.textContent = `${command.kind} · ${clipTitle(command.title)} · ${status}${exit}`;
   command.pane.replaceChildren();
   command.outputElement = null;
   if (command.kind === "search") {
     appendToolTextBlock(
       command.pane,
-      "关键词",
-      command.query || (isRunningTool(command) ? "等待关键词……" : "没有可用的关键词。"),
+      t("tool.query"),
+      command.query || (isRunningTool(command) ? t("tool.waitingQuery") : t("tool.noQuery")),
       "command-input",
     );
-    appendResourceBlock(command, "结果", "没有可用的结果地址。");
+    appendResourceBlock(command, t("tool.results"), t("tool.noResults"));
     return;
   }
   if (command.kind === "fetch") {
-    appendResourceBlock(command, "地址", "没有可用的资源地址。");
+    appendResourceBlock(command, t("tool.address"), t("tool.noAddress"));
     return;
   }
-  appendToolTextBlock(command.pane, "输入", command.input || "没有输入。", "command-input");
+  appendToolTextBlock(command.pane, t("tool.input"), command.input || t("tool.noInput"), "command-input");
   command.outputElement = appendToolTextBlock(
     command.pane,
-    "输出",
+    t("tool.output"),
     toolOutputText(command),
     "command-output",
   );
@@ -2602,7 +2594,7 @@ function appendResourceBlock(command, label, emptyText) {
   if (!command.resources.length) {
     const empty = document.createElement("p");
     empty.className = "command-resource-empty";
-    empty.textContent = isRunningTool(command) ? "等待地址……" : emptyText;
+    empty.textContent = isRunningTool(command) ? t("tool.waitingAddress") : emptyText;
     block.append(empty);
   } else {
     const list = document.createElement("ul");
@@ -2675,9 +2667,9 @@ function isRunningTool(command) {
 
 function toolOutputText(command) {
   if (command.output) {
-    return `${command.truncated ? "（较早输出已省略）\n" : ""}${command.output}`;
+    return `${command.truncated ? `${t("tool.truncated")}\n` : ""}${command.output}`;
   }
-  return isRunningTool(command) ? "等待输出……" : "没有输出。";
+  return isRunningTool(command) ? t("tool.waitingOutput") : t("tool.noOutput");
 }
 
 function normalizeToolKind(kind) {
@@ -2763,15 +2755,15 @@ function addApproval(approval, sourceSession = null, sessionId = null) {
   const title = document.createElement("p");
   title.className = "permission-card-title";
   title.textContent = approval.reason || (approval.kind === "command"
-    ? "Codex 请求执行一项操作。"
+    ? t("approval.command")
     : approval.kind === "permissions"
-    ? "Codex 请求为本轮增加权限。"
-    : "Codex 请求修改文件。");
+    ? t("approval.permissions")
+    : t("approval.fileChange"));
   const body = document.createElement("div");
   body.className = "permission-card-body";
   const source = document.createElement("small");
   source.className = "permission-card-detail";
-  source.textContent = `来源会话：${pendingRequestSessionLabel(sourceSession, sessionId)}`;
+  source.textContent = t("pending.source", { session: pendingRequestSessionLabel(sourceSession, sessionId) });
   body.append(source);
   for (const line of approvalScopeLines(approval)) {
     const detail = document.createElement("small");
@@ -2782,18 +2774,18 @@ function addApproval(approval, sourceSession = null, sessionId = null) {
   if (approval.canApprove === false) {
     const unavailable = document.createElement("small");
     unavailable.className = "permission-card-detail";
-    unavailable.textContent = "完整范围无法在网页中安全显示，只能拒绝。";
+    unavailable.textContent = t("approval.scopeHidden");
     body.append(unavailable);
   }
 
   const decline = document.createElement("button");
   decline.className = "danger";
   decline.type = "button";
-  decline.textContent = "拒绝";
+  decline.textContent = t("approval.decline");
   const approve = document.createElement("button");
   approve.className = "primary";
   approve.type = "button";
-  approve.textContent = "本次允许";
+  approve.textContent = t("approval.approveOnce");
   decline.addEventListener("click", () => void answerApproval(card, approval.id, "decline"));
   approve.addEventListener("click", () => void answerApproval(card, approval.id, "approve_once"));
   const actions = document.createElement("div");
@@ -2810,28 +2802,28 @@ function pendingRequestSessionLabel(sourceSession, fallbackSessionId = null) {
     : fallbackSessionId;
   const title = typeof sourceSession?.title === "string" && sourceSession.title.trim()
     ? sourceSession.title.trim()
-    : findSessionSummary(sessionId)?.title || "未命名会话";
+    : findSessionSummary(sessionId)?.title || t("pending.untitledSession");
   const shortId = typeof sessionId === "string" && sessionId
     ? sessionId.slice(0, 8)
-    : "未知";
+    : t("pending.unknown");
   return `${title} · ${shortId}`;
 }
 
 function approvalScopeLines(approval) {
   const lines = [];
   if (typeof approval.commandSummary === "string" && approval.commandSummary) {
-    lines.push(`命令：${approval.commandSummary}`);
+    lines.push(t("approval.commandLine", { command: approval.commandSummary }));
   }
   if (
     approval.network && typeof approval.network.protocol === "string" &&
     typeof approval.network.host === "string"
   ) {
-    lines.push(`网络访问：${approval.network.protocol}://${approval.network.host}`);
+    lines.push(t("approval.network", { target: `${approval.network.protocol}://${approval.network.host}` }));
   }
   if (Array.isArray(approval.permissionSummary)) {
     lines.push(...approval.permissionSummary.filter((line) => typeof line === "string"));
   }
-  if (lines.length === 0) lines.push("请选择本次允许，或拒绝。");
+  if (lines.length === 0) lines.push(t("approval.choose"));
   return lines;
 }
 
@@ -2839,7 +2831,7 @@ async function requestSlashCommand(type, payload = {}) {
   if (type !== "command.run" || payload.command !== "rewind") {
     if (type !== "command.run") return request(type, payload);
     if (!state.projectId || !state.sessionId) {
-      throw new Error("请先打开一个会话。");
+      throw new Error(t("session.openFirst"));
     }
     return request(type, {
       ...payload,
@@ -2861,7 +2853,7 @@ async function requestSlashCommand(type, payload = {}) {
 
 function beginPendingRewind() {
   if (!state.projectId || !state.sessionId || !state.rewindTargetTurnId) {
-    throw new Error("当前会话没有可以回退的轮次。");
+    throw new Error(t("rewind.none"));
   }
   const pending = {
     projectId: state.projectId,
@@ -2872,7 +2864,7 @@ function beginPendingRewind() {
     createdAtMs: Date.now(),
   };
   if (!storePendingRewind(pending)) {
-    throw new Error("无法安全保存回退记录，因此没有执行回退。");
+    throw new Error(t("rewind.cannotStore"));
   }
   return pending;
 }
@@ -2883,7 +2875,7 @@ async function applyRewindResult(result, pending) {
     !["reverted", "already_reverted", "stale"].includes(result.outcome) ||
     result.targetTurnId !== pending.targetTurnId
   ) {
-    throw new Error("主机返回了无法识别的回退结果。");
+    throw new Error(t("rewind.badResult"));
   }
   const opened = await request("session.resume", {
     projectId: pending.projectId,
@@ -2901,7 +2893,7 @@ async function applyRewindResult(result, pending) {
     retryDeferred: false,
   });
   if (!ready) {
-    throw new Error("回退已经受理，但会话历史尚未准备好；连接恢复后会继续确认。");
+    throw new Error(t("rewind.notReady"));
   }
   const completed = finishPendingRewind(pending, result.outcome !== "stale");
   if (result.outcome !== "stale") loadComposerDraftForCurrentSession();
@@ -2940,7 +2932,7 @@ async function retryPendingRewindForCurrentSession() {
     return true;
   } catch (error) {
     if (error?.code !== "request_timeout" && state.authenticated) {
-      showNotice(`无法确认上一次回退：${errorMessage(error)}`, {
+      showNotice(t("rewind.confirmFailed", { message: errorMessage(error) }), {
         lifetime: "persistent",
         tone: "error",
         key: rewindNoticeKey(pending),
@@ -2960,7 +2952,7 @@ async function retryDeferredActionsForCurrentSession() {
 
 function pendingRewindForCurrentSession() {
   const entries = loadPendingRewinds();
-  if (!entries) throw new Error("无法读取浏览器中的回退记录。");
+  if (!entries) throw new Error(t("rewind.cannotRead"));
   return entries.find((entry) =>
     entry.projectId === state.projectId && entry.sessionId === state.sessionId
   ) ?? null;
@@ -3014,10 +3006,10 @@ async function retryOutboxForCurrentSession() {
           loadComposerDraftForCurrentSession();
         }
         showNotice(recovered === "persisted"
-          ? `保留消息重试失败：${errorMessage(error)}消息已放回原会话草稿。`
+          ? t("delivery.retryFailedDraft", { message: errorMessage(error) })
           : recovered === "volatile"
-          ? `保留消息重试失败：${errorMessage(error)}消息仍由当前页面和待确认记录共同保留。`
-          : `保留消息重试失败：${errorMessage(error)}原待确认记录没有删除。`, {
+          ? t("delivery.retryFailedVolatile", { message: errorMessage(error) })
+          : t("delivery.retryFailedKept", { message: errorMessage(error) }), {
           lifetime: "persistent",
           tone: "error",
           key: deliveryNoticeKey(outbox.clientMessageId),
@@ -3076,7 +3068,7 @@ function loadComposerDraftForCurrentSession() {
       ...attachment,
       clientId: createClientMessageId(),
       status: expired ? "failed" : "ready",
-      statusText: expired ? "附件已过期，请重新添加" : "上传完成",
+      statusKey: expired ? "attachment.expired" : "attachment.uploaded",
     };
   });
   renderAttachmentList();
@@ -3154,12 +3146,12 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
   card.dataset.sessionId = sourceSession?.id || sessionId || "";
   const heading = document.createElement("p");
   heading.className = "permission-card-title";
-  heading.textContent = "Codex 需要你的输入。";
+  heading.textContent = t("interaction.heading");
   const body = document.createElement("div");
   body.className = "permission-card-body";
   const source = document.createElement("small");
   source.className = "permission-card-detail";
-  source.textContent = `来源会话：${pendingRequestSessionLabel(sourceSession, sessionId)}`;
+  source.textContent = t("pending.source", { session: pendingRequestSessionLabel(sourceSession, sessionId) });
   body.append(source);
 
   const fields = new Map();
@@ -3168,7 +3160,7 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
   if (interaction.kind === "user_input") {
     for (const question of Array.isArray(interaction.questions) ? interaction.questions : []) {
       const label = document.createElement("label");
-      label.textContent = question.question || question.header || "请选择";
+      label.textContent = question.question || question.header || t("interaction.choose");
       let control;
       if (Array.isArray(question.options) && question.options.length > 0) {
         control = document.createElement("select");
@@ -3190,7 +3182,7 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
       if (question.isOther && Array.isArray(question.options)) {
         other = document.createElement("input");
         other.type = question.isSecret ? "password" : "text";
-        other.placeholder = "其他回答（可选）";
+        other.placeholder = t("interaction.other");
         body.append(other);
       }
       fields.set(question.id, { control, other, multiple: false });
@@ -3198,7 +3190,10 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
   } else {
     const message = document.createElement("small");
     message.className = "permission-card-detail";
-    message.textContent = `${interaction.serverName || "MCP"}：${interaction.message || "需要确认"}`;
+    message.textContent = t("interaction.mcpMessage", {
+      server: interaction.serverName || "MCP",
+      message: interaction.message || t("interaction.needsConfirm"),
+    });
     body.append(message);
     const loginHref = externalLinkHref(interaction.url);
     if (loginHref) {
@@ -3206,14 +3201,14 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
       link.href = loginHref;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
-      link.textContent = "打开登录或授权页面";
+      link.textContent = t("interaction.openAuth");
       body.append(link);
     } else if (typeof interaction.url === "string" && interaction.url) {
       // The address exists but is not a regular web link. Display it verbatim for manual judgment without
       // making it clickable or allowing confirmation; authorization that was never opened must not be reported complete.
       const rejected = document.createElement("small");
       rejected.className = "permission-card-detail";
-      rejected.textContent = `这个地址不是网页链接，没有作为链接呈现：${interaction.url}`;
+      rejected.textContent = t("interaction.notWebLink", { url: interaction.url });
       body.append(rejected);
       canSubmit = false;
     } else {
@@ -3222,7 +3217,7 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
       if (count === 0) {
         const unsupported = document.createElement("small");
         unsupported.className = "permission-card-detail";
-        unsupported.textContent = "这个 MCP 表单暂时无法在网页中安全呈现，只能取消本轮。";
+        unsupported.textContent = t("interaction.formUnsupported");
         body.append(unsupported);
         canSubmit = false;
       }
@@ -3247,13 +3242,13 @@ function addInteraction(interaction, sourceSession = null, sessionId = null) {
   const cancel = document.createElement("button");
   cancel.className = "danger";
   cancel.type = "button";
-  cancel.textContent = "取消本轮";
+  cancel.textContent = t("interaction.cancelTurn");
   const submit = document.createElement("button");
   submit.className = "primary";
   submit.type = "button";
   submit.textContent = interaction.kind === "user_input" || interaction.mode !== "url"
-    ? "提交回答"
-    : "已完成，继续";
+    ? t("interaction.submit")
+    : t("interaction.done");
   cancel.addEventListener("click", () =>
     void answerInteraction(card, interaction.id, "cancel", {}));
   submit.addEventListener("click", () => {
@@ -3310,7 +3305,7 @@ function addMcpFormFields(card, fields, form) {
       if (!multiple) {
         const blank = document.createElement("option");
         blank.value = "";
-        blank.textContent = fieldSchema.required ? "请选择" : "不填写";
+        blank.textContent = fieldSchema.required ? t("interaction.choose") : t("interaction.skip");
         blank.dataset.omit = "true";
         control.append(blank);
       }
@@ -3326,9 +3321,9 @@ function addMcpFormFields(card, fields, form) {
     } else if (fieldSchema.type === "boolean") {
       control = document.createElement("select");
       for (const [value, title] of [
-        ["", fieldSchema.required ? "请选择" : "不填写"],
-        ["true", "是"],
-        ["false", "否"],
+        ["", fieldSchema.required ? t("interaction.choose") : t("interaction.skip")],
+        ["true", t("interaction.yes")],
+        ["false", t("interaction.no")],
       ]) {
         const option = document.createElement("option");
         option.value = value;
@@ -3428,11 +3423,11 @@ function updateControls() {
   elements.selectSessionsButton.disabled = !connected || navigationLocked ||
     organizingBusy || selectableCount === 0;
   elements.selectSessionsButton.title = organizingBusy
-    ? SESSION_ORGANIZING_BUSY_MESSAGE
-    : "选择";
+    ? t("session.organizingBusy")
+    : t("sidebar.select");
   selectionBar.setDisabled(
     !connected || navigationBusy || busy || organizingBusy,
-    organizingBusy ? SESSION_ORGANIZING_BUSY_MESSAGE : "",
+    organizingBusy ? t("session.organizingBusy") : "",
   );
   elements.loadMoreSessionsButton.disabled = !connected || navigationBusy;
   elements.sessionViewBackButton.disabled = !connected || navigationBusy;
@@ -3450,17 +3445,17 @@ function updateControls() {
     for (const checkbox of item.querySelectorAll('input[type="checkbox"]')) {
       checkbox.disabled = !connected || navigationBusy || busy || organizingBusy ||
         itemIsActive || !itemIsSelectable;
-      checkbox.title = organizingBusy ? SESSION_ORGANIZING_BUSY_MESSAGE : "";
+      checkbox.title = organizingBusy ? t("session.organizingBusy") : "";
     }
   }
   elements.messageInput.disabled = !connected || !hasSession;
   elements.messageInput.placeholder = !hasSession
-    ? "先选择或新建会话"
+    ? t("composer.placeholderNoSession")
     : state.running
-    ? "可以先写，当前回复结束后再发送"
+    ? t("composer.placeholderRunning")
     : state.commandBusy
-    ? "快捷操作执行中，可以继续写"
-    : "在浏览器里写好，再发送给 Codex";
+    ? t("composer.placeholderBusy")
+    : t("composer.placeholder");
   const controlsDisabled = !connected || !hasSession || busy || navigationBusy;
   // Model and permissions may change while a response is in progress; the backend records them for the next turn.
   const pickersDisabled = !connected || !hasSession || state.commandBusy || navigationBusy;
@@ -3471,13 +3466,13 @@ function updateControls() {
   if (controlsDisabled) slashCommands.close();
   if (state.stopping) {
     elements.taskButton.dataset.action = "stop";
-    elements.taskButton.setAttribute("aria-label", "停止中");
-    elements.taskButton.title = "停止中";
+    elements.taskButton.setAttribute("aria-label", t("task.stopping"));
+    elements.taskButton.title = t("task.stopping");
     elements.taskButton.classList.toggle("primary", false);
     elements.taskButton.classList.toggle("danger", false);
     elements.taskButton.disabled = true;
   } else {
-    const taskLabel = state.running ? "停止" : "发送";
+    const taskLabel = state.running ? t("composer.stop") : t("composer.send");
     elements.taskButton.dataset.action = state.running ? "stop" : "send";
     elements.taskButton.setAttribute("aria-label", taskLabel);
     elements.taskButton.title = taskLabel;
@@ -3511,30 +3506,29 @@ function clearTimeline() {
   elements.timeline.replaceChildren();
 }
 
-function showEmpty(text) {
+function showEmpty(key) {
   clearTimeline();
-  elements.emptyState.querySelector("p").textContent = text;
+  setKeyedText(elements.emptyState.querySelector("p"), key);
   elements.timeline.append(elements.emptyState);
 }
 
 function showSessionLoading(loadState = "loading") {
-  const message = loadState === "queued"
-    ? "任务正在排队，等待可用 Worker……"
+  showEmpty(loadState === "queued"
+    ? "loading.queued"
     : loadState === "starting"
-    ? "正在启动 Codex 并恢复会话……"
+    ? "loading.starting"
     : loadState === "restoring"
-    ? "正在恢复运行中的任务……"
-    : "正在载入会话……";
-  showEmpty(message);
+    ? "loading.restoring"
+    : "loading.session");
 }
 
 function hideEmpty() {
   if (elements.emptyState.parentElement) elements.emptyState.remove();
 }
 
-function showThinking(label = "正在思考") {
+function showThinking(key = "thinking.thinking") {
   hideEmpty();
-  elements.thinkingLabel.textContent = label;
+  setKeyedText(elements.thinkingLabel, key);
   elements.timeline.append(elements.thinkingIndicator);
   elements.thinkingIndicator.hidden = false;
   scrollToBottom(false);
@@ -3601,9 +3595,53 @@ function showApp() {
   updateControls();
 }
 
-function setConnectionStatus(status, text) {
+function setConnectionStatus(status, key) {
   elements.connectionStatus.dataset.state = status;
-  elements.connectionStatus.textContent = text;
+  setKeyedText(elements.connectionStatus, key);
+}
+
+/** Text in the page markup that scripts rewrite, so it is set here rather than marked for i18n.js. */
+function labelScriptedText() {
+  setConnectionStatus("connecting", "connection.connecting");
+  setKeyedText(elements.emptyState.querySelector("p"), "empty.chooseSession");
+  setKeyedText(elements.thinkingLabel, "thinking.thinking");
+  elements.loadOlderButton.textContent = t("timeline.loadOlder");
+  elements.modelPickerLabel.textContent = t("composer.default");
+  elements.permissionPickerLabel.textContent = t("composer.default");
+  renderSessionViewTitle();
+}
+
+/**
+ * Rewrites the text scripts have set after a language switch. Conversation content already on screen keeps
+ * its language; new content, and a session opened again, use the new one.
+ */
+function relabelInterface() {
+  for (const element of document.querySelectorAll("[data-text-key]")) {
+    element.textContent = t(element.dataset.textKey);
+  }
+  if (!elements.loadOlderButton.disabled) elements.loadOlderButton.textContent = t("timeline.loadOlder");
+  renderSessionViewTitle();
+  selectionBar.relabel();
+  renderSessionList();
+  renderAttachmentList();
+  renderSessionMetrics();
+  if (state.sessionId) {
+    void refreshPickerLabels();
+  } else {
+    elements.modelPickerLabel.textContent = t("composer.default");
+    elements.permissionPickerLabel.textContent = t("composer.default");
+  }
+  if (elements.appSettingsDialog.open) {
+    renderModelDefaults();
+    renderPermissionDefaults();
+  }
+  updateControls();
+}
+
+/** Shows interface text and remembers its key, so a language switch can rewrite it in place. */
+function setKeyedText(element, key) {
+  element.dataset.textKey = key;
+  element.textContent = t(key);
 }
 
 function showNotice(text, options = TEMPORARY_WARNING) {
@@ -3616,16 +3654,16 @@ function clearNotice(key) {
 
 function commandStatus(status) {
   return status === "completed"
-    ? "完成"
+    ? t("tool.completed")
     : status === "failed"
-    ? "失败"
+    ? t("tool.failed")
     : status === "interrupted"
-    ? "已停止"
+    ? t("tool.interrupted")
     : status === "declined"
-    ? "已拒绝"
+    ? t("tool.declined")
     : status === "inProgress" || status === "in_progress" || status === "pending"
-    ? "运行中"
-    : status || "结束";
+    ? t("tool.running")
+    : status || t("tool.ended");
 }
 
 function formatDate(value) {
@@ -3733,7 +3771,7 @@ async function loadSettingsModels(generation) {
   try {
     const data = await request("settings.models");
     if (generation !== state.appSettingsLoadGeneration) return;
-    if (!Array.isArray(data)) throw new Error("主机返回了无法识别的模型列表。");
+    if (!Array.isArray(data)) throw new Error(t("settings.badModelList"));
     state.settingsModels = data.flatMap((model) => {
       if (
         !model || typeof model.id !== "string" || !model.id ||
@@ -3770,11 +3808,11 @@ function renderModelDefaults() {
   const selectedModel = ready
     ? state.settingsModels.find((candidate) => candidate.id === model)
     : null;
-  const modelOptions = [{ value: "", label: "跟随 Codex 默认" }];
+  const modelOptions = [{ value: "", label: t("settings.followCodexDefault") }];
   if (model && !selectedModel) {
     modelOptions.push({
       value: model,
-      label: ready ? `${model}（当前不可用）` : `${model}（已保存）`,
+      label: t(ready ? "settings.optionUnavailable" : "settings.optionSaved", { value: model }),
     });
   }
   if (ready) {
@@ -3787,21 +3825,21 @@ function renderModelDefaults() {
 
   const effortOptions = [{
     value: "",
-    label: model === null ? "跟随 Codex 默认" : "跟随模型默认",
+    label: model === null ? t("settings.followCodexDefault") : t("settings.followModelDefault"),
   }];
   if (model && effort && !selectedModel?.supportedReasoningEfforts.some(
     (option) => option.reasoningEffort === effort,
   )) {
     effortOptions.push({
       value: effort,
-      label: ready ? `${effort}（当前不可用）` : `${effort}（已保存）`,
+      label: t(ready ? "settings.optionUnavailable" : "settings.optionSaved", { value: effort }),
     });
   }
   if (selectedModel) {
     effortOptions.push(...selectedModel.supportedReasoningEfforts.map((option) => ({
       value: option.reasoningEffort,
       label: option.reasoningEffort === selectedModel.defaultReasoningEffort
-        ? `${option.reasoningEffort}（模型当前默认）`
+        ? t("settings.modelDefaultEffort", { value: option.reasoningEffort })
         : option.reasoningEffort,
     })));
   }
@@ -3810,21 +3848,22 @@ function renderModelDefaults() {
   elements.defaultModelSelect.disabled = state.appSettingsBusy || !ready;
   elements.defaultReasoningEffortSelect.disabled = state.appSettingsBusy ||
     !ready || model === null || !selectedModel;
-  elements.modelDefaultsStatus.textContent = state.modelDefaultsMessage ||
-    (state.settingsModelsState === "loading"
-      ? "正在读取可用模型……"
-      : state.settingsModelsState === "error"
-      ? `可用模型暂时无法读取：${state.settingsModelsError}`
-      : model && !selectedModel
-      ? "已保存的模型当前不在可用列表中；保存其他设置不会清除它。"
-      : "只影响之后新建的会话；旧会话和会话内的临时选择不变。");
+  elements.modelDefaultsStatus.textContent = state.modelDefaultsMessage
+    ? t(state.modelDefaultsMessage)
+    : state.settingsModelsState === "loading"
+    ? t("settings.loadingModels")
+    : state.settingsModelsState === "error"
+    ? t("settings.modelsFailed", { message: state.settingsModelsError })
+    : model && !selectedModel
+    ? t("settings.savedModelMissing")
+    : t("settings.modelDefaultsHint");
 }
 
 async function loadSettingsPermissions(generation) {
   try {
     const data = await request("settings.permissions");
     if (generation !== state.appSettingsLoadGeneration) return;
-    if (!Array.isArray(data)) throw new Error("主机返回了无法识别的权限列表。");
+    if (!Array.isArray(data)) throw new Error(t("settings.badPermissionList"));
     state.settingsPermissions = data.flatMap((profile) =>
       profile && typeof profile.id === "string" && profile.id &&
         typeof profile.label === "string" && profile.allowed === true
@@ -3852,11 +3891,11 @@ function renderPermissionDefaults() {
   const profile = ready
     ? state.settingsPermissions.find((candidate) => candidate.id === selected)
     : null;
-  const options = [{ value: "", label: "跟随 Codex 默认" }];
+  const options = [{ value: "", label: t("settings.followCodexDefault") }];
   if (selected && !profile) {
     options.push({
       value: selected,
-      label: ready ? `${selected}（当前不可用）` : `${selected}（已保存）`,
+      label: t(ready ? "settings.optionUnavailable" : "settings.optionSaved", { value: selected }),
     });
   }
   if (ready) {
@@ -3868,12 +3907,12 @@ function renderPermissionDefaults() {
   replaceSelectOptions(elements.defaultPermissionsSelect, options, selected ?? "");
   elements.defaultPermissionsSelect.disabled = state.appSettingsBusy || !ready;
   elements.defaultPermissionsStatus.textContent = state.settingsPermissionsState === "loading"
-    ? "正在读取可用权限……"
+    ? t("settings.loadingPermissions")
     : state.settingsPermissionsState === "error"
-    ? `可用权限暂时无法读取：${state.settingsPermissionsError}`
+    ? t("settings.permissionsFailed", { message: state.settingsPermissionsError })
     : selected && !profile
-    ? "已保存的权限当前不可用；保存其他设置不会清除它。"
-    : profile?.description || "不指定权限，新会话按这台主机的 Codex 配置。";
+    ? t("settings.savedPermissionMissing")
+    : profile?.description || t("settings.noPermissionDefault");
 }
 
 function replaceSelectOptions(select, options, selectedValue) {
@@ -3890,7 +3929,7 @@ function replaceSelectOptions(select, options, selectedValue) {
 async function saveAppSettings() {
   if (state.appSettingsBusy) return;
   state.appSettingsBusy = true;
-  setAppSettingsStatus("正在保存……");
+  setAppSettingsStatus(t("settings.saving"));
   updateAppSettingsControls();
   try {
     const data = await request("settings.update", {
@@ -3945,7 +3984,7 @@ function displayedTimezone() {
   return state.displayTimezoneDraft ?? state.displayTimezone;
 }
 
-/** Time-zone changes in the dialog are previews only; “保存” writes them to local storage, while cancel, close, or Escape discards them. */
+/** Time-zone changes in the dialog are previews only; “Save” writes them to local storage, while cancel, close, or Escape discards them. */
 function previewDisplayTimezonePreference() {
   const next = normalizeDisplayTimezonePreference({
     followDevice: elements.followDeviceTimezoneInput.checked,
@@ -4000,7 +4039,7 @@ function setLoginStatus(text, tone = null) {
 }
 
 function errorMessage(error) {
-  return error instanceof Error ? error.message : "请求失败。";
+  return error instanceof Error ? error.message : t("request.failed");
 }
 
 function readRecoveryState() {
@@ -4040,7 +4079,7 @@ function ensureRecoveryPersisted() {
 function reportRecoveryProblem(error) {
   const problem = error instanceof RecoveryStateError
     ? error
-    : new RecoveryStateError("recovery_unavailable", "浏览器无法读写恢复记录。", {
+    : new RecoveryStateError("recovery_unavailable", t("recovery.unavailable"), {
       cause: error,
     });
   const signature = `${problem.code}:${problem.key || "unknown"}`;
@@ -4054,17 +4093,17 @@ function reportRecoveryProblem(error) {
   };
   if (problem.code === "recovery_corrupt" && typeof problem.raw === "string") {
     options.action = {
-      label: "复制原始记录",
+      label: t("recovery.copyRaw"),
       run: async () => {
-        if (!navigator.clipboard?.writeText) throw new Error("当前浏览器不能复制恢复记录。");
+        if (!navigator.clipboard?.writeText) throw new Error(t("recovery.cannotCopy"));
         await navigator.clipboard.writeText(`${problem.key || RECOVERY_KEY}\n${problem.raw}`);
-        showNotice("原始恢复记录已复制；应用没有覆盖它。", TEMPORARY_INFO);
+        showNotice(t("recovery.copied"), TEMPORARY_INFO);
       },
     };
   }
   showNotice(problem.code === "recovery_corrupt"
-    ? "本地恢复记录已损坏；应用没有覆盖原始内容，也不会自动重试其中的操作。"
-    : "本地恢复存储当前不可用；草稿只在此页面暂存，新的发送和回退不会开始。", options);
+    ? t("recovery.corruptNotice")
+    : t("recovery.unavailableNotice"), options);
 }
 
 function clearRecoveryProblem() {
@@ -4099,7 +4138,7 @@ function removeStored(key) {
 function unavailableSlashCommands() {
   return {
     async load() {},
-    toggleAll() { showNotice("命令菜单当前不可用，请刷新页面。", TEMPORARY_WARNING); },
+    toggleAll() { showNotice(t("slash.menuUnavailable"), TEMPORARY_WARNING); },
     close() {
       elements.slashMenu.hidden = true;
       elements.slashMenu.replaceChildren();
@@ -4116,7 +4155,7 @@ function unavailableSlashCommands() {
 
 function byId(id) {
   const element = document.getElementById(id);
-  if (!element) throw new Error(`页面缺少元素：${id}`);
+  if (!element) throw new Error(`Missing page element: ${id}`);
   return element;
 }
 
@@ -4176,19 +4215,21 @@ function renderSessionMetrics() {
   if (!state.sessionId) { elements.sessionMetrics.textContent = ""; return; }
   const metrics = state.metrics;
   const parts = [metrics?.context
-    ? `上下文约 ${metrics.context.percentage.toFixed(1)}%`
-    : "上下文等待更新"];
+    ? t("metrics.context", { percent: metrics.context.percentage.toFixed(1) })
+    : t("metrics.contextPending")];
   if (metrics?.windows?.length) {
     for (const quota of metrics.windows) {
       const left = typeof quota.remainingPercent === "number"
-        ? `${quota.remainingPercent.toFixed(1)}%` : "未知";
+        ? `${quota.remainingPercent.toFixed(1)}%` : t("metrics.unknown");
       const reset = formatDate(quota.resetsAt);
       const label = quota.label.replace(/^codex（(.+)）$/i, "$1");
-      parts.push(`${label}剩余 ${left}${reset ? `，${reset} 重置` : ""}`);
+      parts.push(reset
+        ? t("metrics.quotaReset", { label, left, reset })
+        : t("metrics.quota", { label, left }));
     }
-  } else parts.push("套餐额度不可用");
+  } else parts.push(t("metrics.quotaUnavailable"));
   parts.push(metrics?.lastReplyAt
-    ? `最后回复时间 ${formatDate(metrics.lastReplyAt)}` : "最后回复时间不可用");
+    ? t("metrics.lastReply", { date: formatDate(metrics.lastReplyAt) }) : t("metrics.lastReplyUnavailable"));
   elements.sessionMetrics.replaceChildren();
   parts.forEach((text, index) => {
     if (index > 0) {
@@ -4200,7 +4241,7 @@ function renderSessionMetrics() {
     }
     elements.sessionMetrics.append(document.createTextNode(text));
   });
-  elements.sessionMetrics.title = "上下文按最近一次调用的 Token 用量估算；额度属于账号。历史回复时间按该轮完成时间显示。";
+  elements.sessionMetrics.title = t("metrics.hint");
 }
 
 document.addEventListener("visibilitychange", () => {
@@ -4237,7 +4278,7 @@ async function refreshPickerLabels() {
       const data = await request("command.options", { projectId, sessionId, command });
       if (state.projectId !== projectId || state.sessionId !== sessionId) return;
       const selected = data.items?.find(item => item.selected);
-      const label = selected?.label || "默认";
+      const label = selected?.label || t("composer.default");
       const kind = command === "model" ? "model" : "permission";
       composerPickers[kind].label.textContent = label;
       composerPickers[kind].button.title = label;
@@ -4250,7 +4291,7 @@ async function refreshPickerLabels() {
  *
  * This cannot be one comma-separated selector: that returns the first element in document order matching
  * any branch instead of prioritizing the earlier branch. The checked option always follows the first enabled
- * button, especially when “‹ 返回” is present, so focus would never reach the checked option.
+ * button, especially when “‹ Back” is present, so focus would never reach the checked option.
  */
 function pickerFocusTarget(menu) {
   return menu.querySelector('button[aria-selected="true"]:not(:disabled)') ??
@@ -4266,7 +4307,7 @@ function renderComposerPicker(title, items, onSelect, onBack) {
     const back = document.createElement("button");
     back.type = "button";
     back.className = "composer-picker-back";
-    back.textContent = "‹ 返回";
+    back.textContent = `‹ ${t("common.back")}`;
     back.addEventListener("click", onBack);
     heading.append(back);
   }
@@ -4313,10 +4354,10 @@ async function openComposerPicker(command) {
         state.pickerGeneration !== pickerGeneration) return;
     const items = data.items || [];
     const selected = items.find(item => item.selected);
-    composerPickers[kind].label.textContent = selected?.label || "默认";
+    composerPickers[kind].label.textContent = selected?.label || t("composer.default");
     const choose = async (item, argument = null) => {
       if (state.projectId !== projectId || state.sessionId !== sessionId || trigger.disabled) return;
-      if (item.danger && !window.confirm("完全访问会让 Codex 不受项目沙箱限制地操作主机。确定只为当前会话选择吗？")) return;
+      if (item.danger && !window.confirm(t("composer.fullAccessConfirm"))) return;
       closeComposerPicker();
       state.commandBusy = true;
       updateControls();
@@ -4340,11 +4381,11 @@ async function openComposerPicker(command) {
           id: "__effort",
           label: "Effort ›",
           description: selected?.items?.find(item => item.selected)?.label ||
-            "选择当前模型的思考强度",
+            t("composer.effortHint"),
           disabled: !selected?.items?.length,
         });
       }
-      renderComposerPicker(command === "model" ? "选择模型" : "权限模式", rows, item => {
+      renderComposerPicker(command === "model" ? t("composer.chooseModel") : t("composer.permissionMode"), rows, item => {
         if (item.id === "__effort") {
           renderComposerPicker("Effort", selected.items, effort => void choose(selected, effort.id), root);
         } else { void choose(item); }
@@ -4400,7 +4441,7 @@ function openRenameDialog(initialTitleOrSession) {
   if (fromSession) {
     dialog.dataset.sessionId = fromSession.id;
     dialog.dataset.projectId = fromSession.projectId || "";
-    input.value = fromSession.title || "新会话";
+    input.value = fromSession.title || t("session.untitled");
   } else {
     if (!state.sessionId || state.commandBusy || state.running) return;
     dialog.dataset.sessionId = state.sessionId;
@@ -4419,11 +4460,11 @@ elements.renameForm.addEventListener("submit", async event => {
   const dialog = elements.renameDialog;
   const status = elements.renameStatus;
   const title = elements.renameInput.value.trim();
-  if (!title) { status.textContent = "会话名称不能为空。"; return; }
+  if (!title) { status.textContent = t("rename.empty"); return; }
   const sessionId = dialog.dataset.sessionId;
   const projectId = dialog.dataset.projectId || state.projectId;
   if (!sessionId || !projectId) {
-    status.textContent = "找不到要改名的会话。";
+    status.textContent = t("rename.missing");
     return;
   }
   const session = findSessionSummary(sessionId);

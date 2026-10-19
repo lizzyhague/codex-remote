@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { t } from "./i18n.test-support.js";
 import vm from "node:vm";
 
 import { projectDisplayLabel } from "./project-labels.js";
@@ -39,8 +40,8 @@ function harness() {
   }, { key: "recovery", legacy: { attachmentDrafts: "drafts" } });
   const element = () => ({ value: "", hidden: false, replaceChildren() {}, append() {} });
   const context = vm.createContext({
+    t,
     URL, URLSearchParams, AbortController,
-    t: (key) => key,
     projectDisplayLabel,
     location: { protocol: "https:", host: "example.com", search: "" },
     RECONNECT_DELAY_MS: 2500, REQUEST_TIMEOUT_MS: 15000, SESSION_LOADING_RETRY_MS: 1000,

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
+import { codexRemoteI18n } from "./i18n.test-support.js";
 
 import { renderMarkdown } from "./markdown.js";
 
@@ -47,6 +48,7 @@ async function view(filePath, response) {
   const requests = [];
   await vm.runInNewContext(viewer, {
     document,
+    codexRemoteI18n,
     URLSearchParams,
     location: { pathname: "/view", search: `?${new URLSearchParams({ path: filePath })}` },
     renderMarkdown: (text) => renderMarkdown(text, document),

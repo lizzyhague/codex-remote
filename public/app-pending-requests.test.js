@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { t } from "./i18n.test-support.js";
 import vm from "node:vm";
 
 const source = await readFile(new URL("./app.js", import.meta.url), "utf8");
@@ -12,6 +13,7 @@ function section(start, end) {
 function eventHarness() {
   const calls = [];
   const context = vm.createContext({
+    t,
     state: {
       sessionId: "session-b",
       sessionOpenState: null,
@@ -86,6 +88,7 @@ test("redrawing a conversation keeps the global pending-request area", () => {
   let timelineClears = 0;
   let pendingClears = 0;
   const context = vm.createContext({
+    t,
     state: {
       assistantStreams: new Map(),
       commands: new Map(),
@@ -141,6 +144,7 @@ function approvalHarness() {
   const approvalList = new FakeElement("aside");
   approvalList.querySelector = () => null;
   const context = vm.createContext({
+    t,
     state: { sessionId: "session-b", running: true },
     elements: { approvalList },
     document: { createElement: (tagName) => new FakeElement(tagName) },
@@ -207,6 +211,7 @@ test("an interaction card keeps the same explicit source-session label", () => {
   const approvalList = new FakeElement("aside");
   approvalList.querySelector = () => null;
   const context = vm.createContext({
+    t,
     elements: { approvalList },
     document: { createElement: (tagName) => new FakeElement(tagName) },
     CSS: { escape: (value) => value },
@@ -238,6 +243,7 @@ test("an interaction card keeps the same explicit source-session label", () => {
 test("answering a background approval does not restart current-session thinking", async () => {
   const shown = [];
   const context = vm.createContext({
+    t,
     state: { sessionId: "session-b", running: true },
     request: async () => ({ answered: true }),
     showThinking: () => shown.push("show"),

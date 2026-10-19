@@ -3,12 +3,12 @@ export const DISPLAY_TIMEZONE_KEY = "codex-remote.display-timezone";
 export const DEFAULT_CITY_TIME_ZONE = "Asia/Shanghai";
 
 export const DISPLAY_TIME_ZONES = [
-  { id: "Asia/Shanghai", label: "上海" },
-  { id: "Asia/Tokyo", label: "东京" },
-  { id: "Europe/London", label: "伦敦" },
-  { id: "Europe/Paris", label: "巴黎" },
-  { id: "America/New_York", label: "纽约" },
-  { id: "America/Los_Angeles", label: "洛杉矶" },
+  { id: "Asia/Shanghai", labelKey: "city.shanghai" },
+  { id: "Asia/Tokyo", labelKey: "city.tokyo" },
+  { id: "Europe/London", labelKey: "city.london" },
+  { id: "Europe/Paris", labelKey: "city.paris" },
+  { id: "America/New_York", labelKey: "city.newYork" },
+  { id: "America/Los_Angeles", labelKey: "city.losAngeles" },
 ];
 
 const CITY_IDS = new Set(DISPLAY_TIME_ZONES.map((city) => city.id));

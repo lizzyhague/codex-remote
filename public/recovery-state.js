@@ -1,3 +1,6 @@
+/** Interface text from i18n.js; looked up on each call so a language switch applies to the next render. */
+const t = (key, params) => globalThis.codexRemoteI18n ? globalThis.codexRemoteI18n.t(key, params) : key;
+
 const RECOVERY_VERSION = 1;
 
 export class RecoveryStateError extends Error {
@@ -255,7 +258,7 @@ function recoverPayload(state, projectId, sessionId, text, attachments) {
 
 function normalizeRecoveryState(value) {
   if (!isRecord(value) || value.version !== RECOVERY_VERSION || !isRecord(value.drafts)) {
-    throw new TypeError("恢复状态格式无效。");
+    throw new TypeError("Invalid recovery state.");
   }
   const drafts = {};
   for (const [key, draft] of Object.entries(value.drafts)) {
@@ -414,7 +417,7 @@ function assertTargetKey(key, storageKey, raw) {
 function corruptError(key, raw, cause = null) {
   return new RecoveryStateError(
     "recovery_corrupt",
-    "浏览器中的恢复记录已损坏。",
+    t("recovery.corrupt"),
     { key, raw, cause },
   );
 }
@@ -422,7 +425,7 @@ function corruptError(key, raw, cause = null) {
 function storageError(key, cause) {
   return new RecoveryStateError(
     "recovery_unavailable",
-    "浏览器无法读写恢复记录。",
+    t("recovery.unavailable"),
     { key, cause },
   );
 }

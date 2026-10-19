@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { t } from "./i18n.test-support.js";
 import vm from "node:vm";
 
 const source = await readFile(new URL("./app.js", import.meta.url), "utf8");
@@ -20,6 +21,7 @@ function eventHarness() {
   const finalized = [];
   const thinking = [];
   const context = vm.createContext({
+    t,
     TEMPORARY_ERROR: { lifetime: "temporary", tone: "error" },
     state: {
       sessionId: "session-1",
@@ -224,6 +226,7 @@ test("a queued task's degraded-memory notice shows live, on replay and while loa
 test("leaving a session clears only its current context notice", () => {
   const cleared = [];
   const context = vm.createContext({
+    t,
     noticeController: { current: { key: "task-retry:task-1" } },
     taskNoticeKey: (kind, sessionId) => `task-${kind}:${sessionId}`,
     clearNotice: (key) => cleared.push(key),
@@ -254,6 +257,7 @@ function outboxHarness(request, entries = null) {
     attachmentIds: [],
   };
   const context = vm.createContext({
+    t,
     state: { authenticated: true, projectId: "project-1", sessionId: "session-1" },
     ensureRecoveryPersisted: () => true,
     loadOutbox: () => entries ?? [outbox],

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { t } from "./i18n.test-support.js";
 
 import { DISPLAY_TIME_ZONES } from "./display-timezone.js";
 
@@ -62,7 +63,7 @@ test("application settings keeps timezone controls and does not copy companion-o
   assert.doesNotMatch(appDialog, /给伴的话/u);
   assert.doesNotMatch(appDialog, /role="tablist"/u);
   for (const city of DISPLAY_TIME_ZONES) {
-    assert.match(appDialog, new RegExp(`<option value="${city.id}" data-i18n="[^"]+">${city.label}</option>`));
+    assert.match(appDialog, new RegExp(`<option value="${city.id}" data-i18n="${city.labelKey}">[^<]+</option>`, "u"));
   }
 });
 
@@ -180,14 +181,14 @@ test("opening reloads backend settings and models without accepting pushed chang
 });
 
 test("model and effort controls preserve unavailable settings and move effort with model", () => {
-  assert.match(app, /label: ready \? `\$\{model\}（当前不可用）`/u);
-  assert.match(app, /label: ready \? `\$\{effort\}（当前不可用）`/u);
-  assert.match(app, /原先的思考强度不适用于这个模型，已改为跟随模型默认。/u);
+  assert.match(app, /label: t\(ready \? "settings\.optionUnavailable" : "settings\.optionSaved", \{ value: model \}\)/u);
+  assert.match(app, /label: t\(ready \? "settings\.optionUnavailable" : "settings\.optionSaved", \{ value: effort \}\)/u);
+  assert.match(app, /state\.modelDefaultsMessage = "settings\.effortReset"/u);
   assert.match(app, /model === null \|\| !selectedModel/u);
 });
 
 test("save disables controls, closes on success, and leaves errors in the dialog", () => {
-  assert.match(app, /setAppSettingsStatus\("正在保存……"\)/u);
+  assert.match(app, /setAppSettingsStatus\(t\("settings\.saving"\)\)/u);
   assert.match(app, /updateAppSettingsControls\(\)/u);
   assert.match(app, /elements\.appSettingsDialog\.close\(\)/u);
   assert.match(app, /setAppSettingsStatus\(errorMessage\(error\), "error"\)/u);

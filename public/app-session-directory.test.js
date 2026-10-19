@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { t } from "./i18n.test-support.js";
 import vm from "node:vm";
 
 import { projectDisplayLabel } from "./project-labels.js";
@@ -102,6 +103,7 @@ function harness({ view = "active", selectionMode = false } = {}) {
     },
   });
   const context = vm.createContext({
+    t,
     projectDisplayLabel,
     PROJECT_KEY: "project",
     TEMPORARY_ERROR: { tone: "error" },
@@ -174,25 +176,22 @@ function harness({ view = "active", selectionMode = false } = {}) {
   ].join("\n"), context);
   const views = {
     active: { actions: [
-      { id: "archive", label: "归档", resultLabel: "归档", icon: "archive" },
-      { id: "trash-active", label: "删除", resultLabel: "删除", icon: "delete", danger: true, retention: true },
+      { id: "archive", labelKey: "selection.archive", doneKey: "selection.doneArchive", icon: "archive" },
+      { id: "trash-active", labelKey: "common.delete", doneKey: "selection.doneTrash", icon: "delete", danger: true },
     ] },
     archived: { actions: [
-      { id: "unarchive", label: "取消归档", resultLabel: "取消归档", icon: "unarchive" },
-      { id: "trash-archived", label: "删除", resultLabel: "删除", icon: "delete", danger: true, retention: true },
+      { id: "unarchive", labelKey: "selection.unarchive", doneKey: "selection.doneUnarchive", icon: "unarchive" },
+      { id: "trash-archived", labelKey: "common.delete", doneKey: "selection.doneTrash", icon: "delete", danger: true },
     ] },
     trash: { actions: [
-      { id: "restore-trash", label: "恢复", resultLabel: "恢复", icon: "restore" },
-      { id: "delete-trash", label: "永久删除", resultLabel: "永久删除", icon: "purge", danger: true, permanent: true },
+      { id: "restore-trash", labelKey: "selection.restore", doneKey: "selection.doneRestore", icon: "restore" },
+      { id: "delete-trash", labelKey: "selection.purge", doneKey: "selection.donePurge", icon: "purge", danger: true, permanent: true },
     ] },
   };
   const selectionBar = createSelectionBar({
     container: elements.selectionHeading,
     views,
     initialView: view,
-    noun: "会话",
-    untitledLabel: "新会话",
-    permanentDeleteDetail: "会话原文会一并删除",
     getId: (session) => session.id,
     getTitle: (session) => session.title,
     isSelectable: (session) => context.sessionSelectable(session),

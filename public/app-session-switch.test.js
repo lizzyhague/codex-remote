@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { t } from "./i18n.test-support.js";
 import vm from "node:vm";
 
 const source = await readFile(new URL("./app.js", import.meta.url), "utf8");
@@ -20,6 +21,7 @@ const LOADING_EVENTS = section(
 function resumeContext(overrides = {}) {
   const timeline = [];
   const context = vm.createContext({
+    t,
     state: {
       sessionId: "session-1",
       projectId: "project-1",
@@ -62,7 +64,7 @@ function resumeContext(overrides = {}) {
       kind: "loading",
       ...(loadState ? { loadState } : {}),
     }),
-    showEmpty: (text) => timeline.push({ kind: "empty", text }),
+    showEmpty: (key) => timeline.push({ kind: "empty", text: t(key) }),
     clearCurrentSessionNotice: () => {},
     persistCurrentComposerDraft: () => true,
     abortAttachmentUploads: () => {},
@@ -246,6 +248,7 @@ test("a superseded open neither draws its result nor releases the newer open's l
 function loadOlderContext(navigationBusy) {
   const requests = [];
   const context = vm.createContext({
+    t,
     state: {
       projectId: "project-1",
       sessionId: "session-1",
@@ -287,7 +290,8 @@ test("loading older history is refused while a session switch is in flight", asy
 test("session loading states explain what the backend is waiting for", () => {
   const messages = [];
   const context = vm.createContext({
-    showEmpty: (message) => messages.push(message),
+    t,
+    showEmpty: (key) => messages.push(t(key)),
   });
   vm.runInContext(LOADING_LABEL, context);
   context.showSessionLoading();
@@ -306,6 +310,7 @@ test("worker events advance a loading session without drawing partial history", 
   const rendered = [];
   const retries = [];
   const context = vm.createContext({
+    t,
     state: {
       sessionId: "session-1",
       sessionOpenState: "queued",

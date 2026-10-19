@@ -1,3 +1,6 @@
+/** Interface text from i18n.js; looked up on each call so a language switch applies to the next render. */
+const t = (key, params) => globalThis.codexRemoteI18n ? globalThis.codexRemoteI18n.t(key, params) : key;
+
 export class SlashCommandMenu {
   constructor(options) {
     this._input = options.input;
@@ -95,12 +98,12 @@ export class SlashCommandMenu {
     this._fromButton = false;
     const match = /^\/([a-z-]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
     if (!match) {
-      this._onError(new Error("无法识别这个斜杠命令。输入 / 可以查看列表。"));
+      this._onError(new Error(t("slash.unrecognized")));
       return true;
     }
     const command = this._commands.find((candidate) => candidate.name === match[1]);
     if (!command) {
-      this._onError(new Error(`不支持 /${match[1]}。输入 / 可以查看列表。`));
+      this._onError(new Error(t("slash.unsupported", { name: match[1] })));
       return true;
     }
     const argument = match[2]?.trim() || null;
@@ -126,7 +129,7 @@ export class SlashCommandMenu {
     const fragment = document.createDocumentFragment();
     const heading = document.createElement("div");
     heading.className = "slash-heading";
-    heading.textContent = "Codex 命令";
+    heading.textContent = t("slash.heading");
     fragment.append(heading);
 
     const actionButtons = includeActions ? this._actions.map(action => {
@@ -145,7 +148,7 @@ export class SlashCommandMenu {
     if (!buttons.length) {
       const empty = document.createElement("p");
       empty.className = "slash-empty";
-      empty.textContent = "没有匹配的命令。";
+      empty.textContent = t("slash.noMatch");
       fragment.append(empty);
     }
     this._show(fragment, [...actionButtons, ...buttons]);
@@ -253,6 +256,6 @@ function commandButton(label, description) {
 function confirmCommand(command) {
   const message = typeof command.confirmation === "string" && command.confirmation
     ? command.confirmation
-    : `确定执行 /${command.name} 吗？`;
+    : t("slash.confirm", { name: command.name });
   return window.confirm(message);
 }
