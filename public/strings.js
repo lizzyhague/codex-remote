@@ -193,6 +193,8 @@ window.codexRemoteStrings = {
   "sessions.unpinOne": { zh: "取消钉住 {title}", en: "Unpin {title}" },
   "sessions.unpin": { zh: "取消钉住", en: "Unpin" },
   "sessions.pinHint": { zh: "钉住后会一直显示在最近会话顶部", en: "Pinned sessions stay at the top of recent sessions" },
+  "sessions.lastReply": { zh: "最后回复于 {date}", en: "last reply at {date}" },
+  "sessions.noReplies": { zh: "还没有回复", en: "no replies yet" },
   "sessions.nothingToOrganize": { zh: "当前没有可以整理的会话。", en: "There are no sessions to organize." },
 
   "selection.selectAll": { zh: "全选", en: "Select all" },

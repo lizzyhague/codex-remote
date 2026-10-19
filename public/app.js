@@ -1261,7 +1261,7 @@ function appendSessionText(container, session) {
     meta.textContent = trashRemainingText(session.purgeAt);
   } else {
     const date = formatDate(session.lastReplyAt);
-    meta.textContent = date ? `last reply at ${date}` : "no replies yet";
+    meta.textContent = date ? t("sessions.lastReply", { date }) : t("sessions.noReplies");
   }
   container.append(title, project, meta);
 }
