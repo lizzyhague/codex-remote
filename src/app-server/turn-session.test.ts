@@ -177,7 +177,7 @@ test("sends a path block for images, text, PDF and zip without reading file byte
       input: [
         {
           type: "text",
-          text: "请检查\n\n[附件：screen.png · image-id]\n[附件：notes.txt · file-id]\n[附件：report.pdf · pdf-id]\n[附件：archive.zip · zip-id]",
+          text: "请检查\n\n[Attachment: screen.png · image-id]\n[Attachment: notes.txt · file-id]\n[Attachment: report.pdf · pdf-id]\n[Attachment: archive.zip · zip-id]",
           text_elements: [],
         },
         {
@@ -226,7 +226,7 @@ test("keeps attachment-only messages sendable and still includes the path block"
   }]);
   const input = (transport.requests[0]?.params as { input: Array<{ type: string; text?: string }> }).input;
   assert.equal(input.length, 2);
-  assert.equal(input[0]?.text, "[附件：archive.zip · zip-id]");
+  assert.equal(input[0]?.text, "[Attachment: archive.zip · zip-id]");
   assert.match(input[1]?.text ?? "", /\[AI_REMOTE_PRIVATE_ATTACHMENT_PATHS_V1\]/u);
 });
 

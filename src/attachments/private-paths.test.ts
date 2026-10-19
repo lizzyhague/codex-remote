@@ -74,6 +74,18 @@ test("display lines are removed by exact records, including multi-line names", (
   });
 });
 
+test("display lines written in Chinese by older versions are still hidden", () => {
+  const legacyLine = "[附件：报告.pdf · id-1]";
+  assert.deepEqual(
+    splitUserMessageContent([`看看\n\n${legacyLine}`, formatPrivateAttachmentPathsBlock(sample)]),
+    { text: "看看", attachments: sample },
+  );
+  assert.deepEqual(
+    splitUserMessageContent([legacyLine, formatPrivateAttachmentPathsBlock(sample)]),
+    { text: "", attachments: sample },
+  );
+});
+
 test("user text that repeats a real display line keeps its own copy", () => {
   const text = "上次是这样写的：\n\n[附件：报告.pdf · id-1]";
   assert.deepEqual(splitUserMessageContent(sentParts(text)), {
