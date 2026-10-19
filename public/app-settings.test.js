@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { t } from "./i18n.test-support.js";
+import { localize, t } from "./i18n.test-support.js";
 
 import { DISPLAY_TIME_ZONES } from "./display-timezone.js";
 

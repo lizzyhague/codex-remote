@@ -59,6 +59,7 @@ import {
 } from "./state-store.ts";
 import { asObject } from "../shared/json.ts";
 import { PublicError } from "../shared/public-error.ts";
+import { englishText, localText, type LocalText, type LocalTextParam } from "../shared/local-text.ts";
 
 const DEFAULT_MAX_WORKERS = 2;
 const DEFAULT_MIN_AVAILABLE_MEMORY_BYTES = 1_073_741_824;
@@ -70,13 +71,13 @@ const DEFAULT_WORKER_START_TIMEOUT_MS = 120_000;
 const DEFAULT_TASK_START_TIMEOUT_MS = 10_000;
 const ATTACHMENT_LEASE_RENEW_INTERVAL_MS = 5 * 60 * 1_000;
 const ATTACHMENT_LEASE_RENEW_MARGIN_MS = 60_000;
-const SESSION_PROJECT_MISMATCH_MESSAGE = "这个会话不属于所选项目。";
+const SESSION_PROJECT_MISMATCH_TEXT = localText("error.sessionProjectMismatch");
 
 export class WorkerManagerError extends PublicError {
   readonly code: string;
 
-  constructor(code: string, message: string) {
-    super(message);
+  constructor(code: string, text: LocalText) {
+    super(text);
     this.name = "WorkerManagerError";
     this.code = code;
   }
@@ -86,9 +87,9 @@ export type ManagedSessionReady = {
   loadState: "ready";
   opened: OpenedSession;
   /** The session opened with a notice for the browser (currently only degraded memory readings). */
-  notice?: string;
+  notice?: LocalText;
   /** Notice that global defaults could not be used. Returned only by this start, not when reopening the Worker. */
-  settingsNotice?: string;
+  settingsNotice?: LocalText;
   activeTaskId: string | null;
   controlsActiveTask: boolean;
   replayEvents: StoredWorkerEvent[];
@@ -279,7 +280,7 @@ export class SessionWorkerManager {
     turns: Turn[] = [],
   ): Promise<AttachmentDisplayMapping[]> {
     if (!this.#attachmentIndex) return [];
-    if (this.#closed) throw new WorkerManagerError("worker_manager_closed", "后端正在停止。");
+    if (this.#closed) throw new WorkerManagerError("worker_manager_closed", localText("error.backendStopping"));
     // Complete the rebuild as one index-chain operation; permanent deletion either follows it or prevents its write.
     const mappings = await this.#trackIndexOperation(
       this.#attachmentIndex.rebuild(threadId, collectHistoryAttachmentRecords(turns)),
@@ -290,7 +291,7 @@ export class SessionWorkerManager {
 
   /** Remove the backend attachment display index and work-state records after permanent session deletion. */
   async forgetSession(threadId: string): Promise<void> {
-    if (this.#closed) throw new WorkerManagerError("worker_manager_closed", "后端正在停止。");
+    if (this.#closed) throw new WorkerManagerError("worker_manager_closed", localText("error.backendStopping"));
     const { keptActive } = this.#store.forgetThread(threadId);
     if (keptActive > 0) {
       throw new Error(`The session still has tasks in progress (${keptActive}); its work records were not deleted.`);
@@ -326,7 +327,7 @@ export class SessionWorkerManager {
     this.#assertKnownThreadProject(projectId, threadId);
     if (attachmentIds.length === 0) return null;
     if (!this.#uploads) {
-      throw new WorkerManagerError("uploads_unavailable", "当前后端没有启用附件服务。");
+      throw new WorkerManagerError("uploads_unavailable", localText("error.uploadsUnavailable"));
     }
     const taskId = randomUUID();
     let lease: AttachmentLease | null = null;
@@ -361,7 +362,7 @@ export class SessionWorkerManager {
       ) {
         throw new WorkerManagerError(
           "message_id_conflict",
-          "客户端消息 ID 已被另一条消息使用。",
+          localText("error.messageIdConflict"),
         );
       }
       return {
@@ -426,7 +427,7 @@ export class SessionWorkerManager {
   async startSession(projectId: string): Promise<ManagedSessionReady> {
     this.#assertOpen();
     if (this.#workerCount() >= this.#maxWorkers) {
-      throw new WorkerManagerError("worker_capacity", "活动 Worker 已达到上限，请稍后再试。");
+      throw new WorkerManagerError("worker_capacity", localText("error.workerCapacity"));
     }
     const operation = this.#beginWorkerOperation(true);
     try {
@@ -434,7 +435,7 @@ export class SessionWorkerManager {
       if (gate.blocked) {
         throw new WorkerManagerError(
           "worker_memory_low",
-          memoryLowMessage("暂时不能新建会话。", gate.blocked, this.#minAvailableMemoryBytes),
+          memoryLowMessage(localText("memory.cannotCreateSession"), gate.blocked, this.#minAvailableMemoryBytes),
         );
       }
       const worker = await this.#createWorker(projectId);
@@ -600,7 +601,7 @@ export class SessionWorkerManager {
     }
     throw new WorkerManagerError(
       "interaction_not_found",
-      "这个问题已经处理过，或不属于仍在运行的任务。",
+      localText("error.interactionNotFound"),
     );
   }
 
@@ -635,8 +636,8 @@ export class SessionWorkerManager {
       );
       return {
         kind: "task",
-        title: "正在压缩会话",
-        lines: ["任务已由后端接收，可以关闭页面。"],
+        title: localText("command.compactTitle"),
+        lines: [localText("command.compactAccepted")],
         ...queued,
       };
     }
@@ -645,7 +646,7 @@ export class SessionWorkerManager {
       if (!targetTurnId) {
         throw new WorkerManagerError(
           "rewind_target_required",
-          "页面没有提供要回退的轮次，请重新载入会话后再试。",
+          localText("error.rewindTargetRequired"),
         );
       }
       return this.#withIdleWorker(projectId, threadId, async (worker) => {
@@ -655,20 +656,20 @@ export class SessionWorkerManager {
             kind: "rewind",
             outcome,
             targetTurnId,
-            title: "没有执行回退",
-            lines: ["会话在确认后已经发生变化；为避免删除另一轮，后端没有修改历史。"],
+            title: localText("command.rewindSkippedTitle"),
+            lines: [localText("command.rewindStale")],
           };
         }
         return {
           kind: "rewind",
           outcome,
           targetTurnId,
-          title: "已回退一轮",
+          title: localText("command.rewindDoneTitle"),
           lines: [
             outcome === "already_reverted"
-              ? "目标轮次已经不在当前会话中；没有再次回退。"
-              : "指定的一轮已从当前会话的对话上下文中移除。",
-            "这一轮已经造成的文件改动仍然保留。",
+              ? localText("command.rewindAlreadyDone")
+              : localText("command.rewindRemoved"),
+            localText("command.rewindFilesKept"),
           ],
         };
       });
@@ -678,7 +679,7 @@ export class SessionWorkerManager {
       if (!option) {
         throw new WorkerManagerError(
           "command_option_required",
-          command === "model" ? "请先选择一个模型。" : "请先选择一种权限。",
+          localText(command === "model" ? "error.chooseModelFirst" : "error.choosePermissionFirst"),
         );
       }
       return this.#withSettingsWorker(
@@ -730,12 +731,12 @@ export class SessionWorkerManager {
 
     return this.#withIdleWorker(projectId, threadId, async (worker) => {
       if (command !== "rename") {
-        throw new WorkerManagerError("unknown_command", "不支持这个斜杠命令。");
+        throw new WorkerManagerError("unknown_command", localText("error.unknownCommand"));
       }
       if (!argument) {
         throw new WorkerManagerError(
           "command_argument_required",
-          "请在 /rename 后面写一个会话名称。",
+          localText("error.renameNeedsName"),
         );
       }
       const result = await worker.commands.rename(argument);
@@ -756,7 +757,7 @@ export class SessionWorkerManager {
       if (decision === "approve_once" && !approvalCanBeShownSafely(approval)) {
         throw new WorkerManagerError(
           "approval_scope_unavailable",
-          "这项审批的完整范围无法在网页中安全显示，只能拒绝。",
+          localText("error.approvalScopeHidden"),
         );
       }
       if (active.worker.approvals.answer(approvalId, decision)) {
@@ -765,7 +766,7 @@ export class SessionWorkerManager {
     }
     throw new WorkerManagerError(
       "approval_not_found",
-      "这个审批已经处理过，或不属于仍在运行的任务。",
+      localText("error.approvalNotFound"),
     );
   }
 
@@ -917,7 +918,7 @@ export class SessionWorkerManager {
     payload: string,
     preparedAttachments: PreparedTaskAttachments | null = null,
   ): { accepted: true; taskId: string; status: WorkerTask["status"]; duplicate: boolean } {
-    if (this.#closed) throw new WorkerManagerError("worker_manager_closed", "后端正在停止。");
+    if (this.#closed) throw new WorkerManagerError("worker_manager_closed", localText("error.backendStopping"));
     this.#assertKnownThreadProject(projectId, threadId);
     const createdAtMs = this.#now();
     const permissionMode: WorkerPermissionMode = this.#knownDesiredFullAccess(threadId)
@@ -949,8 +950,8 @@ export class SessionWorkerManager {
       throw new WorkerManagerError(
         result.outcome,
         result.outcome === "task_already_running"
-          ? "这个会话已有任务正在运行。"
-          : "这个项目已有另一个任务正在运行。",
+          ? localText("error.sessionTaskRunning")
+          : localText("error.projectBusy"),
       );
     }
     if (preparedAttachments) {
@@ -1000,7 +1001,7 @@ export class SessionWorkerManager {
   async #withTransientWorker<Result>(
     projectId: string,
     threadId: string | undefined,
-    operation: (worker: SessionWorker, notice: string | null) => Promise<Result> | Result,
+    operation: (worker: SessionWorker, notice: LocalText | null) => Promise<Result> | Result,
   ): Promise<Result> {
     this.#assertOpen();
     if (threadId) {
@@ -1013,12 +1014,12 @@ export class SessionWorkerManager {
   async #withTransientWorkerUnlocked<Result>(
     projectId: string,
     threadId: string | undefined,
-    operation: (worker: SessionWorker, notice: string | null) => Promise<Result> | Result,
+    operation: (worker: SessionWorker, notice: LocalText | null) => Promise<Result> | Result,
   ): Promise<Result> {
     this.#assertOpen();
     if (threadId) this.#assertKnownThreadProject(projectId, threadId);
     if (threadId && this.#workers.has(threadId)) {
-      throw new WorkerManagerError("task_already_running", "这个会话已有任务正在运行。");
+      throw new WorkerManagerError("task_already_running", localText("error.sessionTaskRunning"));
     }
     const provisional = threadId ? this.#provisionalWorkers.get(threadId) : null;
     if (provisional) {
@@ -1033,7 +1034,7 @@ export class SessionWorkerManager {
       }
     }
     if (this.#workerCount() >= this.#maxWorkers) {
-      throw new WorkerManagerError("worker_capacity", "活动 Worker 已达到上限，请稍后再试。");
+      throw new WorkerManagerError("worker_capacity", localText("error.workerCapacity"));
     }
     const scope = this.#beginWorkerOperation(true);
     try {
@@ -1041,7 +1042,7 @@ export class SessionWorkerManager {
       if (gate.blocked) {
         throw new WorkerManagerError(
           "worker_memory_low",
-          memoryLowMessage("暂时不能打开新 Worker。", gate.blocked, this.#minAvailableMemoryBytes),
+          memoryLowMessage(localText("memory.cannotOpenWorker"), gate.blocked, this.#minAvailableMemoryBytes),
         );
       }
       const worker = await this.#createWorker(projectId, threadId);
@@ -1092,7 +1093,7 @@ export class SessionWorkerManager {
 
   #assertOpen(): void {
     if (this.#closed) {
-      throw new WorkerManagerError("worker_manager_closed", "后端正在停止。");
+      throw new WorkerManagerError("worker_manager_closed", localText("error.backendStopping"));
     }
   }
 
@@ -1135,7 +1136,7 @@ export class SessionWorkerManager {
       if (!active || active.finishing) {
         throw new WorkerManagerError(
           "task_already_running",
-          "这个会话的任务正在启动或收尾，请稍后再改。",
+          localText("error.sessionTaskSettling"),
         );
       }
       return busy(active.worker);
@@ -1152,7 +1153,7 @@ export class SessionWorkerManager {
       if (this.#store.pendingForThread(threadId)) {
         throw new WorkerManagerError(
           "task_already_running",
-          "这个会话有已接受或正在执行的任务。",
+          localText("error.sessionTasksPending"),
         );
       }
       return this.#withTransientWorkerUnlocked(projectId, threadId, operation);
@@ -1223,7 +1224,7 @@ export class SessionWorkerManager {
       if (!this.#locks.matches(task.projectId, ownerId, task.threadId)) {
         throw new WorkerManagerError(
           "project_lock_mismatch",
-          "任务的项目锁身份不一致，Worker 没有启动。",
+          localText("error.projectLockMismatch"),
         );
       }
       if (launching.cancelReason) {
@@ -1359,8 +1360,8 @@ export class SessionWorkerManager {
             error.code === "permission_restore_failed" || error.code === "worker_start_timeout"
           )) ||
               error instanceof CodexAttachmentError
-            ? error.message
-            : "Worker 无法启动，请查看服务日志。",
+            ? error.text
+            : localText("error.workerStartFailed"),
         }, this.#now(), { error: errorMessage(error) });
         if (event) this.#emit(event, "session");
         if (worker) await this.#closeWorker(worker).catch(() => {});
@@ -1406,7 +1407,7 @@ export class SessionWorkerManager {
       if (timedOut) {
         throw new WorkerManagerError(
           "worker_start_timeout",
-          "Codex Worker 启动超时，任务没有开始。请重试。",
+          localText("error.workerStartTimeout"),
         );
       }
       throw error;
@@ -1660,7 +1661,7 @@ export class SessionWorkerManager {
       ? "failed"
       : "completed";
     const error = status === "failed"
-      ? "Codex 没有开始处理这条消息，请重试。"
+      ? localText("error.messageNotStarted")
       : null;
     const stored = this.#store.tryFinish(active.task.id, [
       "queued",
@@ -1674,7 +1675,7 @@ export class SessionWorkerManager {
       error,
       interruptionReason: active.interruptionReason,
     }, this.#now(), {
-      error,
+      error: error ? englishText(error) : null,
       interruptionReason: active.interruptionReason,
     });
     if (stored) this.#emit(stored, "session");
@@ -1695,7 +1696,7 @@ export class SessionWorkerManager {
       sessionId: active.task.threadId,
       taskId: active.task.id,
       status: "failed",
-      error: "会话 Worker 异常结束，请查看服务日志。",
+      error: localText("error.workerCrashed"),
     }, this.#now(), { error: errorMessage(error) });
     if (stored) this.#emit(stored, "session");
     await this.#cleanupActive(active);
@@ -1740,9 +1741,9 @@ export class SessionWorkerManager {
     const pending = this.#store.pendingForProject(projectId);
     if (!pending) return;
     if (pending.threadId === threadId) {
-      throw new WorkerManagerError("task_already_running", "这个会话已有任务正在运行。");
+      throw new WorkerManagerError("task_already_running", localText("error.sessionTaskRunning"));
     }
-    throw new WorkerManagerError("project_busy", "这个项目已有另一个任务正在运行。");
+    throw new WorkerManagerError("project_busy", localText("error.projectBusy"));
   }
 
   #assertKnownThreadProject(projectId: string, threadId: string): void {
@@ -1759,7 +1760,7 @@ export class SessionWorkerManager {
       pending?.projectId,
     ].filter((candidate): candidate is string => typeof candidate === "string");
     if (knownProjectIds.some((candidate) => candidate !== projectId)) {
-      throw new WorkerManagerError("session_project_mismatch", SESSION_PROJECT_MISMATCH_MESSAGE);
+      throw new WorkerManagerError("session_project_mismatch", SESSION_PROJECT_MISMATCH_TEXT);
     }
   }
 
@@ -1773,7 +1774,7 @@ export class SessionWorkerManager {
       worker.opened.session.id !== threadId ||
       worker.threadId !== threadId
     ) {
-      throw new WorkerManagerError("session_project_mismatch", SESSION_PROJECT_MISMATCH_MESSAGE);
+      throw new WorkerManagerError("session_project_mismatch", SESSION_PROJECT_MISMATCH_TEXT);
     }
   }
 
@@ -1865,7 +1866,7 @@ export class SessionWorkerManager {
   async #ensureTaskAttachments(task: WorkerTask): Promise<ResolvedAttachment[]> {
     if (task.attachments.length === 0) return [];
     if (!this.#uploads) {
-      throw new WorkerManagerError("uploads_unavailable", "附件服务没有启用，任务无法启动。");
+      throw new WorkerManagerError("uploads_unavailable", localText("error.uploadsUnavailableForTask"));
     }
     const existing = this.#attachmentLeases.get(task.id);
     if (existing && existing.expiresAtMs > this.#now() + ATTACHMENT_LEASE_RENEW_MARGIN_MS) {
@@ -2011,20 +2012,20 @@ export class SessionWorkerManager {
       const result = await worker.commands.toggleFullAccess().catch(() => {
         throw new WorkerManagerError(
           "permission_restore_failed",
-          "无法恢复会话权限，任务没有启动。",
+          localText("error.permissionRestoreFailed"),
         );
       });
       if (typeof result.fullAccessEnabled !== "boolean") {
         throw new WorkerManagerError(
           "permission_restore_failed",
-          "Worker 没有确认恢复后的 Full access 状态，任务没有启动。",
+          localText("error.fullAccessUnconfirmed"),
         );
       }
       enabled = result.fullAccessEnabled;
       if (enabled !== target) {
         throw new WorkerManagerError(
           "permission_restore_failed",
-          `无法把会话权限恢复为${target ? " Full access" : "普通权限"}，任务没有启动。`,
+          localText(target ? "error.restoreFullAccessFailed" : "error.restoreNormalAccessFailed"),
         );
       }
     }
@@ -2076,7 +2077,7 @@ export class SessionWorkerManager {
     if (worker.exited) {
       throw new WorkerManagerError(
         "worker_exited",
-        "会话 Worker 启动后已退出，请重试。",
+        localText("error.workerExited"),
       );
     }
   }
@@ -2200,7 +2201,7 @@ export class SessionWorkerManager {
    * Memory decision before starting a Worker. `blocked` is a reliable reading used to reject startup; `notice`
    * explains a degraded allow decision to the browser. They are mutually exclusive.
    */
-  async #memoryGate(): Promise<{ blocked: MemoryReading | null; notice: string | null }> {
+  async #memoryGate(): Promise<{ blocked: MemoryReading | null; notice: LocalText | null }> {
     const reading = await this.#availableMemory();
     if (reading.degradedReason) {
       return {
@@ -2282,7 +2283,7 @@ function redactEnvironmentAssignments(value: string): string {
     if (!token || /^\s+$/u.test(token)) return token;
     if (token.includes("/") || token.includes("\\")) return token;
     const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=/u.exec(token);
-    if (assignment) return `${assignment[1]}=‹值已隐藏›`;
+    if (assignment) return `${assignment[1]}=‹value hidden›`;
     return token;
   }).join("");
 }
@@ -2290,8 +2291,8 @@ function redactEnvironmentAssignments(value: string): string {
 function publicPermissionSummary(
   permissions: Record<string, unknown>,
   mappings: readonly AttachmentDisplayMapping[],
-): { lines: string[]; complete: boolean } {
-  const lines: string[] = [];
+): { lines: LocalText[]; complete: boolean } {
+  const lines: LocalText[] = [];
   let complete = Object.keys(permissions).every((key) =>
     key === "network" || key === "fileSystem"
   );
@@ -2301,9 +2302,9 @@ function publicPermissionSummary(
     if (!network || !Object.keys(network).every((key) => key === "enabled")) {
       complete = false;
     } else if (network.enabled === true) {
-      lines.push("网络：允许额外网络访问");
+      lines.push(localText("approval.networkAllow"));
     } else if (network.enabled === false) {
-      lines.push("网络：不增加网络访问");
+      lines.push(localText("approval.networkNone"));
     } else {
       complete = false;
     }
@@ -2327,7 +2328,7 @@ function publicPermissionSummary(
       ) {
         complete = false;
       }
-      for (const [key, label] of [["read", "读取"], ["write", "写入"]] as const) {
+      for (const key of ["read", "write"] as const) {
         const values = fileSystem[key];
         if (values === null || values === undefined) continue;
         if (!Array.isArray(values)) {
@@ -2339,7 +2340,7 @@ function publicPermissionSummary(
             complete = false;
             continue;
           }
-          lines.push(`${label}：${publicPathScope(value, mappings)}`);
+          lines.push(localText(`approval.${key}`, { scope: publicPathScope(value, mappings) }));
         }
       }
       if (fileSystem.entries !== null && fileSystem.entries !== undefined) {
@@ -2357,8 +2358,7 @@ function publicPermissionSummary(
               complete = false;
               continue;
             }
-            const label = access === "read" ? "读取" : access === "write" ? "写入" : "禁止";
-            lines.push(`${label}：${scope}`);
+            lines.push(localText(`approval.${access}`, { scope }));
           }
         }
       }
@@ -2368,7 +2368,7 @@ function publicPermissionSummary(
   if (lines.length === 0) complete = false;
   if (lines.length > 20) complete = false;
   return {
-    lines: lines.slice(0, 20).concat(lines.length > 20 ? [`另有 ${lines.length - 20} 项范围`] : []),
+    lines: lines.slice(0, 20).concat(lines.length > 20 ? [localText("approval.moreScopes", { count: lines.length - 20 })] : []),
     complete,
   };
 }
@@ -2376,7 +2376,7 @@ function publicPermissionSummary(
 function publicFileSystemEntryScope(
   value: unknown,
   mappings: readonly AttachmentDisplayMapping[],
-): string | null {
+): LocalTextParam | null {
   const path = asObject(value);
   if (!path || typeof path.type !== "string") return null;
   if (
@@ -2389,7 +2389,7 @@ function publicFileSystemEntryScope(
     path.type === "glob_pattern" && typeof path.pattern === "string" &&
     Object.keys(path).every((key) => key === "type" || key === "pattern")
   ) {
-    return `匹配 ${publicPathScope(path.pattern, mappings)}`;
+    return localText("approval.glob", { pattern: publicPathScope(path.pattern, mappings) });
   }
   if (
     path.type !== "special" ||
@@ -2399,19 +2399,19 @@ function publicFileSystemEntryScope(
   if (!special || typeof special.kind !== "string") return null;
   if (
     special.kind === "root" && Object.keys(special).every((key) => key === "kind")
-  ) return "文件系统根目录";
+  ) return localText("approval.root");
   if (
     special.kind === "minimal" && Object.keys(special).every((key) => key === "kind")
-  ) return "最小系统范围";
+  ) return localText("approval.minimal");
   if (
     (special.kind === "tmpdir" || special.kind === "slash_tmp") &&
     Object.keys(special).every((key) => key === "kind")
-  ) return "临时目录";
+  ) return localText("approval.tmp");
   if (special.kind === "project_roots") {
     if (!Object.keys(special).every((key) => key === "kind" || key === "subpath")) return null;
     return typeof special.subpath === "string" && special.subpath
-      ? `项目目录/${publicPathScope(special.subpath, mappings)}`
-      : "项目目录";
+      ? localText("approval.projectSubdir", { path: publicPathScope(special.subpath, mappings) })
+      : localText("approval.projectDir");
   }
   // The structure of unknown is undefined, so the page cannot guarantee it displays the full authorization scope.
   if (special.kind === "unknown") return null;
@@ -2421,11 +2421,11 @@ function publicFileSystemEntryScope(
 function publicPathScope(
   value: string,
   mappings: readonly AttachmentDisplayMapping[],
-): string {
+): LocalTextParam {
   const attachment = redactKnownAttachmentPaths(value, mappings);
   if (attachment !== value) return attachment;
   const normalized = value.replaceAll("\\", "/").replace(/\/+$/u, "");
-  if (!normalized) return "文件系统根目录";
+  if (!normalized) return localText("approval.root");
   return clipPublicSummary(value, 240);
 }
 
@@ -2447,10 +2447,10 @@ function publicInteraction(
 
 function uploadManagerError(error: unknown): WorkerManagerError {
   if (error instanceof SharedUploadError) {
-    return new WorkerManagerError(error.code, error.message);
+    return new WorkerManagerError(error.code, error.text);
   }
   console.error(`Admitting attachments failed: ${errorMessage(error)}`);
-  return new WorkerManagerError("attachment_failed", "附件处理失败，请查看服务日志。");
+  return new WorkerManagerError("attachment_failed", localText("error.attachmentFailed"));
 }
 
 function terminalReplayTask(

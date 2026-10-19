@@ -1,4 +1,5 @@
 import { PublicError } from "../shared/public-error.ts";
+import type { LocalText } from "../shared/local-text.ts";
 
 export const SHARED_UPLOAD_CALLERS = ["codex", "grok", "claude"] as const;
 
@@ -52,8 +53,8 @@ export class SharedUploadError extends PublicError {
   readonly code: string;
   readonly status: number;
 
-  constructor(code: string, message: string, status = 400) {
-    super(message);
+  constructor(code: string, text: LocalText, status = 400) {
+    super(text);
     this.name = "SharedUploadError";
     this.code = code;
     this.status = status;

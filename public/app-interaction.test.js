@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { t } from "./i18n.test-support.js";
+import { localize, t } from "./i18n.test-support.js";
 import vm from "node:vm";
 
 import { normalizeMcpFormSchema, validateMcpFormAnswers } from "./mcp-form.js";
@@ -64,6 +64,7 @@ function interactionHarness() {
   approvalList.querySelector = () => null;
   const context = vm.createContext({
     t,
+    localize,
     elements: { approvalList },
     document: { createElement: (tagName) => new FakeElement(tagName) },
     CSS: { escape: (value) => value },

@@ -7,6 +7,7 @@ import {
 import { resolveTrashStatePath } from "../sessions/trash-store.ts";
 import { isObject } from "../shared/json.ts";
 import { PublicError } from "../shared/public-error.ts";
+import { localText, type LocalText } from "../shared/local-text.ts";
 
 export const MAX_DEVELOPER_INSTRUCTIONS_LENGTH = 131_072;
 export const MAX_MODEL_ID_LENGTH = 256;
@@ -39,8 +40,8 @@ type SettingsFile = {
 export class ApplicationSettingsError extends PublicError {
   readonly code: string;
 
-  constructor(code: string, message: string) {
-    super(message);
+  constructor(code: string, text: LocalText) {
+    super(text);
     this.name = "ApplicationSettingsError";
     this.code = code;
   }
@@ -124,12 +125,12 @@ export class ApplicationSettingsStore {
 
 export function normalizeDeveloperInstructions(value: string): string {
   if (typeof value !== "string") {
-    throw new ApplicationSettingsError("invalid_field", "附加 Developer 指令必须是字符串。");
+    throw new ApplicationSettingsError("invalid_field", localText("error.instructionsNotString"));
   }
   if (value.length > MAX_DEVELOPER_INSTRUCTIONS_LENGTH) {
     throw new ApplicationSettingsError(
       "invalid_field",
-      `附加 Developer 指令过长。上限是 ${MAX_DEVELOPER_INSTRUCTIONS_LENGTH} 个字符。`,
+      localText("error.instructionsTooLong", { max: MAX_DEVELOPER_INSTRUCTIONS_LENGTH }),
     );
   }
   return value;
@@ -137,7 +138,7 @@ export function normalizeDeveloperInstructions(value: string): string {
 
 function normalizeSettingsPatch(patch: ApplicationSettingsPatch): ApplicationSettingsPatch {
   if (!isObject(patch)) {
-    throw new ApplicationSettingsError("invalid_field", "应用设置更新格式不正确。");
+    throw new ApplicationSettingsError("invalid_field", localText("error.settingsUpdateInvalid"));
   }
   const normalized: ApplicationSettingsPatch = {};
   if (patch.developerInstructions !== undefined) {
@@ -146,23 +147,23 @@ function normalizeSettingsPatch(patch: ApplicationSettingsPatch): ApplicationSet
   const hasModel = patch.defaultModel !== undefined;
   const hasEffort = patch.defaultReasoningEffort !== undefined;
   if (hasModel !== hasEffort) {
-    throw new ApplicationSettingsError("invalid_field", "默认模型和默认思考强度必须一起保存。");
+    throw new ApplicationSettingsError("invalid_field", localText("error.modelEffortTogether"));
   }
   if (hasModel && hasEffort) {
     const defaultModel = normalizeNullableString(
       patch.defaultModel,
-      "默认模型",
+      localText("settings.defaultModel"),
       MAX_MODEL_ID_LENGTH,
     );
     const defaultReasoningEffort = normalizeNullableString(
       patch.defaultReasoningEffort,
-      "默认思考强度",
+      localText("settings.defaultReasoningEffort"),
       MAX_REASONING_EFFORT_LENGTH,
     );
     if (defaultModel === null && defaultReasoningEffort !== null) {
       throw new ApplicationSettingsError(
         "invalid_field",
-        "跟随 Codex 默认模型时，思考强度也必须跟随 Codex 默认。",
+        localText("error.effortFollowsModel"),
       );
     }
     normalized.defaultModel = defaultModel;
@@ -171,7 +172,7 @@ function normalizeSettingsPatch(patch: ApplicationSettingsPatch): ApplicationSet
   if (patch.defaultPermissions !== undefined) {
     normalized.defaultPermissions = normalizeNullableString(
       patch.defaultPermissions,
-      "默认权限",
+      localText("settings.defaultPermissions"),
       MAX_PERMISSION_PROFILE_LENGTH,
     );
   }
@@ -180,16 +181,16 @@ function normalizeSettingsPatch(patch: ApplicationSettingsPatch): ApplicationSet
 
 function normalizeNullableString(
   value: unknown,
-  label: string,
+  label: LocalText,
   maxLength: number,
 ): string | null {
   if (value === null) return null;
   if (typeof value !== "string") {
-    throw new ApplicationSettingsError("invalid_field", `${label}必须是字符串或 null。`);
+    throw new ApplicationSettingsError("invalid_field", localText("error.fieldNotString", { field: label }));
   }
   const normalized = value.trim();
   if (!normalized || normalized.length > maxLength) {
-    throw new ApplicationSettingsError("invalid_field", `${label}不能为空或过长。`);
+    throw new ApplicationSettingsError("invalid_field", localText("error.fieldEmptyOrLong", { field: label }));
   }
   return normalized;
 }
@@ -200,12 +201,12 @@ function parseSettings(raw: unknown, filePath: string): ApplicationSettings {
   }
   const defaultModel = raw.defaultModel === undefined
     ? null
-    : normalizeNullableString(raw.defaultModel, "默认模型", MAX_MODEL_ID_LENGTH);
+    : normalizeNullableString(raw.defaultModel, localText("settings.defaultModel"), MAX_MODEL_ID_LENGTH);
   const defaultReasoningEffort = raw.defaultReasoningEffort === undefined
     ? null
     : normalizeNullableString(
       raw.defaultReasoningEffort,
-      "默认思考强度",
+      localText("settings.defaultReasoningEffort"),
       MAX_REASONING_EFFORT_LENGTH,
     );
   if (defaultModel === null && defaultReasoningEffort !== null) {
@@ -213,7 +214,7 @@ function parseSettings(raw: unknown, filePath: string): ApplicationSettings {
   }
   const defaultPermissions = raw.defaultPermissions === undefined
     ? null
-    : normalizeNullableString(raw.defaultPermissions, "默认权限", MAX_PERMISSION_PROFILE_LENGTH);
+    : normalizeNullableString(raw.defaultPermissions, localText("settings.defaultPermissions"), MAX_PERMISSION_PROFILE_LENGTH);
   return {
     developerInstructions: normalizeDeveloperInstructions(raw.developerInstructions),
     defaultModel,

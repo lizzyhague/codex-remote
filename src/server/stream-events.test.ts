@@ -5,7 +5,7 @@ import {
   redactBrowserStreamEvent,
   toBrowserStreamEvent,
 } from "./stream-events.ts";
-import { PUBLIC_TURN_ERROR_MESSAGE } from "./public-output.ts";
+import { PUBLIC_TURN_ERROR_TEXT } from "./public-output.ts";
 
 test("realtime turn failures use the same stable browser message as history", (context) => {
   context.mock.method(console, "error", () => {});
@@ -25,8 +25,8 @@ test("realtime turn failures use the same stable browser message as history", (c
     willRetry: true,
   });
 
-  assert.equal(completed.error, PUBLIC_TURN_ERROR_MESSAGE);
-  assert.equal(retrying.message, PUBLIC_TURN_ERROR_MESSAGE);
+  assert.deepEqual(completed.error, PUBLIC_TURN_ERROR_TEXT);
+  assert.deepEqual(retrying.message, PUBLIC_TURN_ERROR_TEXT);
   assert.equal(JSON.stringify([completed, retrying]).includes(raw), false);
 });
 

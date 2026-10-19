@@ -132,6 +132,14 @@ test("t fills placeholders, falls back to Chinese, and shows unknown keys as is"
   assert.equal(page.api.t("missing.key"), "missing.key");
 });
 
+test("localize shows backend text in the page language, including nested parameters", () => {
+  const page = run({ languages: ["en"] });
+  assert.equal(page.api.localize("from Codex"), "from Codex");
+  assert.equal(page.api.localize({ key: "greeting", params: { name: { key: "items", params: { count: 2 } } } }), "Hello, 2 items");
+  assert.equal(page.api.localize(null, "fallback"), "fallback");
+  assert.equal(page.api.localize(undefined), "");
+});
+
 test("t picks the singular or plural form by count", () => {
   const page = run({ languages: ["en"] });
   assert.equal(page.api.t("items", { count: 1 }), "1 item");

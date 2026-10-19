@@ -1,3 +1,4 @@
+import { localText, type LocalText } from "../shared/local-text.ts";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { freemem, totalmem } from "node:os";
@@ -50,9 +51,9 @@ export async function readAvailableMemory(
       if (bytes !== undefined) {
         return { availableBytes: bytes, platform, source: "linux-meminfo" };
       }
-      return degraded(platform, "/proc/meminfo 中没有可用的 MemAvailable 数值", options);
+      return degraded(platform, "/proc/meminfo has no usable MemAvailable value", options);
     } catch (error) {
-      return degraded(platform, `读取 /proc/meminfo 失败（${errorSummary(error)}）`, options);
+      return degraded(platform, `reading /proc/meminfo failed (${errorSummary(error)})`, options);
     }
   }
 
@@ -64,13 +65,13 @@ export async function readAvailableMemory(
       if (parsed.ok) {
         return { availableBytes: parsed.availableBytes, platform, source: "darwin-vm-stat" };
       }
-      return degraded(platform, `vm_stat 输出缺少${parsed.missing}`, options);
+      return degraded(platform, `vm_stat output is missing ${parsed.missing}`, options);
     } catch (error) {
-      return degraded(platform, `执行 vm_stat 失败（${errorSummary(error)}）`, options);
+      return degraded(platform, `running vm_stat failed (${errorSummary(error)})`, options);
     }
   }
 
-  return degraded(platform, `没有为 ${platform} 实现专用的内存读数`, options);
+  return degraded(platform, `no dedicated memory reading is implemented for ${platform}`, options);
 }
 
 /** Parses `MemAvailable` from `/proc/meminfo`; returns undefined if no trustworthy value is available. */
@@ -98,16 +99,16 @@ export type DarwinMemoryParse =
  */
 export function parseDarwinAvailableBytes(vmStat: string, totalBytes: number): DarwinMemoryParse {
   if (!Number.isSafeInteger(totalBytes) || totalBytes <= 0) {
-    return { ok: false, missing: "可用的物理内存总量" };
+    return { ok: false, missing: "a usable total physical memory" };
   }
 
   const pageSize = parsePageSize(vmStat);
-  if (pageSize === undefined) return { ok: false, missing: "页大小（首行的 page size of N bytes）" };
+  if (pageSize === undefined) return { ok: false, missing: "the page size (page size of N bytes on the first line)" };
 
   const fields = [
-    { label: "Anonymous pages", name: "Anonymous pages（匿名页）" },
-    { label: "Pages wired down", name: "Pages wired down（wired 页）" },
-    { label: "Pages occupied by compressor", name: "Pages occupied by compressor（压缩器占用页）" },
+    { label: "Anonymous pages", name: "Anonymous pages" },
+    { label: "Pages wired down", name: "Pages wired down" },
+    { label: "Pages occupied by compressor", name: "Pages occupied by compressor" },
   ] as const;
 
   let occupiedPages = 0;
@@ -118,21 +119,23 @@ export function parseDarwinAvailableBytes(vmStat: string, totalBytes: number): D
   }
 
   const occupiedBytes = occupiedPages * pageSize;
-  if (!Number.isSafeInteger(occupiedBytes)) return { ok: false, missing: "可信的页数（数值超出安全范围）" };
+  if (!Number.isSafeInteger(occupiedBytes)) return { ok: false, missing: "a trustworthy page count (the value exceeds the safe range)" };
   return { ok: true, availableBytes: Math.max(0, totalBytes - occupiedBytes) };
 }
 
 /** Blocking message for a trustworthy reading below the threshold, including value, source, and configurable limit. */
 export function memoryLowMessage(
-  action: string,
+  action: LocalText,
   reading: MemoryReading,
   minimumBytes: number,
-): string {
-  return `主机可用内存不足，${action}` +
-    `当前可用 ${mebibytes(reading.availableBytes)} MiB，门槛 ${mebibytes(minimumBytes)} MiB` +
-    `（平台 ${reading.platform}，读数来源 ${sourceLabel(reading.source)}）。` +
-    `内存回落后会自动恢复；如果这台主机本来就该在这个水位上工作，` +
-    `可以调整环境变量 CODEX_REMOTE_MIN_AVAILABLE_MEMORY_MIB。`;
+): LocalText {
+  return localText("memory.low", {
+    action,
+    available: mebibytes(reading.availableBytes),
+    minimum: mebibytes(minimumBytes),
+    platform: reading.platform,
+    source: sourceLabel(reading.source),
+  });
 }
 
 /**
@@ -143,18 +146,14 @@ export function memoryLowMessage(
  * the problem. The tradeoff is losing the pre-start memory guard during this period, so every new Worker
  * reports the condition to encourage a prompt repair.
  */
-export function memoryDegradedMessage(reading: MemoryReading, minimumBytes: number): string {
-  const freememNote = reading.platform === "darwin"
-    ? "os.freemem() 在 macOS 上只统计完全空闲的页，不含可回收的文件缓存，读数通常远低于真实可用内存。"
-    : "os.freemem() 只统计完全空闲的内存，不含可回收的缓存，比平台专用读数保守得多。";
-
-  return `主机内存读数不可靠，这个会话已经放行。` +
-    `平台 ${reading.platform} 的专用读数失败：${reading.degradedReason ?? "原因未知"}，` +
-    `已降级为 os.freemem()，读到 ${mebibytes(reading.availableBytes)} MiB。${freememNote}` +
-    `因为这个读数不能代表真实可用内存，${mebibytes(minimumBytes)} MiB 的门槛暂时不生效，` +
-    `期间没有启动 Worker 前的内存保护。` +
-    `多半是这台主机上该命令的输出格式与解析不一致（例如系统升级后改了字段），` +
-    `请尽早修正 src/platform/system-resources.ts 里的解析。`;
+export function memoryDegradedMessage(reading: MemoryReading, minimumBytes: number): LocalText {
+  return localText("memory.degraded", {
+    platform: reading.platform,
+    reason: reading.degradedReason ?? "unknown reason",
+    available: mebibytes(reading.availableBytes),
+    note: localText(reading.platform === "darwin" ? "memory.freememNoteMac" : "memory.freememNote"),
+    minimum: mebibytes(minimumBytes),
+  });
 }
 
 function degraded(
@@ -196,7 +195,7 @@ function parsePageCount(vmStat: string, label: string): number | undefined {
 }
 
 function sourceLabel(source: MemorySource): string {
-  if (source === "linux-meminfo") return "/proc/meminfo 的 MemAvailable";
+  if (source === "linux-meminfo") return "MemAvailable in /proc/meminfo";
   if (source === "darwin-vm-stat") return "vm_stat";
   return "os.freemem()";
 }

@@ -1,3 +1,4 @@
+import { localText, type LocalText } from "../shared/local-text.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -16,7 +17,7 @@ import type {
 import {
   BrowserConnection,
   BrowserRequestError,
-  publicErrorMessage,
+  publicError,
   type BrowserConnectionServices,
   type BrowserSocket,
   type ProjectsApi,
@@ -159,7 +160,7 @@ class FakeWorkers {
   }
 
   /** Default-setting fallback explanation returned by the next startSession. */
-  startSettingsNotice: string | null = null;
+  startSettingsNotice: LocalText | null = null;
 
   async startSession(projectId: string): Promise<ManagedSessionOpen> {
     this.#record("startSession", projectId);
@@ -302,6 +303,7 @@ class FakeSessions implements SessionsApi {
         succeeded: [],
         failed: sessionIds.map((sessionId) => ({
           sessionId,
+          text: localText("error.sessionTaskRunning"),
           message: this.archiveFailure!,
         })),
       };
@@ -449,10 +451,10 @@ test("passes the default-settings fallback notice back on session start", async 
   await connection.whenIdle();
   assert.equal("settingsNotice" in data(socket.last("response")), false);
 
-  workers.startSettingsNotice = "设置里的默认权限当前不可用，这次新会话改用了 Codex 默认权限。";
+  workers.startSettingsNotice = localText("notice.defaultPermissionsUnavailable");
   connection.receiveText(request("session.start", "start-2", { projectId: "projects/demo" }));
   await connection.whenIdle();
-  assert.equal(data(socket.last("response")).settingsNotice, workers.startSettingsNotice);
+  assert.deepEqual(data(socket.last("response")).settingsNotice, workers.startSettingsNotice);
 });
 
 function data(message: JsonObject | undefined): JsonObject {
@@ -870,7 +872,8 @@ test("a successful mutation response cannot carry a private failure path", async
     succeeded: [],
     failed: [{
       sessionId: "session-1",
-      message: "会话整理失败，请查看服务日志。",
+      message: "Organizing the session failed; check the service log.",
+      text: { key: "error.sessionMutationFailed" },
     }],
   });
   assert.equal(JSON.stringify(result).includes("/home/example-user"), false);
@@ -1181,16 +1184,16 @@ test("reads and updates backend settings without pushing into other browsers", a
   assert.deepEqual(data(secondSocket.last("response")), [
     {
       id: ":workspace",
-      description: "可在项目目录内工作，超出范围或敏感操作仍会询问。",
+      description: { key: "permission.autoHint" },
       allowed: true,
-      label: "自动（可修改项目）",
+      label: { key: "permission.auto" },
       fullAccess: false,
     },
     {
       id: ":danger-full-access",
-      description: "可以不受沙箱限制地操作主机，并且不再询问批准；请谨慎选择。",
+      description: { key: "permission.fullAccessHint" },
       allowed: true,
-      label: "完全访问",
+      label: { key: "permission.fullAccess" },
       fullAccess: true,
     },
   ]);
@@ -1268,18 +1271,25 @@ test("only explicit business errors keep their message at the request boundary",
     code: "ENOENT",
     syscall: "open",
   });
-  assert.equal(publicErrorMessage(systemError), "服务器无法访问本地文件，请查看服务日志。");
-  assert.equal(
-    publicErrorMessage(new Error("无法读取 /home/someone/My Projects/中文/秘密.md")),
-    "请求失败，请查看服务日志。",
+  const requestFailed = {
+    message: "The request failed; check the service log.",
+    text: { key: "error.requestFailedSeeLog" },
+  };
+  assert.deepEqual(publicError(systemError), {
+    message: "The server can't access local files; check the service log.",
+    text: { key: "error.localFilesUnavailable" },
+  });
+  assert.deepEqual(publicError(new Error("无法读取 /home/someone/My Projects/中文/秘密.md")), requestFailed);
+  assert.deepEqual(publicError(new BrowserRequestError("known", localText("error.projectTaskRunning"))), {
+    message: "A task is running in this project, so sessions can't be organized right now.",
+    text: { key: "error.projectTaskRunning" },
+  });
+  assert.deepEqual(
+    publicError(new BrowserRequestError(
+      "unsafe",
+      localText("error.attachmentUnreadable", { name: "/home/private/project/file.ts" }),
+    )),
+    requestFailed,
   );
-  assert.equal(
-    publicErrorMessage(new BrowserRequestError("known", "这个项目正在执行任务。")),
-    "这个项目正在执行任务。",
-  );
-  assert.equal(
-    publicErrorMessage(new BrowserRequestError("unsafe", "读取 /home/private/project/file.ts 失败")),
-    "请求失败，请查看服务日志。",
-  );
-  assert.equal(publicErrorMessage("字符串不是错误"), "请求失败，请查看服务日志。");
+  assert.deepEqual(publicError("字符串不是错误"), requestFailed);
 });

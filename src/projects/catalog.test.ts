@@ -33,7 +33,7 @@ test("lists only ordinary project directories directly below each root", async (
 
   await assert.rejects(
     catalog.resolve("workspace/..%2Foutside"),
-    /不在允许的根目录/u,
+    /isn't under an allowed root/u,
   );
 });
 

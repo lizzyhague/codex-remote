@@ -1,10 +1,11 @@
+import { localText, type DisplayText } from "../shared/local-text.ts";
 import type { JsonObject } from "../app-server/client.ts";
 import type { AppServerTransport } from "../app-server/turn-session.ts";
 import type { Turn } from "../generated/v2/Turn.ts";
 
 export type SessionMetrics = {
   context: { usedTokens: number; maxTokens: number; percentage: number } | null;
-  windows: { label: string; remainingPercent: number | null; resetsAt: number | null }[];
+  windows: { label: DisplayText; remainingPercent: number | null; resetsAt: number | null }[];
   lastReplyAt: number | null;
 };
 const object = (value: unknown): Record<string, unknown> | null =>
@@ -83,10 +84,16 @@ export class SessionMetricsStore {
           const window = object(value);
           if (!window) return [];
           const minutes = number(window.windowDurationMins);
-          const duration = minutes === null ? "" : minutes % 1440 === 0
-            ? `${minutes / 1440} 天` : minutes % 60 === 0 ? `${minutes / 60} 小时` : `${minutes} 分钟`;
+          const duration = minutes === null ? null : minutes % 1440 === 0
+            ? localText("metrics.days", { count: minutes / 1440 })
+            : minutes % 60 === 0
+            ? localText("metrics.hours", { count: minutes / 60 })
+            : localText("metrics.minutes", { count: minutes });
           const used = number(window.usedPercent);
-          return [{ label: `${name}${duration ? `（${duration}）` : ""}`,
+          // The plain Codex plan shows only its window, such as "5 hours"; other limits keep their name.
+          const label = !duration ? name : name.toLowerCase() === "codex"
+            ? duration : localText("metrics.namedWindow", { name, window: duration });
+          return [{ label,
             remainingPercent: used === null ? null : Math.max(0, Math.min(100, 100 - used)),
             resetsAt: number(window.resetsAt) }];
         });

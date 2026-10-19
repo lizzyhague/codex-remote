@@ -22,4 +22,5 @@ vm.runInNewContext(`${strings}\n${i18n}`, context);
 
 export const codexRemoteI18n = window.codexRemoteI18n;
 export const t = codexRemoteI18n.t;
+export const localize = codexRemoteI18n.localize;
 globalThis.codexRemoteI18n = codexRemoteI18n;

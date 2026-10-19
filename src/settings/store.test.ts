@@ -107,19 +107,19 @@ test("rejects values over the character limit and malformed files", async (conte
   );
   await assert.rejects(
     () => store.update({ defaultModel: "gpt-test" }),
-    /必须一起保存/u,
+    /must be saved together/u,
   );
   await assert.rejects(
     () => store.update({ defaultModel: null, defaultReasoningEffort: "high" }),
-    /思考强度也必须跟随/u,
+    /reasoning effort must follow it too/u,
   );
   await assert.rejects(
     () => store.update({ defaultPermissions: "" }),
-    /默认权限不能为空/u,
+    /Default permissions must not be empty/u,
   );
   await assert.rejects(
     () => store.update({ defaultPermissions: 1 as unknown as string }),
-    /默认权限必须是字符串/u,
+    /Default permissions must be text/u,
   );
   assert.deepEqual(store.get(), DEFAULTS);
 

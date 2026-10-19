@@ -161,10 +161,10 @@ test("replaces known attachment paths before clipping tool titles", () => {
     status: "completed",
     aggregatedOutput: mapping.path,
   }, "completed", [mapping]);
-  assert.equal(view?.title.includes(mapping.path), false);
+  assert.equal(String(view?.title).includes(mapping.path), false);
   assert.equal(view?.input?.includes(mapping.path), false);
   assert.equal(view?.output?.includes(mapping.path), false);
-  assert.ok(view?.title.includes("附件：notes.txt"));
+  assert.ok(String(view?.title).includes("Attachment: notes.txt"));
 });
 
 test("keeps host paths in tool display copies", () => {

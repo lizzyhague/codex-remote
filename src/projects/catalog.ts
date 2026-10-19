@@ -2,6 +2,7 @@ import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { isObject } from "../shared/json.ts";
 import { PublicError } from "../shared/public-error.ts";
+import { localText, type LocalText } from "../shared/local-text.ts";
 
 export type ProjectRootConfig = {
   id: string;
@@ -27,8 +28,8 @@ type ResolvedRoot = ProjectRootConfig & {
 };
 
 class ProjectCatalogError extends PublicError {
-  constructor(message: string) {
-    super(message);
+  constructor(text: LocalText) {
+    super(text);
     this.name = "ProjectCatalogError";
   }
 }
@@ -120,7 +121,7 @@ export class ProjectCatalog {
     const project = projects.find((candidate) => candidate.id === projectId);
 
     if (!project) {
-      throw new ProjectCatalogError("项目不存在，或不在允许的根目录中。");
+      throw new ProjectCatalogError(localText("error.projectNotFound"));
     }
 
     return project;

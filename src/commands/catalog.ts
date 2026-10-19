@@ -1,3 +1,5 @@
+import { localText, type LocalText } from "../shared/local-text.ts";
+
 export const COMMAND_NAMES = [
   "compact",
   "model",
@@ -10,44 +12,44 @@ export type CommandName = typeof COMMAND_NAMES[number];
 
 export type CommandDescriptor = {
   name: CommandName;
-  title: string;
-  description: string;
+  title: LocalText;
+  description: LocalText;
   action: "confirm" | "options" | "argument";
-  confirmation?: string;
+  confirmation?: LocalText;
 };
 
 export const COMMAND_CATALOG: readonly CommandDescriptor[] = [
   {
     name: "compact",
-    title: "压缩会话",
-    description: "把较早的对话整理成摘要，腾出上下文空间。",
+    title: localText("command.compact"),
+    description: localText("command.compactHint"),
     action: "confirm",
-    confirmation: "压缩会把较早的对话整理成摘要，以腾出上下文空间。现在开始吗？",
+    confirmation: localText("command.compactConfirm"),
   },
   {
     name: "model",
-    title: "切换模型",
-    description: "选择当前会话后续使用的模型。",
+    title: localText("command.model"),
+    description: localText("command.modelHint"),
     action: "options",
   },
   {
     name: "permissions",
-    title: "调整权限",
-    description: "选择当前会话允许 Codex 做什么。",
+    title: localText("command.permissions"),
+    description: localText("command.permissionsHint"),
     action: "options",
   },
   {
     name: "rename",
-    title: "重命名会话",
-    description: "给当前会话起一个容易找到的名字。",
+    title: localText("command.rename"),
+    description: localText("command.renameHint"),
     action: "argument",
   },
   {
     name: "rewind",
-    title: "回退一轮",
-    description: "从对话上下文移除最近一轮；不会撤销文件改动。",
+    title: localText("command.rewind"),
+    description: localText("command.rewindHint"),
     action: "confirm",
-    confirmation: "回退会从当前会话移除最近一轮对话，但不会撤销这一轮已经造成的文件改动。确定继续吗？",
+    confirmation: localText("command.rewindConfirm"),
   },
 ];
 

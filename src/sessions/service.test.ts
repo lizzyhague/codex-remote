@@ -1,3 +1,4 @@
+import { inChinese, zh } from "../shared/local-text.test-support.ts";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -17,6 +18,11 @@ import { ApplicationSettingsStore } from "../settings/store.ts";
 import { TrashStore, type TrashEntry } from "./trash-store.ts";
 import { injectFsFaults } from "../workers/fs-fault-injection.ts";
 import { MarkStore } from "./mark-store.ts";
+
+const SESSION_MUTATION_FAILED = {
+  message: "Organizing the session failed; check the service log.",
+  text: { key: "error.sessionMutationFailed" },
+};
 
 const EXPECTED_CODEX_REMOTE_DEVELOPER_INSTRUCTIONS = [
   "Codex Remote is a remote-use platform made of a browser PWA and a local backend. It connects Codex to a web page through the Codex App Server, so the user can use Codex from a phone or a computer. You are talking with the user through Codex Remote. The user sends messages from the web page and sees the Codex Remote browser interface, not the Codex CLI terminal interface.",
@@ -386,7 +392,7 @@ test("falls back to Codex default permissions only when Codex rejects the profil
     { thread: thread("thread-fallback", project) },
   );
   const opened = await service.start("workspace/alpha");
-  assert.match(opened.settingsNotice ?? "", /默认权限当前不可用/u);
+  assert.match(zh(opened.settingsNotice), /默认权限当前不可用/u);
   assert.equal(warn.mock.callCount(), 1);
   const retry = transport.requests.at(-1)?.params as Record<string, unknown>;
   assert.equal("permissions" in retry, false);
@@ -463,7 +469,7 @@ test("refuses to resume a session from another project", async (context) => {
 
   await assert.rejects(
     service.resume("workspace/alpha", "thread-outside"),
-    /不属于所选项目/u,
+    inChinese(/不属于所选项目/u),
   );
   assert.equal(transport.requests.length, 1);
   assert.equal(transport.requests[0]?.method, "thread/read");
@@ -561,7 +567,7 @@ test("refuses to permanently delete a session that is not in trash", async (cont
   const service = new CodexSessionService(transport, catalog, trash);
   const result = await service.deleteTrash("workspace/alpha", ["thread-old"]);
   assert.equal(result.succeeded.length, 0);
-  assert.match(result.failed[0]?.message ?? "", /只能永久删除回收站里的会话/u);
+  assert.match(zh(result.failed[0]?.text), /只能永久删除回收站里的会话/u);
   assert.deepEqual(transport.requests, []);
 });
 
@@ -705,7 +711,8 @@ test("a pending permanent deletion cannot reappear in trash or be restored", asy
     succeeded: [],
     failed: [{
       sessionId: "thread-pending",
-      message: "这个会话正在永久删除，不能恢复。",
+      message: "This session is being permanently deleted and can't be restored.",
+      text: { key: "error.sessionPurging" },
     }],
   });
   assert.deepEqual(transport.requests, []);
@@ -740,7 +747,7 @@ test("keeps a durable trashing record when the trash write fails after archive",
   const result = await service.moveToTrash("workspace/alpha", ["thread-old"], "active");
   assert.deepEqual(result, {
     succeeded: [],
-    failed: [{ sessionId: "thread-old", message: "会话整理失败，请查看服务日志。" }],
+    failed: [{ sessionId: "thread-old", ...SESSION_MUTATION_FAILED }],
   });
   // Do not attempt a best-effort unarchive: Codex has archived the session, and the local credential will finish this request.
   assert.deepEqual(transport.requests.map((request) => request.method), [
@@ -823,7 +830,7 @@ test("a failed restore stays restorable and a retry tolerates an earlier unarchi
 
   assert.deepEqual(await service.restoreTrash("workspace/alpha", ["thread-old"]), {
     succeeded: [],
-    failed: [{ sessionId: "thread-old", message: "会话整理失败，请查看服务日志。" }],
+    failed: [{ sessionId: "thread-old", ...SESSION_MUTATION_FAILED }],
   });
   assert.deepEqual(
     (await TrashStore.open(trashPath)).get("thread-old"),
@@ -870,7 +877,7 @@ test("startup cleanup finishes an interrupted restore instead of purging it", as
   assert.deepEqual(await service.purgeExpired(), {
     settled: 1,
     deleted: 0,
-    failed: [{ sessionId: "thread-stuck", message: "会话整理失败，请查看服务日志。" }],
+    failed: [{ sessionId: "thread-stuck", message: SESSION_MUTATION_FAILED.message }],
   });
   assert.deepEqual(transport.requests.map((request) => request.method), [
     "thread/unarchive",
@@ -902,7 +909,7 @@ test("only the exact already-done response counts as a finished archive", async 
     assert.deepEqual(await service.purgeExpired(), {
       settled: 0,
       deleted: 0,
-      failed: [{ sessionId: "thread-old", message: "会话整理失败，请查看服务日志。" }],
+      failed: [{ sessionId: "thread-old", message: SESSION_MUTATION_FAILED.message }],
     });
     assert.equal(trash.get("thread-old")?.state, "trashing");
   }
@@ -937,7 +944,7 @@ test("does not archive a session while its task is active", async (context) => {
 
   const result = await service.archive("workspace/alpha", ["thread-running"]);
   assert.equal(result.succeeded.length, 0);
-  assert.match(result.failed[0]?.message ?? "", /仍有任务正在运行/u);
+  assert.match(zh(result.failed[0]?.text), /仍有任务正在运行/u);
   assert.deepEqual(transport.requests.map((request) => request.method), ["thread/read"]);
 });
 
@@ -1092,14 +1099,14 @@ test("rejects an empty or oversized session rename before talking to Codex", asy
   const transport = new FakeTransport();
   const service = new CodexSessionService(transport, catalog, trash);
 
-  await assert.rejects(service.rename("workspace/alpha", "thread-old", "   "), /会话名称不能为空/u);
+  await assert.rejects(service.rename("workspace/alpha", "thread-old", "   "), inChinese(/会话名称不能为空/u));
   await assert.rejects(
     service.rename("workspace/alpha", "thread-old", "名".repeat(161)),
-    /160 个字以内/u,
+    inChinese(/160 个字以内/u),
   );
   await assert.rejects(
     service.rename("workspace/alpha", "thread-old", "第一行\n第二行"),
-    /不要换行/u,
+    inChinese(/不要换行/u),
   );
   assert.deepEqual(transport.requests, []);
 });
@@ -1112,7 +1119,7 @@ test("refuses to rename a session from another project", async (context) => {
 
   await assert.rejects(
     service.rename("workspace/alpha", "thread-outside", "新名字"),
-    /不属于所选项目/u,
+    inChinese(/不属于所选项目/u),
   );
   assert.deepEqual(transport.requests.map((request) => request.method), ["thread/read"]);
 });

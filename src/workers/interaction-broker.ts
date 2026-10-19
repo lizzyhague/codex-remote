@@ -194,7 +194,7 @@ function mcpFormContent(
   const form = normalizeMcpFormSchema(schema);
   const result = validateMcpFormAnswers(form, answers);
   if (!result.ok) {
-    throw new PublicError(result.message);
+    throw new PublicError(result.text);
   }
   return result.content;
 }

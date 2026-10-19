@@ -4,6 +4,8 @@ import test from "node:test";
 import type { AppServerMessageListener, JsonObject } from "../app-server/client.ts";
 import type { AppServerTransport } from "../app-server/turn-session.ts";
 import type { ThreadHistoryMode } from "../generated/v2/ThreadHistoryMode.ts";
+import type { DisplayText } from "../shared/local-text.ts";
+import { inChinese, zh } from "../shared/local-text.test-support.ts";
 import { PublicError } from "../shared/public-error.ts";
 import { COMMAND_CATALOG } from "./catalog.ts";
 import { CommandRunner } from "./runner.ts";
@@ -159,7 +161,7 @@ test("publishes the five commands in alphabetical order", () => {
     "rename",
     "rewind",
   ]);
-  assert.match(COMMAND_CATALOG.find((command) => command.name === "rewind")?.confirmation ?? "", /不会撤销/);
+  assert.match(zh(COMMAND_CATALOG.find((command) => command.name === "rewind")?.confirmation), /不会撤销/);
 });
 
 test("builds dynamic model and permission menus", async () => {
@@ -172,10 +174,10 @@ test("builds dynamic model and permission menus", async () => {
     models.items[0]?.items?.map((item) => item.id),
     ["low", "medium", "high"],
   );
-  assert.match(models.items[0]?.items?.[1]?.description ?? "", /模型默认/);
+  assert.match(zh(models.items[0]?.items?.[1]?.description), /模型默认/);
   const permissions = await runner.options("permissions");
   assert.equal(permissions.items[1]?.selected, true);
-  assert.equal(permissions.items[1]?.label.includes("✓"), false);
+  assert.equal(zh(permissions.items[1]?.label).includes("✓"), false);
   assert.equal(permissions.items[0]?.selected, false);
   assert.equal(permissions.items[2]?.disabled, true);
   runner.dispose();
@@ -187,12 +189,12 @@ test("stages model and permission choices without touching Codex", async () => {
 
   const model = await runner.stageModel("gpt-test", null);
   assert.deepEqual(model.model, { id: "gpt-test", effort: "medium" });
-  assert.equal(model.message.title, "模型将在下一轮生效");
+  assert.equal(zh(model.message.title), "模型将在下一轮生效");
   const permission = await runner.stagePermissions(":read-only");
   assert.equal(permission.permissions, ":read-only");
   assert.equal(permission.fullAccess, false);
-  await assert.rejects(runner.stagePermissions(":full-access"), /当前不可用/);
-  await assert.rejects(runner.stageModel("missing", null), /不在当前 Codex 返回的可用列表/);
+  await assert.rejects(runner.stagePermissions(":full-access"), inChinese(/当前不可用/));
+  await assert.rejects(runner.stageModel("missing", null), inChinese(/不在当前 Codex 返回的可用列表/));
   assert.equal(
     transport.requests.some((request) => request.method === "thread/settings/update"),
     false,
@@ -218,10 +220,10 @@ test("runs settings, rename and compact commands through app-server methods", as
   const runner = createRunner(transport);
 
   const modelResult = await runner.setModel("gpt-test", "high");
-  assert.equal(modelResult.title, "模型已切换");
-  assert.equal(modelResult.lines.at(-1), "思考强度：high");
+  assert.equal(zh(modelResult.title), "模型已切换");
+  assert.equal(zh(modelResult.lines.at(-1) as DisplayText), "思考强度：high");
   const permissionsResult = await runner.setPermissions(":read-only");
-  assert.equal(permissionsResult.title, "权限已更新");
+  assert.equal(zh(permissionsResult.title), "权限已更新");
   assert.equal(permissionsResult.fullAccessEnabled, false);
   // A restricted profile explicitly uses “需要时询问”, so approval cards can appear even if config.toml says never.
   assert.deepEqual(
@@ -278,7 +280,7 @@ test("rejects rewind for legacy history without sending requests", async () => {
   await assert.rejects(
     runner.rewind("legacy-last"),
     (error: unknown) => error instanceof PublicError &&
-      error.message === "这个会话使用旧版历史格式，新版 Codex 不支持回退。",
+      zh(error.text) === "这个会话使用旧版历史格式，新版 Codex 不支持回退。",
   );
   assert.deepEqual(transport.requests, []);
   runner.dispose();
@@ -375,7 +377,7 @@ test("does not claim Full access is off when the sandbox says otherwise", async 
   });
 
   const result = await runner.toggleFullAccess();
-  assert.equal(result.title, "Full access 没有关闭");
+  assert.equal(zh(result.title), "Full access 没有关闭");
   assert.equal(result.fullAccessEnabled, true);
   assert.equal(runner.fullAccessEnabled(), true);
   runner.dispose();
@@ -385,7 +387,7 @@ test("rejects an effort the selected model does not support", async () => {
   const runner = createRunner(new FakeTransport());
   await assert.rejects(
     runner.setModel("gpt-test", "xhigh"),
-    /不支持所选思考强度/,
+    inChinese(/不支持所选思考强度/),
   );
   runner.dispose();
 });

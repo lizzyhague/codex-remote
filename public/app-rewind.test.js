@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { t } from "./i18n.test-support.js";
+import { localize, t } from "./i18n.test-support.js";
 import vm from "node:vm";
 
 import {
@@ -34,6 +34,7 @@ function harness(storage = new Map()) {
   }, { key: "recovery" });
   const context = vm.createContext({
     t,
+    localize,
     state: {
       authenticated: true,
       commandBusy: false,
@@ -198,7 +199,7 @@ test("a rewind does not start when its recovery record cannot be persisted", asy
 });
 
 test("the rewind draft records the turn id even when that turn has no restorable input", () => {
-  const context = vm.createContext({ t, publicAttachments: () => [] });
+  const context = vm.createContext({ t, localize, publicAttachments: () => [] });
   vm.runInContext(
     section("function rewindDraftFromLatestTask(", "function restoreComposerText("),
     context,

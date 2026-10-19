@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { t } from "./i18n.test-support.js";
+import { localize, t } from "./i18n.test-support.js";
 
 const [html, app, styles] = await Promise.all([
   readFile(new URL("./index.html", import.meta.url), "utf8"),
@@ -46,6 +46,13 @@ test("pinning an unmarked session opens the rename dialog", () => {
   assert.match(create, /if \(!session\.marked\) openRenameDialog\(session\)/u);
   assert.match(app, /request\("session\.rename"/u);
   assert.doesNotMatch(app, /dialog\.dataset\.sessionId !== state\.sessionId/u);
+});
+
+test("an untitled session shows its default name only as a placeholder when renaming", () => {
+  const open = app.slice(app.indexOf("function openRenameDialog("), app.indexOf("elements.renameCancelButton"));
+  assert.match(open, /input\.value = fromSession\.title \|\| "";/u);
+  assert.match(open, /input\.placeholder = t\("session\.untitled"\);/u);
+  assert.doesNotMatch(app, /sessionTitle = [^;\n]*t\("session\.untitled"\)/u);
 });
 
 test("opening a marked session with a missing directory alerts and does not resume", () => {

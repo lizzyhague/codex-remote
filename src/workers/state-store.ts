@@ -1,3 +1,4 @@
+import { localText } from "../shared/local-text.ts";
 import { chmod, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -499,7 +500,7 @@ export class WorkerStateStore {
         sessionId: task.threadId,
         taskId: task.id,
         status: "interrupted",
-        error: "后端重启时任务仍在执行，已标记为中断。",
+        error: localText("task.interruptedByRestart"),
         interruptionReason: "backend_restarted",
       }, nowMs, {
         interruptionReason: "backend_restarted",

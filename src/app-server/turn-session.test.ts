@@ -585,7 +585,7 @@ test("emits authoritative completed message, command, and file summaries", () =>
       itemId: "change-1",
       tool: {
         kind: "edit",
-        title: "2 个文件",
+        title: { key: "tool.fileCount", params: { count: 2 } },
         status: "completed",
         input: null,
         query: null,

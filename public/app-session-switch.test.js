@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { t } from "./i18n.test-support.js";
+import { localize, t } from "./i18n.test-support.js";
 import vm from "node:vm";
 
 const source = await readFile(new URL("./app.js", import.meta.url), "utf8");
@@ -22,6 +22,7 @@ function resumeContext(overrides = {}) {
   const timeline = [];
   const context = vm.createContext({
     t,
+    localize,
     state: {
       sessionId: "session-1",
       projectId: "project-1",
@@ -249,6 +250,7 @@ function loadOlderContext(navigationBusy) {
   const requests = [];
   const context = vm.createContext({
     t,
+    localize,
     state: {
       projectId: "project-1",
       sessionId: "session-1",
@@ -291,6 +293,7 @@ test("session loading states explain what the backend is waiting for", () => {
   const messages = [];
   const context = vm.createContext({
     t,
+    localize,
     showEmpty: (key) => messages.push(t(key)),
   });
   vm.runInContext(LOADING_LABEL, context);
@@ -311,6 +314,7 @@ test("worker events advance a loading session without drawing partial history", 
   const retries = [];
   const context = vm.createContext({
     t,
+    localize,
     state: {
       sessionId: "session-1",
       sessionOpenState: "queued",

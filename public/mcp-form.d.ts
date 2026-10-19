@@ -20,7 +20,7 @@ export type McpForm = { fields: McpFormField[] };
 
 export type McpFormValidation =
   | { ok: true; content: Record<string, string | number | boolean | string[]> }
-  | { ok: false; fieldId: string | null; message: string };
+  | { ok: false; fieldId: string | null; text: { key: string; params?: Record<string, string | number> } };
 
 export function normalizeMcpFormSchema(schema: unknown): McpForm | null;
 export function validateMcpFormAnswers(

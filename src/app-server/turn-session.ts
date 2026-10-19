@@ -1,3 +1,4 @@
+import { englishText, localText, type LocalText } from "../shared/local-text.ts";
 import type { TurnStatus } from "../generated/v2/TurnStatus.ts";
 import type { TurnStartParams } from "../generated/v2/TurnStartParams.ts";
 import type { TurnStartResponse } from "../generated/v2/TurnStartResponse.ts";
@@ -100,9 +101,11 @@ const MAX_TURN_INPUT_CHARS = 1_048_576;
 
 export class CodexAttachmentError extends Error {
   readonly code: string;
+  readonly text: LocalText;
 
-  constructor(code: string, message: string) {
-    super(message);
+  constructor(code: string, text: LocalText) {
+    super(englishText(text));
+    this.text = text;
     this.name = "CodexAttachmentError";
     this.code = code;
   }
@@ -578,7 +581,7 @@ export function validateCodexTurnAttachments(
   if (missing) {
     throw new CodexAttachmentError(
       "attachment_unreadable",
-      `Codex 无法读取附件：${missing.originalName}。`,
+      localText("error.attachmentUnreadable", { name: missing.originalName }),
     );
   }
   const displayText = attachmentDisplayText(baseText, attachments);
@@ -595,7 +598,7 @@ export function validateCodexTurnAttachments(
   if (inputChars > MAX_TURN_INPUT_CHARS) {
     throw new CodexAttachmentError(
       "attachment_context_too_large",
-      "消息正文和附件说明合计超过 Codex 单轮输入上限，请缩短正文或减少附件。",
+      localText("error.turnInputTooLarge"),
     );
   }
 }

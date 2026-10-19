@@ -37,6 +37,7 @@ import { isPublicError, PublicError } from "../shared/public-error.ts";
 import { redactHostPaths } from "../attachments/path-redaction.ts";
 import { listModels } from "../app-server/models.ts";
 import { listPermissionOptions } from "../app-server/permissions.ts";
+import { englishText, localText, type LocalText } from "../shared/local-text.ts";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -85,8 +86,8 @@ export type BrowserConnectionServices = {
 export class BrowserRequestError extends PublicError {
   readonly code: string;
 
-  constructor(code: string, message: string) {
-    super(message);
+  constructor(code: string, text: LocalText) {
+    super(text);
     this.name = "BrowserRequestError";
     this.code = code;
   }
@@ -161,7 +162,7 @@ export class BrowserConnection {
       this.#send({
         type: "error",
         requestId: null,
-        error: { code: "internal_error", message: publicErrorMessage(error) },
+        error: { code: "internal_error", ...publicError(error) },
       });
       return;
     }
@@ -171,7 +172,7 @@ export class BrowserConnection {
         this.#send({
           type: "error",
           requestId: null,
-          error: { code: "internal_error", message: publicErrorMessage(error) },
+          error: { code: "internal_error", ...publicError(error) },
         });
       });
       this.#backgroundRequests.add(operation);
@@ -183,7 +184,7 @@ export class BrowserConnection {
       this.#send({
         type: "error",
         requestId: null,
-        error: { code: "internal_error", message: publicErrorMessage(error) },
+        error: { code: "internal_error", ...publicError(error) },
       });
     });
   }
@@ -212,7 +213,7 @@ export class BrowserConnection {
           error instanceof SharedUploadError || error instanceof ApplicationSettingsError
         ? error.code
         : "request_failed";
-      this.#sendFailure(request.requestId, code, publicErrorMessage(error));
+      this.#sendFailure(request.requestId, code, publicError(error));
     } finally {
       if (flushDeferredEvents) this.#flushDeferredEvents();
     }
@@ -304,7 +305,7 @@ export class BrowserConnection {
       case "attachment.ticket.create": {
         const { projectId, sessionId } = this.#requireSessionTarget(request);
         if (!this.#services.uploads) {
-          throw new BrowserRequestError("uploads_unavailable", "当前后端没有启用附件服务。");
+          throw new BrowserRequestError("uploads_unavailable", localText("error.uploadsUnavailable"));
         }
         return this.#services.uploads.createTicket({
           caller: "codex",
@@ -344,7 +345,7 @@ export class BrowserConnection {
     if (this.#services.workers.projectBusy(request.projectId)) {
       throw new BrowserRequestError(
         "project_busy",
-        "这个项目有已接受或正在执行的任务，暂时不能整理会话。",
+        localText("error.projectTasksPending"),
       );
     }
     if (!this.#services.locks.acquire(
@@ -354,7 +355,7 @@ export class BrowserConnection {
     )) {
       throw new BrowserRequestError(
         "project_busy",
-        "这个项目正在执行任务，暂时不能整理会话。",
+        localText("error.projectTaskRunning"),
       );
     }
 
@@ -384,10 +385,8 @@ export class BrowserConnection {
         failed: result.failed.map((failure) => {
           if (redactHostPaths(failure.message) === failure.message) return failure;
           console.error(`Session mutation failure text withheld from the browser: ${failure.message}`);
-          return {
-            sessionId: failure.sessionId,
-            message: "会话整理失败，请查看服务日志。",
-          };
+          const text = localText("error.sessionMutationFailed");
+          return { sessionId: failure.sessionId, message: englishText(text), text };
         }),
       };
       const openSessionId = this.#sessionId;
@@ -441,12 +440,12 @@ export class BrowserConnection {
     this.#requireOpenCurrent(generation);
     if (managed.loadState !== "ready") {
       if (managed.projectId !== projectId) {
-        throw new WorkerManagerError("session_project_mismatch", "这个会话不属于所选项目。");
+        throw new WorkerManagerError("session_project_mismatch", localText("error.sessionProjectMismatch"));
       }
       if (!acceptLoadingStates) {
         throw new WorkerManagerError(
           "worker_starting",
-          "这个会话的后台 Worker 正在启动，请稍后重新打开。",
+          localText("error.workerStarting"),
         );
       }
       this.#deferredEvents = [];
@@ -460,7 +459,7 @@ export class BrowserConnection {
     }
     const openedProjectId = managed.opened.session.projectId;
     if (openedProjectId !== projectId) {
-      throw new WorkerManagerError("session_project_mismatch", "这个会话不属于所选项目。");
+      throw new WorkerManagerError("session_project_mismatch", localText("error.sessionProjectMismatch"));
     }
     // After this line, new-session events flow to this connection, but the “session opened” response waits
     // for attachment synchronization below. The page does not yet know it switched, so deltas have nowhere
@@ -552,7 +551,7 @@ export class BrowserConnection {
 
   #requireSettings(): ApplicationSettingsStore {
     if (!this.#services.settings) {
-      throw new BrowserRequestError("settings_unavailable", "当前后端没有启用应用设置。");
+      throw new BrowserRequestError("settings_unavailable", localText("error.settingsUnavailable"));
     }
     return this.#services.settings;
   }
@@ -639,13 +638,13 @@ export class BrowserConnection {
     if (generation === this.#openGeneration) return;
     throw new BrowserRequestError(
       "session_open_cancelled",
-      "会话在打开过程中已被关闭或移走，请重新选择。",
+      localText("error.sessionMovedWhileOpening"),
     );
   }
 
   #requireSession(): { projectId: string; sessionId: string } {
     if (!this.#projectId || !this.#sessionId) {
-      throw new BrowserRequestError("session_not_open", "请先新建或恢复一个会话。");
+      throw new BrowserRequestError("session_not_open", localText("error.sessionNotOpen"));
     }
     return { projectId: this.#projectId, sessionId: this.#sessionId };
   }
@@ -660,7 +659,7 @@ export class BrowserConnection {
     ) {
       throw new BrowserRequestError(
         "session_target_mismatch",
-        "请求的会话已经不是当前打开的会话。请重新打开原会话后重试。",
+        localText("error.sessionNoLongerOpen"),
       );
     }
     return current;
@@ -674,12 +673,12 @@ export class BrowserConnection {
     this.#olderTurns = [];
   }
 
-  #sendFailure(requestId: string, code: string, message: string): void {
+  #sendFailure(requestId: string, code: string, error: PublicErrorBody): void {
     this.#send({
       type: "response",
       requestId,
       ok: false,
-      error: { code, message },
+      error: { code, ...error },
     });
   }
 
@@ -690,19 +689,26 @@ export class BrowserConnection {
   }
 }
 
-/** Only business messages explicitly marked PublicError may be sent verbatim to the browser. */
-export function publicErrorMessage(error: unknown): string {
+/** What the browser receives for a failure: interface text in its own language plus the English form. */
+export type PublicErrorBody = { message: string; text: LocalText };
+
+/** Only business errors explicitly marked PublicError may be sent to the browser as they are. */
+export function publicError(error: unknown): PublicErrorBody {
   if (isPublicError(error)) {
-    if (redactHostPaths(error.message) === error.message) return error.message;
+    if (redactHostPaths(error.message) === error.message) return { message: error.message, text: error.text };
     console.error(`A public business error unexpectedly contains a host path: ${error.message}`);
-    return "请求失败，请查看服务日志。";
+    return publicBody(localText("error.requestFailedSeeLog"));
   }
   if (isSystemError(error)) {
     console.error(`System error withheld from the browser: ${error.message}`);
-    return "服务器无法访问本地文件，请查看服务日志。";
+    return publicBody(localText("error.localFilesUnavailable"));
   }
   console.error(`Request error withheld from the browser: ${privateErrorMessage(error)}`);
-  return "请求失败，请查看服务日志。";
+  return publicBody(localText("error.requestFailedSeeLog"));
+}
+
+function publicBody(text: LocalText): PublicErrorBody {
+  return { message: englishText(text), text };
 }
 
 function isSystemError(error: unknown): error is Error {

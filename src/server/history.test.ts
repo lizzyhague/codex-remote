@@ -8,7 +8,7 @@ import {
   PRIVATE_ATTACHMENT_INPUT_PREFIX,
 } from "../attachments/private-paths.ts";
 import { collectHistoryAttachmentRecords, toBrowserTasks } from "./history.ts";
-import { PUBLIC_TURN_ERROR_MESSAGE } from "./public-output.ts";
+import { PUBLIC_TURN_ERROR_TEXT } from "./public-output.ts";
 
 test("marks only ordinary user turns for input restoration", () => {
   const tasks = toBrowserTasks([
@@ -156,7 +156,7 @@ test("reload strips path blocks and replaces known attachment paths in replies",
       type: "message",
       id: "assistant-attachment",
       role: "assistant",
-      text: "已读取 附件：notes.txt",
+      text: "已读取 Attachment: notes.txt",
     },
   ]);
   assert.equal(JSON.stringify(tasks).includes(mapping.path), false);
@@ -277,7 +277,7 @@ test("reload uses a stable turn error while preserving paths in message text", (
     },
   }]);
 
-  assert.equal(task?.error, PUBLIC_TURN_ERROR_MESSAGE);
+  assert.deepEqual(task?.error, PUBLIC_TURN_ERROR_TEXT);
   assert.equal(JSON.stringify(task).includes(rawError), false);
   assert.equal(task?.items[0]?.text, "用户原文 /home/example/kept.txt 和 /api/v1 保持不变");
   assert.ok(task?.items[1]?.text.includes("src/server/main.ts"));

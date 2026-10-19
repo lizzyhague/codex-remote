@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { t } from "./i18n.test-support.js";
+import { localize, t } from "./i18n.test-support.js";
 import vm from "node:vm";
 
 const source = await readFile(new URL("./app.js", import.meta.url), "utf8");
@@ -29,6 +29,7 @@ test("requested true keeps the stopping state until the task completes", async (
   const button = taskButton();
   const context = vm.createContext({
     t,
+    localize,
     state: {
       running: true,
       stopping: false,
@@ -85,6 +86,7 @@ test("requested false resyncs the session and does not clear running itself", as
   const resumes = [];
   const context = vm.createContext({
     t,
+    localize,
     state: {
       running: true,
       stopping: false,
@@ -118,6 +120,7 @@ test("a failed stop request restores the button and keeps the task running", asy
   const notices = [];
   const context = vm.createContext({
     t,
+    localize,
     state: {
       running: true,
       stopping: false,
@@ -163,6 +166,7 @@ test("a compaction past its instruction is refused without resyncing the session
   const resumes = [];
   const context = vm.createContext({
     t,
+    localize,
     state: {
       running: true,
       stopping: false,

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { t } from "./i18n.test-support.js";
 
 import { normalizeMcpFormSchema, validateMcpFormAnswers } from "./mcp-form.js";
 
@@ -100,7 +101,7 @@ test("rejects required, numeric, length, enum, and array-count violations", () =
   for (const [answers, message] of cases) {
     const result = validateMcpFormAnswers(form, answers);
     assert.equal(result.ok, false);
-    if (!result.ok) assert.match(result.message, message);
+    if (!result.ok) assert.match(t(result.text.key, result.text.params), message);
   }
 });
 
@@ -137,7 +138,7 @@ test("an unsupported or internally inconsistent schema cannot be partially accep
   ];
   for (const value of unsupported) assert.equal(normalizeMcpFormSchema(value), null);
   assert.match(
-    validateMcpFormAnswers(null, {}).message,
+    t(validateMcpFormAnswers(null, {}).text.key),
     /只能取消/u,
   );
 });

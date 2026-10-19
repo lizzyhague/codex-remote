@@ -1,3 +1,4 @@
+import { localText, type LocalText } from "../shared/local-text.ts";
 import {
   type ClientRequest,
   request as httpRequest,
@@ -38,22 +39,22 @@ export type SharedUploadClientOptions = {
 };
 
 /** Public messages for shared-service error codes. Original downstream text is written only to service logs. */
-const PUBLIC_ERROR_MESSAGES: Record<string, string> = {
-  content_length_required: "上传必须提供 Content-Length。",
-  content_length_mismatch: "上传大小与声明不一致。",
-  size_mismatch: "实际收到的文件大小与上传票据不一致。",
-  invalid_size: "文件大小无效。",
-  file_too_large: "单个文件不能超过 25 MiB。",
-  invalid_filename: "文件名无效。",
-  missing_ticket: "请求缺少上传票据。",
-  invalid_ticket: "上传票据无效。",
-  ticket_unavailable: "上传票据不存在、已使用或已过期。",
-  attachments_required: "附件列表不能为空。",
-  invalid_attachments: "附件列表无效。",
-  invalid_attachment_id: "附件 ID 格式无效。",
-  attachment_unavailable: "附件不存在、已过期或不属于当前会话。",
-  lease_unavailable: "附件租约不存在或已经过期。",
-  disk_low: "主机可用磁盘空间不足，暂时不能上传。",
+const PUBLIC_ERROR_MESSAGES: Record<string, LocalText> = {
+  content_length_required: localText("upload.contentLengthRequired"),
+  content_length_mismatch: localText("upload.contentLengthMismatch"),
+  size_mismatch: localText("upload.sizeMismatch"),
+  invalid_size: localText("upload.invalidSize"),
+  file_too_large: localText("error.uploadTooLarge"),
+  invalid_filename: localText("upload.invalidFilename"),
+  missing_ticket: localText("error.uploadTicketMissing"),
+  invalid_ticket: localText("upload.invalidTicket"),
+  ticket_unavailable: localText("upload.ticketUnavailable"),
+  attachments_required: localText("upload.attachmentsRequired"),
+  invalid_attachments: localText("upload.invalidAttachments"),
+  invalid_attachment_id: localText("upload.invalidAttachmentId"),
+  attachment_unavailable: localText("upload.attachmentUnavailable"),
+  lease_unavailable: localText("upload.leaseUnavailable"),
+  disk_low: localText("upload.diskLow"),
 };
 
 export class SharedUploadClient {
@@ -192,7 +193,7 @@ export class SharedUploadClient {
         const reason: unknown = signal?.reason;
         finish(reason instanceof SharedUploadError
           ? reason
-          : new SharedUploadError("upload_cancelled", "上传已取消。", 400));
+          : new SharedUploadError("upload_cancelled", localText("upload.cancelled"), 400));
       };
       const onSourceError = () => finish(interruptedError());
       const onSourceClose = () => {
@@ -264,7 +265,7 @@ async function collectResponse(response: IncomingMessage): Promise<unknown> {
     length += chunk.byteLength;
     if (length > MAX_RESPONSE_BYTES) {
       console.error("A shared upload service response exceeded 1 MiB.");
-      throw new SharedUploadError("response_too_large", "共享上传服务返回了过大的响应。", 502);
+      throw new SharedUploadError("response_too_large", localText("upload.responseTooLarge"), 502);
     }
     chunks.push(chunk);
   }
@@ -279,7 +280,7 @@ async function collectResponse(response: IncomingMessage): Promise<unknown> {
   if (status < 200 || status >= 300 || typeof value !== "object" || value === null ||
       Array.isArray(value)) {
     console.error(`The shared upload service returned an invalid response: HTTP ${status}`);
-    throw new SharedUploadError("invalid_response", "共享上传服务返回了无效响应。", 502);
+    throw new SharedUploadError("invalid_response", localText("upload.invalidResponse"), 502);
   }
   return value;
 }
@@ -299,24 +300,24 @@ function downstreamError(value: unknown, status: number): SharedUploadError {
   );
   return new SharedUploadError(
     code,
-    PUBLIC_ERROR_MESSAGES[code] ?? "共享上传服务拒绝了请求。",
+    PUBLIC_ERROR_MESSAGES[code] ?? localText("upload.rejected"),
     status >= 400 && status <= 599 ? status : 502,
   );
 }
 
 function timeoutError(): SharedUploadError {
-  return new SharedUploadError("upload_service_timeout", "共享上传服务响应超时。", 504);
+  return new SharedUploadError("upload_service_timeout", localText("upload.timeout"), 504);
 }
 
 function interruptedError(): SharedUploadError {
-  return new SharedUploadError("upload_interrupted", "浏览器中断了上传。", 400);
+  return new SharedUploadError("upload_interrupted", localText("upload.interrupted"), 400);
 }
 
 function connectionError(error: Error): SharedUploadError {
   console.error(`Could not reach the shared upload service: ${error.message}`);
   return new SharedUploadError(
     "upload_service_unavailable",
-    "共享上传服务暂时不可用。",
+    localText("upload.unavailable"),
     503,
   );
 }

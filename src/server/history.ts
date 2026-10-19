@@ -1,3 +1,4 @@
+import type { LocalText } from "../shared/local-text.ts";
 import type { ThreadItem } from "../generated/v2/ThreadItem.ts";
 import type { Turn } from "../generated/v2/Turn.ts";
 import type { OpenedSession, SessionPage, SessionSummary } from "../sessions/service.ts";
@@ -25,7 +26,7 @@ export type BrowserTimelineItem = {
 export type BrowserTaskSnapshot = {
   id: string;
   status: Turn["status"];
-  error: string | null;
+  error: LocalText | null;
   restoresInput: boolean;
   items: BrowserTimelineItem[];
 };

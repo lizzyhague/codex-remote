@@ -1,3 +1,4 @@
+import { localText, type LocalText } from "../shared/local-text.ts";
 import { randomUUID } from "node:crypto";
 import {
   createServer,
@@ -120,7 +121,7 @@ export class RemoteWebSocketServer {
       void this.#serveHttp(request, response).catch((error: unknown) => {
         console.error(error);
         if (response.headersSent) response.destroy();
-        else sendJson(response, 500, { error: { message: "请求失败。" } });
+        else sendJson(response, 500, { error: { message: "The request failed." } });
       });
     });
     this.#webSockets = new WebSocketServer({
@@ -178,12 +179,12 @@ export class RemoteWebSocketServer {
     }
     if (["/auth/session", "/raw", "/attachments/upload"].includes(pathname)) {
       if (!this.#originAllowed(request)) {
-        sendJson(response, 403, { error: { message: "请求来源不匹配。" } });
+        sendJson(response, 403, { error: { message: "The request origin doesn't match." } });
         return;
       }
       const cookie = this.#auth.read(request.headers.cookie);
       if (!cookie) {
-        sendJson(response, 401, { error: { message: "请先登录。" } });
+        sendJson(response, 401, { error: { message: "Sign in first." } });
         return;
       }
       response.setHeader("set-cookie", this.#auth.header(cookie));
@@ -191,7 +192,7 @@ export class RemoteWebSocketServer {
     if (pathname === "/auth/session") {
       if (request.method !== "GET") {
         response.setHeader("allow", "GET");
-        sendJson(response, 405, { error: { message: "只允许 GET。" } });
+        sendJson(response, 405, { error: { message: "Only GET is allowed." } });
       } else {
         sendJson(response, 200, this.#authentication());
       }
@@ -215,15 +216,15 @@ export class RemoteWebSocketServer {
   async #login(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (request.method !== "POST") {
       response.setHeader("allow", "POST");
-      sendJson(response, 405, { error: { message: "只允许 POST。" } });
+      sendJson(response, 405, { error: { message: "Only POST is allowed." } });
       return;
     }
     if (!this.#originAllowed(request)) {
-      sendJson(response, 403, { error: { message: "登录来源不匹配。" } });
+      sendJson(response, 403, { error: { message: "The sign-in origin doesn't match." } });
       return;
     }
     if (request.headers["content-type"]?.split(";")[0]?.trim() !== "application/json") {
-      sendJson(response, 415, { error: { message: "需要 JSON 请求。" } });
+      sendJson(response, 415, { error: { message: "A JSON request is required." } });
       return;
     }
     const chunks: Buffer[] = [];
@@ -233,7 +234,7 @@ export class RemoteWebSocketServer {
         const buffer = Buffer.from(chunk);
         length += buffer.length;
         if (length > 16_384) {
-          sendJson(response, 413, { error: { message: "登录请求过大。" } });
+          sendJson(response, 413, { error: { message: "The sign-in request is too large." } });
           return;
         }
         chunks.push(buffer);
@@ -241,15 +242,15 @@ export class RemoteWebSocketServer {
       const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       if (typeof value !== "object" || value === null ||
           !("token" in value) || typeof value.token !== "string") {
-        sendJson(response, 400, { error: { message: "请提供访问令牌。" } });
+        sendJson(response, 400, { error: { message: "Provide the access token." } });
         return;
       }
       if (!secretsEqual(value.token, this.#token)) {
-        sendJson(response, 401, { error: { message: "访问令牌不正确。" } });
+        sendJson(response, 401, { error: { message: "The access token is incorrect." } });
         return;
       }
     } catch {
-      sendJson(response, 400, { error: { message: "登录请求无效。" } });
+      sendJson(response, 400, { error: { message: "The sign-in request is invalid." } });
       return;
     }
     response.setHeader("set-cookie", this.#auth.header(this.#auth.issue()));
@@ -265,7 +266,7 @@ export class RemoteWebSocketServer {
     );
     if (request.method !== "GET" && request.method !== "HEAD") {
       response.setHeader("allow", "GET, HEAD");
-      sendJson(response, 405, { error: { message: "只允许 GET 或 HEAD。" } });
+      sendJson(response, 405, { error: { message: "Only GET or HEAD is allowed." } });
       return;
     }
     const params = new URL(request.url ?? "/", "http://127.0.0.1").searchParams;
@@ -273,7 +274,7 @@ export class RemoteWebSocketServer {
       ? await openViewableFile(this.#fileRoots, params.get("path")!)
       : null;
     if (!file) {
-      sendJson(response, 404, { error: { message: "文件不存在或不允许查看。" } });
+      sendJson(response, 404, { error: { message: "The file doesn't exist or can't be viewed." } });
       return;
     }
     try {
@@ -297,35 +298,34 @@ export class RemoteWebSocketServer {
   ): Promise<void> {
     if (request.method !== "POST") {
       response.writeHead(405, { "content-type": "application/json; charset=utf-8", allow: "POST" });
-      response.end('{"error":{"code":"method_not_allowed","message":"只允许 POST 上传。"}}\n');
+      response.end('{"error":{"code":"method_not_allowed","message":"Only POST uploads are allowed."}}\n');
       return;
     }
     if (!this.#originAllowed(request)) {
       response.writeHead(403, { "content-type": "application/json; charset=utf-8" });
-      response.end('{"error":{"code":"origin_forbidden","message":"上传来源不匹配。"}}\n');
+      response.end('{"error":{"code":"origin_forbidden","message":"The upload origin does not match."}}\n');
       return;
     }
     if (!this.#uploads) {
-      response.writeHead(503, { "content-type": "application/json; charset=utf-8" });
-      response.end('{"error":{"code":"uploads_unavailable","message":"附件服务没有启用。"}}\n');
+      sendUploadError(response, new SharedUploadError("uploads_unavailable", localText("error.uploadsUnavailable"), 503));
       return;
     }
     const ticket = request.headers["x-upload-ticket"];
     const contentLength = parseUploadLength(request.headers["content-length"]);
     if (typeof ticket !== "string" || !ticket) {
-      sendUploadError(response, new SharedUploadError("missing_ticket", "请求缺少上传票据。", 401));
+      sendUploadError(response, new SharedUploadError("missing_ticket", localText("error.uploadTicketMissing"), 401));
       return;
     }
     if (contentLength === null) {
       sendUploadError(response, new SharedUploadError(
         "invalid_content_length",
-        "上传必须提供有效的 Content-Length。",
+        localText("error.uploadLengthRequired"),
         411,
       ));
       return;
     }
     if (contentLength > MAX_UPLOAD_BYTES) {
-      sendUploadError(response, new SharedUploadError("file_too_large", "单个文件不能超过 25 MiB。", 413));
+      sendUploadError(response, new SharedUploadError("file_too_large", localText("error.uploadTooLarge"), 413));
       return;
     }
     if (!this.#listening) {
@@ -338,7 +338,7 @@ export class RemoteWebSocketServer {
     const controller = new AbortController();
     const onResponseClose = () => {
       if (!response.writableFinished) {
-        controller.abort(new SharedUploadError("upload_cancelled", "浏览器取消了上传。", 400));
+        controller.abort(new SharedUploadError("upload_cancelled", localText("error.uploadCancelledByBrowser"), 400));
       }
     };
     response.once("close", onResponseClose);
@@ -585,16 +585,16 @@ function parseUploadLength(value: string | undefined): number | null {
 }
 
 function stoppingError(): SharedUploadError {
-  return new SharedUploadError("service_stopping", "服务正在停止，请稍后重试。", 503);
+  return new SharedUploadError("service_stopping", localText("error.serviceStopping"), 503);
 }
 
 function sendUploadError(response: ServerResponse, error: unknown): void {
   const known = error instanceof SharedUploadError
     ? error
-    : new SharedUploadError("upload_failed", "附件上传失败。", 500);
+    : new SharedUploadError("upload_failed", localText("attachment.failed"), 500);
   if (!(error instanceof SharedUploadError)) console.error(error);
   const body = Buffer.from(`${JSON.stringify({
-    error: { code: known.code, message: known.message },
+    error: { code: known.code, message: known.message, text: known.text },
   })}\n`);
   response.writeHead(known.status, {
     "content-type": "application/json; charset=utf-8",

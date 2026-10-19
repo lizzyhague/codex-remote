@@ -11,7 +11,7 @@ type Replacement = {
 };
 
 const INCOMPLETE_FLUSH_MIN_LENGTH = 16;
-const HOST_PATH_LABEL = "‹主机路径›";
+const HOST_PATH_LABEL = "‹host path›";
 const URL_PATTERN = /\b([a-z][a-z0-9+.-]*):\/\/[^\s<>"'`]+/giu;
 const FILE_URL_START_PATTERN = /file:\/\/(?:localhost)?/giu;
 const ENCODED_PATH_PATTERN = /(?:file%3a(?:%2f){2,3}|%2f)(?=(?:(?:%[0-9a-f]{2}|[a-z0-9._~!$&'()*+,:;=@-])+%2f))(?:(?:%[0-9a-f]{2}|[a-z0-9._~!$&'()*+,:;=@-])+)/giu;
@@ -23,8 +23,8 @@ export function attachmentDisplayLabel(
   mapping: AttachmentDisplayMapping,
   duplicateName: boolean,
 ): string {
-  if (!duplicateName) return `附件：${mapping.originalName}`;
-  return `附件：${mapping.originalName} (${mapping.id.slice(0, 8)})`;
+  if (!duplicateName) return `Attachment: ${mapping.originalName}`;
+  return `Attachment: ${mapping.originalName} (${mapping.id.slice(0, 8)})`;
 }
 
 export function redactKnownAttachmentPaths(
@@ -258,7 +258,7 @@ function incompleteSuffixLabel(text: string, replacements: readonly Replacement[
   const matches = replacements.filter((replacement) => variantStartsWith(replacement.variant, text));
   if (matches.length === 0) return null;
   const labels = new Set(matches.map((match) => match.label));
-  return labels.size === 1 ? matches[0]?.label ?? "附件" : "附件";
+  return labels.size === 1 ? matches[0]?.label ?? "Attachment" : "Attachment";
 }
 
 function formEncode(value: string): string {

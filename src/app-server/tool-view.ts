@@ -1,3 +1,4 @@
+import { localText, type DisplayText } from "../shared/local-text.ts";
 import type { AttachmentDisplayMapping } from "../attachments/path-redaction.ts";
 import { redactKnownAttachmentPaths } from "../attachments/path-redaction.ts";
 import { isObject } from "../shared/json.ts";
@@ -21,12 +22,13 @@ export type PublicToolResource = {
 
 export type PublicToolEntry = {
   kind: Extract<PublicToolKind, "read" | "edit" | "delete" | "move" | "switch_mode">;
-  title: string;
+  /** Usually a path or command from Codex; Remote's own fallback wording is interface text. */
+  title: DisplayText;
 };
 
 export type PublicToolView = {
   kind: PublicToolKind;
-  title: string;
+  title: DisplayText;
   status: string;
   input: string | null;
   query: string | null;
@@ -87,10 +89,10 @@ export function publicToolView(
   ) => view(fields, mappings);
 
   if (type === "commandExecution") {
-    const command = stringField(value.command) ?? "未知命令";
+    const command = stringField(value.command);
     return present({
       kind: "execute",
-      title: command,
+      title: command ?? localText("tool.unknownCommand"),
       status,
       input: command,
       output: stringValue(value.aggregatedOutput),
@@ -104,12 +106,12 @@ export function publicToolView(
       : [];
     const visibleEntries = entries.length > 0
       ? entries
-      : [{ kind: "edit" as const, title: "文件改动" }];
+      : [{ kind: "edit" as const, title: localText("tool.fileChange") }];
     return present({
       kind: visibleEntries[0]!.kind,
       title: visibleEntries.length === 1
         ? visibleEntries[0]!.title
-        : `${visibleEntries.length} 个文件`,
+        : localText("tool.fileCount", { count: visibleEntries.length }),
       status,
       entries: visibleEntries,
     });
@@ -138,7 +140,7 @@ export function publicToolView(
   }
 
   if (type === "imageView") {
-    const path = stringField(value.path) ?? "图片";
+    const path = stringField(value.path) ?? localText("tool.image");
     return present({
       kind: "read",
       title: path,
@@ -291,10 +293,11 @@ function view(
   mappings: readonly AttachmentDisplayMapping[] = [],
 ): PublicToolView {
   const redact = (text: string) => redactKnownAttachmentPaths(text, mappings);
+  const title = (text: DisplayText) => typeof text === "string" ? clipTitle(redact(text)) : text;
   const clippedOutput = clipOutput(fields.output == null ? null : redact(fields.output));
   return {
     kind: fields.kind,
-    title: clipTitle(redact(fields.title)),
+    title: title(fields.title),
     status: fields.status,
     input: fields.input == null ? null : clipInput(redact(fields.input)),
     query: fields.query == null ? null : redact(fields.query).slice(0, MAX_QUERY_LENGTH),
@@ -307,14 +310,14 @@ function view(
     exitCode: fields.exitCode ?? null,
     entries: (fields.entries ?? []).map((entry) => ({
       kind: entry.kind,
-      title: clipTitle(redact(entry.title)),
+      title: title(entry.title),
     })),
   };
 }
 
 function fileChangeEntry(value: unknown): PublicToolEntry[] {
   const change = objectFields(value);
-  const path = stringField(change.path) ?? "未知文件";
+  const path = stringField(change.path) ?? localText("tool.unknownFile");
   const kind = objectFields(change.kind);
   const type = stringField(kind.type);
   if (type === "delete") return [{ kind: "delete", title: path }];

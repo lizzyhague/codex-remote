@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { t } from "./i18n.test-support.js";
+import { localize, t } from "./i18n.test-support.js";
 import vm from "node:vm";
 
 import { projectDisplayLabel } from "./project-labels.js";
@@ -104,6 +104,7 @@ function harness({ view = "active", selectionMode = false } = {}) {
   });
   const context = vm.createContext({
     t,
+    localize,
     projectDisplayLabel,
     PROJECT_KEY: "project",
     TEMPORARY_ERROR: { tone: "error" },

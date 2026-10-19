@@ -43,12 +43,12 @@ export function normalizeMcpFormSchema(schema) {
 /** Shared answer validation used at the backend boundary and before browser submission. */
 export function validateMcpFormAnswers(form, answers) {
   if (!form || !Array.isArray(form.fields) || !isRecord(answers)) {
-    return invalid(null, "这个 MCP 表单暂时不受支持，只能取消本轮。");
+    return invalid(null, "interaction.formUnsupported");
   }
   const fieldsById = new Map(form.fields.map((field) => [field.id, field]));
   for (const [fieldId, values] of Object.entries(answers)) {
     if (!fieldsById.has(fieldId) || !Array.isArray(values) || values.some((value) => typeof value !== "string")) {
-      return invalid(fieldId, "MCP 表单回答包含无法识别的字段或值。");
+      return invalid(fieldId, "mcp.unknownField");
     }
   }
 
@@ -183,56 +183,56 @@ function normalizeChoices(schema) {
 }
 
 function validateFieldAnswer(field, values) {
-  const label = `“${field.title}”`;
+  const label = field.title;
   if (!Array.isArray(values) || values.some((value) => typeof value !== "string")) {
-    return invalid(field.id, `${label}的回答格式无法识别。`);
+    return invalid(field.id, "mcp.badFormat", { field: label });
   }
   if (values.length === 0) {
     return field.required
-      ? invalid(field.id, `请填写${label}。`)
+      ? invalid(field.id, "mcp.required", { field: label })
       : { ok: true, present: false };
   }
   if (values.some((value) => value.length === 0 || value.length > MAX_ANSWER_CODE_UNITS)) {
-    return invalid(field.id, `${label}不能为空，并且不能超过 ${MAX_ANSWER_CODE_UNITS} 个代码单元。`);
+    return invalid(field.id, "mcp.valueLength", { field: label, max: MAX_ANSWER_CODE_UNITS });
   }
 
   if (field.type === "array") {
     if (new Set(values).size !== values.length || values.some((value) => !choiceValues(field).has(value))) {
-      return invalid(field.id, `${label}包含无法识别或重复的选项。`);
+      return invalid(field.id, "mcp.badChoices", { field: label });
     }
     if (values.length < field.minItems) {
-      return invalid(field.id, `${label}至少要选择 ${field.minItems} 项。`);
+      return invalid(field.id, "mcp.minItems", { field: label, count: field.minItems });
     }
     if (values.length > field.maxItems) {
-      return invalid(field.id, `${label}最多只能选择 ${field.maxItems} 项。`);
+      return invalid(field.id, "mcp.maxItems", { field: label, count: field.maxItems });
     }
     return { ok: true, present: true, value: [...values] };
   }
 
-  if (values.length !== 1) return invalid(field.id, `${label}只能填写一个值。`);
+  if (values.length !== 1) return invalid(field.id, "mcp.singleValue", { field: label });
   const value = values[0];
   if (field.type === "boolean") {
     if (value !== "true" && value !== "false") {
-      return invalid(field.id, `${label}不是有效的布尔值。`);
+      return invalid(field.id, "mcp.badBoolean", { field: label });
     }
     return { ok: true, present: true, value: value === "true" };
   }
   if (field.type === "number" || field.type === "integer") {
     const number = Number(value);
     if (!Number.isFinite(number) || (field.type === "integer" && !Number.isInteger(number))) {
-      return invalid(field.id, `${label}不是有效的${field.type === "integer" ? "整数" : "数字"}。`);
+      return invalid(field.id, field.type === "integer" ? "mcp.badInteger" : "mcp.badNumber", { field: label });
     }
-    if (number < field.minimum) return invalid(field.id, `${label}不能小于 ${field.minimum}。`);
-    if (number > field.maximum) return invalid(field.id, `${label}不能大于 ${field.maximum}。`);
+    if (number < field.minimum) return invalid(field.id, "mcp.minimum", { field: label, value: field.minimum });
+    if (number > field.maximum) return invalid(field.id, "mcp.maximum", { field: label, value: field.maximum });
     return { ok: true, present: true, value: number };
   }
 
   if (field.choices && !choiceValues(field).has(value)) {
-    return invalid(field.id, `${label}的选项无法识别。`);
+    return invalid(field.id, "mcp.badChoice", { field: label });
   }
   const length = [...value].length;
-  if (length < field.minLength) return invalid(field.id, `${label}至少需要 ${field.minLength} 个字符。`);
-  if (length > field.maxLength) return invalid(field.id, `${label}最多允许 ${field.maxLength} 个字符。`);
+  if (length < field.minLength) return invalid(field.id, "mcp.minLength", { field: label, count: field.minLength });
+  if (length > field.maxLength) return invalid(field.id, "mcp.maxLength", { field: label, count: field.maxLength });
   return { ok: true, present: true, value };
 }
 
@@ -253,8 +253,9 @@ function defaultAnswerValues(field, value) {
   return typeof value === "string" ? [value] : null;
 }
 
-function invalid(fieldId, message) {
-  return { ok: false, fieldId, message };
+/** The failure carries interface text ({ key, params }) that the browser shows in its own language. */
+function invalid(fieldId, key, params) {
+  return { ok: false, fieldId, text: params ? { key, params } : { key } };
 }
 
 function optionalString(value) {

@@ -1,3 +1,4 @@
+import { localText, type LocalText } from "../shared/local-text.ts";
 import path from "node:path";
 
 import {
@@ -21,7 +22,7 @@ export class SharedUploadProtocolError extends SharedUploadError {
   readonly detail: string;
 
   constructor(detail: string) {
-    super("invalid_response", "共享上传服务返回了无效响应。", 502);
+    super("invalid_response", localText("upload.invalidResponse"), 502);
     this.detail = detail;
   }
 }

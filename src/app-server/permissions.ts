@@ -1,3 +1,4 @@
+import { localText, type DisplayText, type LocalText } from "../shared/local-text.ts";
 import type { AppServerTransport } from "./turn-session.ts";
 import { asObject } from "../shared/json.ts";
 
@@ -8,8 +9,9 @@ export type PermissionProfileSummary = {
 };
 
 /** Permission options for the settings dropdown; backend-provided labels and descriptions match `/permissions`. */
-export type PermissionOption = PermissionProfileSummary & {
-  label: string;
+export type PermissionOption = Omit<PermissionProfileSummary, "description"> & {
+  label: DisplayText;
+  description: DisplayText;
   fullAccess: boolean;
 };
 
@@ -65,24 +67,24 @@ export async function listPermissionOptions(
   }));
 }
 
-export function permissionLabel(id: string): string {
-  if (isFullAccessProfile(id)) return "完全访问";
+export function permissionLabel(id: string): DisplayText {
+  if (isFullAccessProfile(id)) return localText("permission.fullAccess");
   const normalized = id.toLowerCase();
-  if (normalized.includes("read")) return "只读";
+  if (normalized.includes("read")) return localText("permission.readOnly");
   if (normalized.includes("workspace") || normalized.includes("auto")) {
-    return "自动（可修改项目）";
+    return localText("permission.auto");
   }
   return id;
 }
 
-export function permissionDescription(id: string): string {
-  if (isFullAccessProfile(id)) return "可以不受沙箱限制地操作主机，并且不再询问批准；请谨慎选择。";
+export function permissionDescription(id: string): LocalText {
+  if (isFullAccessProfile(id)) return localText("permission.fullAccessHint");
   const normalized = id.toLowerCase();
-  if (normalized.includes("read")) return "可以阅读和分析；修改文件或执行高权限操作前会受限。";
+  if (normalized.includes("read")) return localText("permission.readOnlyHint");
   if (normalized.includes("workspace") || normalized.includes("auto")) {
-    return "可在项目目录内工作，超出范围或敏感操作仍会询问。";
+    return localText("permission.autoHint");
   }
-  return "由当前 Codex 配置提供的权限方案。";
+  return localText("permission.configHint");
 }
 
 /**

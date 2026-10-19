@@ -35,6 +35,7 @@ import type { ApplicationSettingsStore } from "../settings/store.ts";
 import { permissionSettings } from "../app-server/permissions.ts";
 import { isObject } from "../shared/json.ts";
 import { isPublicError, PublicError } from "../shared/public-error.ts";
+import { englishText, localText, type LocalText } from "../shared/local-text.ts";
 
 const PAGE_SIZE = 50;
 const REPLY_LOOKUP_PAGE_SIZE = 20;
@@ -51,8 +52,8 @@ const CODEX_REMOTE_ORIGINATOR = "codex_remote";
 export const TRASH_RETENTION_SECONDS = 30 * 24 * 60 * 60;
 
 class SessionOperationError extends PublicError {
-  constructor(message: string) {
-    super(message);
+  constructor(text: LocalText) {
+    super(text);
     this.name = "SessionOperationError";
   }
 }
@@ -107,7 +108,8 @@ export type SessionPage = {
 
 export type SessionMutationResult = {
   succeeded: string[];
-  failed: Array<{ sessionId: string; message: string }>;
+  /** `message` is the English form of `text`, which the browser shows in its own language. */
+  failed: Array<{ sessionId: string; message: string; text: LocalText }>;
 };
 
 export type TrashCleanupResult = {
@@ -129,7 +131,7 @@ export type OpenedSession = {
   activeTurnId: string | null;
   runtime: SessionRuntime;
   /** Notice that global defaults could not be used for creation; present only when `start()` falls back. */
-  settingsNotice?: string;
+  settingsNotice?: LocalText;
 };
 
 /** Current session runtime settings stored only on the backend; cwd cannot leak through the browser history API. */
@@ -286,7 +288,7 @@ export class CodexSessionService {
         ? { config: { model_reasoning_effort: settings.defaultReasoningEffort } }
         : {}),
     };
-    let settingsNotice: string | null = null;
+    let settingsNotice: LocalText | null = null;
     let response: ThreadStartResponse;
     if (settings?.defaultPermissions) {
       // Generated types predate the `permissions` field; testing with 0.159.2 confirms that thread/start accepts it.
@@ -302,10 +304,10 @@ export class CodexSessionService {
       } catch (error) {
         if (!isUnknownPermissionProfileError(error)) throw error;
         console.warn(
-          `默认权限方案不可用，改用 Codex 默认权限新建会话：${settings.defaultPermissions}：` +
+          `The default permission profile is unavailable; starting the session with Codex's default permissions: ${settings.defaultPermissions}: ` +
             (error instanceof Error ? error.message : String(error)),
         );
-        settingsNotice = "设置里的默认权限当前不可用，这次新会话改用了 Codex 默认权限。";
+        settingsNotice = localText("notice.defaultPermissionsUnavailable");
         response = await this.#transport.request<ThreadStartResponse>("thread/start", params);
       }
     } else {
@@ -319,10 +321,10 @@ export class CodexSessionService {
 
   async resume(projectId: string, threadId: string): Promise<OpenedSession> {
     if (!threadId.trim()) {
-      throw new SessionOperationError("Codex 会话 ID 不能为空。");
+      throw new SessionOperationError(localText("error.sessionIdRequired"));
     }
     if (this.#trash.has(threadId)) {
-      throw new SessionOperationError("这个会话在回收站中，请先恢复后再打开。");
+      throw new SessionOperationError(localText("error.sessionInTrashOpen"));
     }
 
     const project = await this.#projects.resolve(projectId);
@@ -357,10 +359,10 @@ export class CodexSessionService {
   setMarked(projectId: string, threadId: string, marked: boolean): Promise<SessionSummary> {
     return this.#serializeMutation(async () => {
       if (!this.#marks) {
-        throw new SessionOperationError("当前后端没有启用会话钉住。");
+        throw new SessionOperationError(localText("error.marksUnavailable"));
       }
       if (!threadId.trim()) {
-        throw new SessionOperationError("Codex 会话 ID 不能为空。");
+        throw new SessionOperationError(localText("error.sessionIdRequired"));
       }
       if (!marked) {
         await this.#marks.remove(threadId);
@@ -370,7 +372,7 @@ export class CodexSessionService {
       const project = await this.#projects.resolve(projectId);
       const thread = await this.#readOwnedThread(project.path, threadId);
       if (this.#trash.has(threadId)) {
-        throw new SessionOperationError("回收站里的会话不能钉住，请先恢复。");
+        throw new SessionOperationError(localText("error.pinInTrash"));
       }
       await this.#marks.put({ threadId, projectId });
       this.#emitChange({ projectId, sessionIds: [threadId], change: "mark" });
@@ -382,10 +384,10 @@ export class CodexSessionService {
     return this.#serializeMutation(async () => {
       const trimmed = title.trim();
       if (!trimmed) {
-        throw new SessionOperationError("会话名称不能为空。");
+        throw new SessionOperationError(localText("rename.empty"));
       }
       if (trimmed.length > 160 || trimmed.includes("\n")) {
-        throw new SessionOperationError("会话名称请控制在 160 个字以内，并且不要换行。");
+        throw new SessionOperationError(localText("error.sessionNameTooLong"));
       }
       const project = await this.#projects.resolve(projectId);
       const thread = await this.#readOwnedThread(project.path, threadId);
@@ -403,7 +405,7 @@ export class CodexSessionService {
   archive(projectId: string, threadIds: string[]): Promise<SessionMutationResult> {
     return this.#mutateMany(projectId, threadIds, "archive", async (projectPath, threadId) => {
       if (this.#trash.has(threadId)) {
-        throw new SessionOperationError("这个会话已经在回收站中。");
+        throw new SessionOperationError(localText("error.sessionAlreadyInTrash"));
       }
       const thread = await this.#readOwnedThread(projectPath, threadId);
       assertThreadCanBeManaged(thread);
@@ -415,7 +417,7 @@ export class CodexSessionService {
   unarchive(projectId: string, threadIds: string[]): Promise<SessionMutationResult> {
     return this.#mutateMany(projectId, threadIds, "unarchive", async (projectPath, threadId) => {
       if (this.#trash.has(threadId)) {
-        throw new SessionOperationError("这个会话在回收站中，请从回收站恢复。");
+        throw new SessionOperationError(localText("error.sessionInTrashRestore"));
       }
       const thread = await this.#readOwnedThread(projectPath, threadId);
       assertThreadCanBeManaged(thread);
@@ -458,10 +460,10 @@ export class CodexSessionService {
     return this.#mutateMany(projectId, threadIds, "restore", async (projectPath, threadId) => {
       const entry = this.#trash.get(threadId);
       if (!entry || entry.projectId !== projectId) {
-        throw new SessionOperationError("这个会话不在当前项目的回收站中。");
+        throw new SessionOperationError(localText("error.sessionNotInTrash"));
       }
       if (entry.state === "deleting") {
-        throw new SessionOperationError("这个会话正在永久删除，不能恢复。");
+        throw new SessionOperationError(localText("error.sessionPurging"));
       }
       const thread = await this.#readOwnedThread(projectPath, threadId);
       assertThreadCanBeManaged(thread);
@@ -481,7 +483,7 @@ export class CodexSessionService {
     return this.#mutateMany(projectId, threadIds, "delete", async (_projectPath, threadId) => {
       const entry = this.#trash.get(threadId);
       if (!entry || entry.projectId !== projectId) {
-        throw new SessionOperationError("只能永久删除回收站里的会话。");
+        throw new SessionOperationError(localText("error.purgeOnlyTrash"));
       }
       await this.#deletions.delete(entry);
     });
@@ -513,7 +515,7 @@ export class CodexSessionService {
         } catch (error) {
           result.failed.push({
             sessionId: entry.threadId,
-            message: describeFailure(error),
+            message: englishText(describeFailure(error)),
           });
         }
       });
@@ -546,7 +548,7 @@ export class CodexSessionService {
         } catch (error) {
           result.failed.push({
             sessionId: entry.threadId,
-            message: describeFailure(error),
+            message: englishText(describeFailure(error)),
           });
         }
       });
@@ -764,7 +766,7 @@ export class CodexSessionService {
     return {
       id: threadId,
       sessionId: threadId,
-      title: "新会话",
+      title: "",
       preview: "",
       createdAt: 0,
       updatedAt: 0,
@@ -866,7 +868,8 @@ export class CodexSessionService {
           await operation(project.path, threadId);
           result.succeeded.push(threadId);
         } catch (error) {
-          result.failed.push({ sessionId: threadId, message: describeFailure(error) });
+          const text = describeFailure(error);
+          result.failed.push({ sessionId: threadId, message: englishText(text), text });
         }
       }
       if (result.succeeded.length > 0) {
@@ -893,7 +896,7 @@ export class CodexSessionService {
   }
 
   async #readOwnedThread(projectPath: string, threadId: string): Promise<Thread> {
-    if (!threadId.trim()) throw new SessionOperationError("Codex 会话 ID 不能为空。");
+    if (!threadId.trim()) throw new SessionOperationError(localText("error.sessionIdRequired"));
     const params: ThreadReadParams = { threadId, includeTurns: false };
     const response = await this.#transport.request<ThreadReadResponse>("thread/read", params);
     assertOpenedThreadResponse(response);
@@ -951,7 +954,7 @@ function toSessionSummary(thread: Thread, projectId: string, marked: boolean): S
   return {
     id: thread.id,
     sessionId: thread.sessionId,
-    title: name || preview || "新会话",
+    title: name || preview || "",
     preview,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
@@ -984,7 +987,7 @@ function replyTimeFromTurns(turns: Turn[]): number | null {
 
 function assertThreadCanBeManaged(thread: Thread): void {
   if (thread.status.type === "active") {
-    throw new SessionOperationError("这个会话仍有任务正在运行，暂时不能整理。");
+    throw new SessionOperationError(localText("error.sessionBusyOrganize"));
   }
 }
 
@@ -993,7 +996,7 @@ function parseTrashCursor(cursor: string | null): number {
   const match = /^trash:(\d+)$/u.exec(cursor);
   const offset = match?.[1] === undefined ? NaN : Number(match[1]);
   if (!Number.isSafeInteger(offset) || offset < 0) {
-    throw new SessionOperationError("回收站分页标记无法识别。");
+    throw new SessionOperationError(localText("error.trashCursorInvalid"));
   }
   return offset;
 }
@@ -1002,10 +1005,10 @@ function parseTrashCursor(cursor: string | null): number {
  * Successful session-organization DTOs also cross the browser's public boundary. Preserve messages only for
  * explicit business errors; original text from App Server, the file system, and unknown exceptions goes only to service logs.
  */
-function describeFailure(error: unknown): string {
-  if (isPublicError(error)) return error.message;
+function describeFailure(error: unknown): LocalText {
+  if (isPublicError(error)) return error.text;
   console.error(`Session mutation error withheld from the browser: ${privateErrorMessage(error)}`);
-  return "会话整理失败，请查看服务日志。";
+  return localText("error.sessionMutationFailed");
 }
 
 function privateErrorMessage(error: unknown): string {
@@ -1033,7 +1036,7 @@ async function assertThreadBelongsToProject(
   projectPath: string,
 ): Promise<void> {
   if (!await threadBelongsToProject(thread, projectPath)) {
-    throw new SessionOperationError("这个会话不属于所选项目。");
+    throw new SessionOperationError(localText("error.sessionProjectMismatch"));
   }
 }
 

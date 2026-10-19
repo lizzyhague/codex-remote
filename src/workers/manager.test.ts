@@ -1,3 +1,5 @@
+import type { DisplayText } from "../shared/local-text.ts";
+import { zh } from "../shared/local-text.test-support.ts";
 import assert from "node:assert/strict";
 import fs, { mkdtemp, rm, stat } from "node:fs/promises";
 import { AttachmentDisplayIndex } from "./attachment-index.ts";
@@ -118,7 +120,7 @@ test("publishes complete approval paths and resolves an answer only once", async
   const permissionEvent = commandEvents()[2]!.event;
   assert.ok(JSON.stringify(permissionEvent).includes("/home/private/project/secret.txt"));
   assert.deepEqual(
-    (permissionEvent.approval as { permissionSummary: string[] }).permissionSummary,
+    (permissionEvent.approval as { permissionSummary: DisplayText[] }).permissionSummary.map(zh),
     [
       "网络：允许额外网络访问",
       "读取：/home/private/project/secret.txt",
@@ -643,7 +645,7 @@ test("fails before starting a turn when Full access cannot be restored", async (
   await waitFor(() => fixture.store.require(accepted.taskId).status === "failed");
   assert.equal(fixture.workers[0]?.started, false);
   const completed = events.at(-1);
-  assert.match(String(completed?.error), /权限/u);
+  assert.match(zh(completed?.error as DisplayText), /权限/u);
 });
 test("blocks a new session when a trusted reading is below the memory threshold", async (context) => {
   const fixture = await managerFixture(context, {
@@ -660,7 +662,7 @@ test("blocks a new session when a trusted reading is below the memory threshold"
     fixture.manager.startSession("project-1"),
     (error: unknown) => {
       assert.equal((error as { code?: string }).code, "worker_memory_low");
-      assert.match(String((error as Error).message), /当前可用 512 MiB/u);
+      assert.match(zh((error as { text: DisplayText }).text), /当前可用 512 MiB/u);
       return true;
     },
   );
@@ -681,8 +683,8 @@ test("opens the session with a notice when the memory reading degrades", async (
   fixture.manager.start();
   const opened = await fixture.manager.startSession("project-1");
   assert.equal(fixture.workers.length, 1);
-  assert.match(String(opened.notice), /已经放行/u);
-  assert.match(String(opened.notice), /compressor/u);
+  assert.match(zh(opened.notice), /已经放行/u);
+  assert.match(zh(opened.notice), /compressor/u);
 });
 
 test("a queued task started on a degraded memory reading carries a replayable notice", async (context) => {
@@ -721,8 +723,8 @@ test("a queued task started on a degraded memory reading carries a replayable no
   // A degraded reading preserves the allow decision, while task.starting carries the same notice as the direct path.
   const starting = events.find((entry) => entry.event.type === "task.starting");
   assert.equal(starting?.audience, "session");
-  assert.match(String(starting?.event.notice), /已经放行/u);
-  assert.match(String(starting?.event.notice), /MemAvailable/u);
+  assert.match(zh(starting?.event.notice as DisplayText), /已经放行/u);
+  assert.match(zh(starting?.event.notice as DisplayText), /MemAvailable/u);
 
   // The notice remains when reconnecting and replaying the event log.
   fixture.manager.clientDisconnected("phone");
@@ -732,7 +734,7 @@ test("a queued task started on a degraded memory reading carries a replayable no
   if (resumed.loadState !== "ready") throw new Error("会话没有恢复完成");
   assert.equal(resumed.activeTaskId, accepted.taskId);
   const replayed = resumed.replayEvents.find((stored) => stored.event.type === "task.starting");
-  assert.equal(replayed?.event.notice, starting?.event.notice);
+  assert.deepEqual(replayed?.event.notice, starting?.event.notice);
   worker.complete("completed");
   await waitFor(() => fixture.store.require(accepted.taskId).status === "completed");
 
@@ -1543,7 +1545,7 @@ test("times out a Worker startup and frees the project without user action", asy
   assert.equal(aborts, 1);
   assert.equal(
     fixture.store.require(first.taskId).error,
-    "Codex Worker 启动超时，任务没有开始。请重试。",
+    "The Codex worker timed out while starting, so the task didn't begin. Try again.",
   );
 
   const reopened = await fixture.manager.resumeSession("project-1", "thread-1");
@@ -1553,9 +1555,9 @@ test("times out a Worker startup and frees the project without user action", asy
       reopened.replayEvents.map(({ event }) => event.type),
       ["task.queued", "task.starting", "task.completed"],
     );
-    assert.equal(
+    assert.deepEqual(
       reopened.replayEvents.at(-1)?.event.error,
-      "Codex Worker 启动超时，任务没有开始。请重试。",
+      { key: "error.workerStartTimeout" },
     );
   }
 
@@ -1591,13 +1593,13 @@ test("fails a message that never receives a native turn id", async (context) => 
   await waitFor(() => fixture.store.require(accepted.taskId).status === "failed");
   const failed = fixture.store.require(accepted.taskId);
   assert.equal(failed.nativeTurnId, null);
-  assert.equal(failed.error, "Codex 没有开始处理这条消息，请重试。");
+  assert.equal(failed.error, "Codex didn't start working on this message; try again.");
   assert.deepEqual(fixture.store.eventsForTask(accepted.taskId).at(-1)?.event, {
     type: "task.completed",
     sessionId: "thread-1",
     taskId: accepted.taskId,
     status: "failed",
-    error: "Codex 没有开始处理这条消息，请重试。",
+    error: { key: "error.messageNotStarted" },
     interruptionReason: null,
   });
   await waitFor(() => fixture.workers[0]?.closeCount === 1);
@@ -1665,10 +1667,10 @@ test("requires rewind to name its target turn and returns a small receipt", asyn
       kind: "rewind",
       outcome: "reverted",
       targetTurnId: "turn-2",
-      title: "已回退一轮",
+      title: { key: "command.rewindDoneTitle" },
       lines: [
-        "指定的一轮已从当前会话的对话上下文中移除。",
-        "这一轮已经造成的文件改动仍然保留。",
+        { key: "command.rewindRemoved" },
+        { key: "command.rewindFilesKept" },
       ],
     },
   );
@@ -1918,7 +1920,7 @@ test("accepts a PDF attachment and hides its storage path from browser events", 
   await waitFor(() => fixture.store.require(accepted.taskId).status === "completed");
   const serialized = JSON.stringify(events);
   assert.equal(serialized.includes("/private/uploads/report.pdf"), false);
-  assert.ok(serialized.includes("附件：report.pdf") || serialized.includes("report.pdf"));
+  assert.ok(serialized.includes("Attachment: report.pdf") || serialized.includes("report.pdf"));
 });
 
 test("rejects another thread in the same project before the first task ends", async (context) => {
@@ -3019,5 +3021,5 @@ function delay(ms: number): Promise<void> {
 function isProjectMismatch(error: unknown): boolean {
   return error instanceof WorkerManagerError &&
     error.code === "session_project_mismatch" &&
-    /不属于所选项目/u.test(error.message);
+    /不属于所选项目/u.test(zh(error.text));
 }

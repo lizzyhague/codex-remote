@@ -1,3 +1,4 @@
+import { inChinese } from "../shared/local-text.test-support.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -184,23 +185,23 @@ test("keeps an MCP form pending when the server rejects constrained answers", ()
   const valid = { name: ["测试"], count: ["2"], color: ["blue"], tags: ["A"] };
   assert.throws(
     () => broker.answer(requested.interaction.id, "submit", { ...valid, name: [] }),
-    /请填写“名称”/u,
+    inChinese(/请填写“名称”/u),
   );
   assert.throws(
     () => broker.answer(requested.interaction.id, "submit", { ...valid, name: ["太长的名字"] }),
-    /最多允许 4 个字符/u,
+    inChinese(/最多允许 4 个字符/u),
   );
   assert.throws(
     () => broker.answer(requested.interaction.id, "submit", { ...valid, count: ["4"] }),
-    /不能大于 3/u,
+    inChinese(/不能大于 3/u),
   );
   assert.throws(
     () => broker.answer(requested.interaction.id, "submit", { ...valid, color: ["green"] }),
-    /选项无法识别/u,
+    inChinese(/选项无法识别/u),
   );
   assert.throws(
     () => broker.answer(requested.interaction.id, "submit", { ...valid, tags: ["A", "B", "C"] }),
-    /最多只能选择 2 项/u,
+    inChinese(/最多只能选择 2 项/u),
   );
   assert.equal(transport.responses.length, 0);
   assert.equal(events.length, 1);
@@ -242,7 +243,7 @@ test("an unsupported MCP form can only be cancelled", () => {
   if (requested?.type !== "interaction_requested") return;
   assert.throws(
     () => broker.answer(requested.interaction.id, "submit", { email: ["person@example.com"] }),
-    /暂时不受支持/u,
+    inChinese(/只能取消本轮/u),
   );
   assert.equal(transport.responses.length, 0);
   assert.equal(broker.answer(requested.interaction.id, "cancel", {}), true);

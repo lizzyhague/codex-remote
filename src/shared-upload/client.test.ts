@@ -1,3 +1,4 @@
+import { localText } from "../shared/local-text.ts";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -175,7 +176,7 @@ test("aborting the signal after the body is sent destroys the downstream request
   });
   while (service.requests.length === 0) await delay(5);
   await service.requests[0]!.body;
-  const reason = new SharedUploadError("service_stopping", "服务正在停止，请稍后重试。", 503);
+  const reason = new SharedUploadError("service_stopping", localText("error.serviceStopping"), 503);
   controller.abort(reason);
   assert.equal(await settlesWithin(pending, 1_000, "取消的上传"), reason);
   await settlesWithin(service.requests[0]!.closed, 1_000, "下游 socket 关闭");
@@ -275,7 +276,8 @@ test("downstream error text stays in logs and the browser gets a stable code and
     "upload_service_error",
     500,
   );
-  assert.equal(error.message, "共享上传服务拒绝了请求。");
+  assert.equal(error.message, "The shared upload service rejected the request.");
+  assert.deepEqual(error.text, { key: "upload.rejected" });
 
   reply = { status: 502, body: "not json" };
   assertUploadError(await client.health().catch((value: unknown) => value), "upload_service_error", 502);

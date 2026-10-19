@@ -1,3 +1,4 @@
+import type { LocalText } from "../shared/local-text.ts";
 import { isCommandName, type CommandName } from "../commands/catalog.ts";
 import {
   MAX_DEVELOPER_INSTRUCTIONS_LENGTH,
@@ -134,13 +135,13 @@ export type BrowserResponse =
     type: "response";
     requestId: string;
     ok: false;
-    error: { code: string; message: string };
+    error: { code: string; message: string; text?: LocalText };
   };
 
 export type BrowserProtocolError = {
   type: "error";
   requestId: string | null;
-  error: { code: string; message: string };
+  error: { code: string; message: string; text?: LocalText };
 };
 
 export type BrowserEvent = {

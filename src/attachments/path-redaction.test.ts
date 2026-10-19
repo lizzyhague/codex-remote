@@ -25,7 +25,7 @@ test("replaces raw, URL-encoded and JSON-escaped known paths", () => {
   const redacted = redactKnownAttachmentPaths(source, [mapping]);
   assert.equal(redacted.includes(mapping.path), false);
   assert.equal(redacted.includes(encoded), false);
-  assert.ok(redacted.includes("附件：报告.pdf"));
+  assert.ok(redacted.includes("Attachment: 报告.pdf"));
 });
 
 test("replaces form, lowercase-percent, unicode-JSON and file URL variants", () => {
@@ -54,7 +54,7 @@ test("replaces form, lowercase-percent, unicode-JSON and file URL variants", () 
     const redacted = redactKnownAttachmentPaths(variant, [complex]);
     assert.equal(redacted.includes("home"), false, variant);
     assert.equal(redacted.includes("example"), false, variant);
-    assert.ok(redacted.includes("附件：秘密 note.txt"), variant);
+    assert.ok(redacted.includes("Attachment: 秘密 note.txt"), variant);
   }
 });
 
@@ -72,13 +72,13 @@ test("detects host paths for public error guards without changing URLs or relati
   assert.ok(redacted.includes("https://example.com/docs/setup/file.html"));
   assert.equal(redacted.includes("/home/example-user"), false);
   assert.equal(redacted.includes("/Users/example-user"), false);
-  assert.ok(redacted.includes("‹主机路径›"));
+  assert.ok(redacted.includes("‹host path›"));
 });
 
 test("redacts only the absolute-path span inside ordinary prose", () => {
   assert.equal(
     redactHostPaths("请读取 /home/example-user/My Projects/秘密 note.txt 后继续检查 /api/v1"),
-    "请读取 ‹主机路径› 后继续检查 /api/v1",
+    "请读取 ‹host path› 后继续检查 /api/v1",
   );
 });
 
@@ -89,8 +89,8 @@ test("adds a short id when two attachments share a name", () => {
     path: "/example/uploads/blobs/cd/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.pdf",
   };
   const redacted = redactKnownAttachmentPaths(`${mapping.path} ${other.path}`, [mapping, other]);
-  assert.ok(redacted.includes("附件：报告.pdf (7c9e6679)"));
-  assert.ok(redacted.includes("附件：报告.pdf (aaaaaaaa)"));
+  assert.ok(redacted.includes("Attachment: 报告.pdf (7c9e6679)"));
+  assert.ok(redacted.includes("Attachment: 报告.pdf (aaaaaaaa)"));
 });
 
 test("replaces the longest overlapping form once and leaves neighbours intact", () => {
@@ -98,7 +98,7 @@ test("replaces the longest overlapping form once and leaves neighbours intact", 
   const source = `链接 ${fileUrl}，原样 ${mapping.path}${mapping.path}。`;
   assert.equal(
     redactKnownAttachmentPaths(source, [mapping]),
-    "链接 附件：报告.pdf，原样 附件：报告.pdf附件：报告.pdf。",
+    "链接 Attachment: 报告.pdf，原样 Attachment: 报告.pdfAttachment: 报告.pdf。",
   );
 });
 
@@ -126,7 +126,7 @@ test("holds a split path across deltas and does not emit the raw address", () =>
   const prefix = mapping.path.slice(0, 18);
   const rest = mapping.path.slice(18);
   assert.equal(redactor.push(`看 ${prefix}`), "看 ");
-  assert.equal(redactor.push(rest), "附件：报告.pdf");
+  assert.equal(redactor.push(rest), "Attachment: 报告.pdf");
   assert.equal(redactor.flush(), "");
 });
 
@@ -147,7 +147,7 @@ test("holds a split form-encoded attachment path", () => {
   const split = encoded.indexOf("%E7");
   const redactor = new AttachmentPathStreamRedactor([complex]);
   assert.equal(redactor.push(encoded.slice(0, split)), "path=");
-  assert.equal(redactor.push(`${encoded.slice(split)}\n`), "附件：报告.pdf\n");
+  assert.equal(redactor.push(`${encoded.slice(split)}\n`), "Attachment: 报告.pdf\n");
   assert.equal(redactor.flush(), "");
 });
 
@@ -167,7 +167,7 @@ test("flushes remaining text without duplicating or dropping it", () => {
   assert.equal(held, "");
   const flushed = again.flush();
   assert.equal(flushed.includes(mapping.path.slice(0, 20)), false);
-  assert.ok(flushed.includes("附件：报告.pdf") || flushed === "附件");
+  assert.ok(flushed.includes("Attachment: 报告.pdf") || flushed === "Attachment");
 });
 
 test("redacts nested display copies without mutating the original", () => {
@@ -178,5 +178,5 @@ test("redacts nested display copies without mutating the original", () => {
   const redacted = redactKnownAttachmentPathsDeep(original, [mapping]);
   assert.equal(original.nested.href, mapping.path);
   assert.equal(redacted.nested.href.includes(mapping.path), false);
-  assert.ok(redacted.reason.includes("附件：报告.pdf"));
+  assert.ok(redacted.reason.includes("Attachment: 报告.pdf"));
 });

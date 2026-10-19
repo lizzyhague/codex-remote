@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { t } from "./i18n.test-support.js";
+import { localize, t } from "./i18n.test-support.js";
 import vm from "node:vm";
 
 import {
@@ -69,6 +69,7 @@ function harness({ stored = SHANGHAI } = {}) {
   };
   const context = vm.createContext({
     t,
+    localize,
     DISPLAY_TIMEZONE_KEY,
     deviceTimeZone,
     formatDisplayTime,

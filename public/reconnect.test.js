@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { t } from "./i18n.test-support.js";
+import { localize, t } from "./i18n.test-support.js";
 import vm from "node:vm";
 
 import { projectDisplayLabel } from "./project-labels.js";
@@ -41,6 +41,7 @@ function harness() {
   const element = () => ({ value: "", hidden: false, replaceChildren() {}, append() {} });
   const context = vm.createContext({
     t,
+    localize,
     URL, URLSearchParams, AbortController,
     projectDisplayLabel,
     location: { protocol: "https:", host: "example.com", search: "" },

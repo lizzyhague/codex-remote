@@ -31,6 +31,11 @@ import {
 /** Interface text from i18n.js, which loads in <head> before this module. */
 const t = window.codexRemoteI18n ? window.codexRemoteI18n.t : (key) => key;
 
+/** Text the backend sent, as final text or { key, params }; see codexRemoteI18n.localize. */
+const localize = window.codexRemoteI18n
+  ? window.codexRemoteI18n.localize
+  : (value, fallback = "") => typeof value === "string" ? value : fallback;
+
 const LEGACY_TOKEN_KEY = "codex-remote.token";
 const PROJECT_KEY = "codex-remote.project";
 const OUTBOX_KEY = "codex-remote.outbox-v2";
@@ -593,7 +598,7 @@ async function connect(token) {
             preserveAttachments: true,
             retryDeferred: false,
           });
-          if (opened.notice) showNotice(opened.notice, {
+          if (opened.notice) showNotice(localize(opened.notice), {
             lifetime: "persistent",
             tone: "warning",
             key: "host-memory-degraded",
@@ -686,7 +691,7 @@ function handleSocketMessage(source) {
     if (message.ok) {
       pending.resolve(message.data);
     } else {
-      const error = new Error(message.error?.message || t("request.failed"));
+      const error = new Error(localize(message.error?.text, message.error?.message || t("request.failed")));
       error.code = message.error?.code;
       pending.reject(error);
     }
@@ -694,7 +699,7 @@ function handleSocketMessage(source) {
   }
 
   if (message.type === "error") {
-    showNotice(message.error?.message || t("connection.error"), TEMPORARY_ERROR);
+    showNotice(localize(message.error?.text, message.error?.message || t("connection.error")), TEMPORARY_ERROR);
     return;
   }
 
@@ -898,12 +903,12 @@ async function startSession() {
     upsertSession(opened.session);
     renderSessionList();
     closeMobileSidebar();
-    if (opened.notice) showNotice(opened.notice, {
+    if (opened.notice) showNotice(localize(opened.notice), {
       lifetime: "persistent",
       tone: "warning",
       key: "host-memory-degraded",
     });
-    if (opened.settingsNotice) showNotice(opened.settingsNotice, TEMPORARY_WARNING);
+    if (opened.settingsNotice) showNotice(localize(opened.settingsNotice), TEMPORARY_WARNING);
   } catch (error) {
     if (generation !== state.openGeneration) return;
     showNotice(errorMessage(error), TEMPORARY_ERROR);
@@ -950,7 +955,7 @@ async function resumeSession(sessionId) {
     // A late result must not render this session back onto the page.
     if (generation !== state.openGeneration) return;
     applySessionResumeResult(opened, sessionId);
-    if (opened.notice) showNotice(opened.notice, {
+    if (opened.notice) showNotice(localize(opened.notice), {
       lifetime: "persistent",
       tone: "warning",
       key: "host-memory-degraded",
@@ -995,7 +1000,7 @@ function applyLoadingSession(
   state.sessionId = sessionId;
   state.sessionOpenState = loading.loadState;
   state.sessionTitle = findSessionSummary(sessionId)?.title ||
-    (previousSessionId === sessionId ? state.sessionTitle : "") || t("session.fallbackTitle");
+    (previousSessionId === sessionId ? state.sessionTitle : "");
   state.running = true;
   state.stopping = false;
   state.controlsTask = loading.controlsActiveTask === true;
@@ -1070,7 +1075,7 @@ function applyOpenedSession(opened, { preserveAttachments = false, retryDeferred
   state.sessionId = opened.session.id;
   void refreshPickerLabels();
   renderSessionMetrics();
-  state.sessionTitle = opened.session.title || t("session.untitled");
+  state.sessionTitle = opened.session.title || "";
   state.running = Boolean(opened.activeTaskId);
   state.controlsTask = Boolean(opened.controlsActiveTask);
   if (!state.running) state.stopping = false;
@@ -1422,7 +1427,7 @@ function syncCurrentSessionTitle() {
     candidate.id === state.sessionId && candidate.projectId === state.projectId
   );
   if (!session) return;
-  const title = session.title || t("session.untitled");
+  const title = session.title || "";
   if (title === state.sessionTitle) return;
   state.sessionTitle = title;
   updateConversationTitle();
@@ -1447,7 +1452,7 @@ async function executeSessionSelectionAction(action, sessionIds) {
     succeeded,
     failed: failed.map((failure) => ({
       id: failure?.sessionId,
-      reason: failure?.message || t("selection.failed"),
+      reason: localize(failure?.text, failure?.message || t("selection.failed")),
     })),
   };
 }
@@ -1569,7 +1574,9 @@ function updateConversationTitle() {
   const privateTitle = isMobileNavigation() || state.sidebarCollapsed;
   elements.currentSessionTitle.textContent = privateTitle
     ? "Codex Remote"
-    : state.sessionTitle || "Codex Remote";
+    : state.sessionId
+    ? state.sessionTitle || t("session.untitled")
+    : "Codex Remote";
 }
 
 function syncSidebarState() {
@@ -1613,7 +1620,7 @@ function renderTasks(tasks) {
       }
     }
     if (task.error) {
-      addTaskNote(t("task.failed", { error: task.error }));
+      addTaskNote(t("task.failed", { error: localize(task.error) }));
       rendered += 1;
     }
   }
@@ -1835,7 +1842,7 @@ async function startUpload(draft) {
     });
     const body = await response.json().catch(() => null);
     if (!response.ok) {
-      const error = new Error(body?.error?.message || t("attachment.failed"));
+      const error = new Error(localize(body?.error?.text, body?.error?.message || t("attachment.failed")));
       error.code = body?.error?.code;
       throw error;
     }
@@ -1982,9 +1989,9 @@ function handleServerEvent(event, replay = false) {
   // A queued background task is allowed through when memory measurement degrades. The notice persists with task.starting and must reappear on replay.
   if (
     event.type === "task.starting" && event.sessionId === state.sessionId &&
-    typeof event.notice === "string" && event.notice
+    localize(event.notice)
   ) {
-    showNotice(event.notice, {
+    showNotice(localize(event.notice), {
       lifetime: "persistent",
       tone: "warning",
       key: "host-memory-degraded",
@@ -2104,8 +2111,8 @@ function handleServerEvent(event, replay = false) {
       setCurrentSessionState("idle");
       hideThinking();
       if (event.error) {
-        addTaskNote(t("task.failed", { error: event.error }));
-        if (!replay) showNotice(event.error, TEMPORARY_ERROR);
+        addTaskNote(t("task.failed", { error: localize(event.error) }));
+        if (!replay) showNotice(localize(event.error), TEMPORARY_ERROR);
       }
       if (event.status === "interrupted") addTaskNote(t("task.stopped"));
       updateControls();
@@ -2113,13 +2120,13 @@ function handleServerEvent(event, replay = false) {
     case "task.error":
       if (!event.willRetry) hideThinking();
       if (event.willRetry) {
-        showNotice(t("task.retrying", { message: event.message }), {
+        showNotice(t("task.retrying", { message: localize(event.message) }), {
           lifetime: "state",
           tone: "warning",
           key: taskNoticeKey("retry", event.taskId || event.sessionId),
         });
       } else if (!replay) {
-        showNotice(event.message, TEMPORARY_ERROR);
+        showNotice(localize(event.message), TEMPORARY_ERROR);
       }
       break;
     case "approval.requested":
@@ -2167,7 +2174,7 @@ function handleLoadingSessionEvent(event, replay) {
     state.running = false;
     state.controlsTask = false;
     state.stopping = false;
-    if (event.error && !replay) showNotice(event.error, TEMPORARY_ERROR);
+    if (event.error && !replay) showNotice(localize(event.error), TEMPORARY_ERROR);
     scheduleLoadingSessionResume(0);
   } else if (event.type === "task.error") {
     state.sessionOpenState = "restoring";
@@ -2621,7 +2628,14 @@ function appendResourceBlock(command, label, emptyText) {
 }
 
 function publicTool(value) {
-  return value && typeof value === "object" ? value : {};
+  if (!value || typeof value !== "object") return {};
+  return {
+    ...value,
+    title: localize(value.title),
+    entries: Array.isArray(value.entries)
+      ? value.entries.map((entry) => entry && typeof entry === "object" ? { ...entry, title: localize(entry.title) } : entry)
+      : value.entries,
+  };
 }
 
 function publicToolEntries(value, fallbackKind, fallbackTitle) {
@@ -2700,7 +2714,8 @@ function addTaskNote(text) {
 }
 
 function addCommandResult(result) {
-  if (!result || typeof result.title !== "string") return;
+  const resultTitle = localize(result?.title);
+  if (!resultTitle) return;
   if (result.kind === "task") {
     state.rewindTargetTurnId = null;
     state.rewindText = null;
@@ -2710,7 +2725,7 @@ function addCommandResult(result) {
   const article = document.createElement("article");
   article.className = "command-result";
   const title = document.createElement("strong");
-  title.textContent = result.title;
+  title.textContent = resultTitle;
   article.append(title);
   for (const line of Array.isArray(result.lines) ? result.lines : []) {
     const text = document.createElement("p");
@@ -2723,7 +2738,7 @@ function addCommandResult(result) {
       if (typeof line.after === "string") text.dataset.displayAfter = line.after;
       text.textContent = `${text.dataset.displayBefore ?? ""}${formatDate(line.timestamp)}${text.dataset.displayAfter ?? ""}`;
     } else {
-      text.textContent = typeof line === "string" ? line : "";
+      text.textContent = localize(line);
     }
     article.append(text);
   }
@@ -2821,7 +2836,7 @@ function approvalScopeLines(approval) {
     lines.push(t("approval.network", { target: `${approval.network.protocol}://${approval.network.host}` }));
   }
   if (Array.isArray(approval.permissionSummary)) {
-    lines.push(...approval.permissionSummary.filter((line) => typeof line === "string"));
+    lines.push(...approval.permissionSummary.map((line) => localize(line)).filter(Boolean));
   }
   if (lines.length === 0) lines.push(t("approval.choose"));
   return lines;
@@ -2899,7 +2914,7 @@ async function applyRewindResult(result, pending) {
   if (result.outcome !== "stale") loadComposerDraftForCurrentSession();
   if (completed === "persisted") clearNotice(rewindNoticeKey(pending));
   addCommandResult(result);
-  if (opened.notice) showNotice(opened.notice, {
+  if (opened.notice) showNotice(localize(opened.notice), {
     lifetime: "persistent",
     tone: "warning",
     key: "host-memory-degraded",
@@ -3378,10 +3393,10 @@ function collectMcpFormAnswers(fields) {
 
 function reportMcpFormError(fields, message, result) {
   for (const field of fields.values()) field.control.setCustomValidity?.("");
-  message.textContent = result.message;
+  message.textContent = t(result.text.key, result.text.params);
   message.hidden = false;
   const control = fields.get(result.fieldId)?.control;
-  control?.setCustomValidity?.(result.message);
+  control?.setCustomValidity?.(message.textContent);
   control?.focus?.();
   control?.reportValidity?.();
 }
@@ -3621,6 +3636,7 @@ function relabelInterface() {
   }
   if (!elements.loadOlderButton.disabled) elements.loadOlderButton.textContent = t("timeline.loadOlder");
   renderSessionViewTitle();
+  updateConversationTitle();
   selectionBar.relabel();
   renderSessionList();
   renderAttachmentList();
@@ -3866,11 +3882,11 @@ async function loadSettingsPermissions(generation) {
     if (!Array.isArray(data)) throw new Error(t("settings.badPermissionList"));
     state.settingsPermissions = data.flatMap((profile) =>
       profile && typeof profile.id === "string" && profile.id &&
-        typeof profile.label === "string" && profile.allowed === true
+        localize(profile.label) && profile.allowed === true
         ? [{
           id: profile.id,
           label: profile.label,
-          description: typeof profile.description === "string" ? profile.description : "",
+          description: profile.description ?? "",
         }]
         : []
     );
@@ -3901,7 +3917,7 @@ function renderPermissionDefaults() {
   if (ready) {
     options.push(...state.settingsPermissions.map((candidate) => ({
       value: candidate.id,
-      label: candidate.label,
+      label: localize(candidate.label),
     })));
   }
   replaceSelectOptions(elements.defaultPermissionsSelect, options, selected ?? "");
@@ -3912,7 +3928,7 @@ function renderPermissionDefaults() {
     ? t("settings.permissionsFailed", { message: state.settingsPermissionsError })
     : selected && !profile
     ? t("settings.savedPermissionMissing")
-    : profile?.description || t("settings.noPermissionDefault");
+    : localize(profile?.description) || t("settings.noPermissionDefault");
 }
 
 function replaceSelectOptions(select, options, selectedValue) {
@@ -4222,7 +4238,7 @@ function renderSessionMetrics() {
       const left = typeof quota.remainingPercent === "number"
         ? `${quota.remainingPercent.toFixed(1)}%` : t("metrics.unknown");
       const reset = formatDate(quota.resetsAt);
-      const label = quota.label.replace(/^codex（(.+)）$/i, "$1");
+      const label = localize(quota.label);
       parts.push(reset
         ? t("metrics.quotaReset", { label, left, reset })
         : t("metrics.quota", { label, left }));
@@ -4278,7 +4294,7 @@ async function refreshPickerLabels() {
       const data = await request("command.options", { projectId, sessionId, command });
       if (state.projectId !== projectId || state.sessionId !== sessionId) return;
       const selected = data.items?.find(item => item.selected);
-      const label = selected?.label || t("composer.default");
+      const label = localize(selected?.label) || t("composer.default");
       const kind = command === "model" ? "model" : "permission";
       composerPickers[kind].label.textContent = label;
       composerPickers[kind].button.title = label;
@@ -4312,7 +4328,7 @@ function renderComposerPicker(title, items, onSelect, onBack) {
     heading.append(back);
   }
   const label = document.createElement("strong");
-  label.textContent = title;
+  label.textContent = localize(title);
   heading.append(label);
   menu.replaceChildren(heading);
   for (const item of items) {
@@ -4323,10 +4339,10 @@ function renderComposerPicker(title, items, onSelect, onBack) {
     button.setAttribute("aria-selected", String(item.selected === true));
     button.disabled = item.disabled === true;
     const name = document.createElement("strong");
-    name.textContent = item.label || item.id;
+    name.textContent = localize(item.label) || item.id;
     const detail = document.createElement("span");
     detail.className = "composer-picker-description";
-    detail.textContent = item.description || "";
+    detail.textContent = localize(item.description);
     button.append(name, detail);
     button.addEventListener("click", () => onSelect(item));
     menu.append(button);
@@ -4354,7 +4370,7 @@ async function openComposerPicker(command) {
         state.pickerGeneration !== pickerGeneration) return;
     const items = data.items || [];
     const selected = items.find(item => item.selected);
-    composerPickers[kind].label.textContent = selected?.label || t("composer.default");
+    composerPickers[kind].label.textContent = localize(selected?.label) || t("composer.default");
     const choose = async (item, argument = null) => {
       if (state.projectId !== projectId || state.sessionId !== sessionId || trigger.disabled) return;
       if (item.danger && !window.confirm(t("composer.fullAccessConfirm"))) return;
@@ -4441,13 +4457,15 @@ function openRenameDialog(initialTitleOrSession) {
   if (fromSession) {
     dialog.dataset.sessionId = fromSession.id;
     dialog.dataset.projectId = fromSession.projectId || "";
-    input.value = fromSession.title || t("session.untitled");
+    input.value = fromSession.title || "";
   } else {
     if (!state.sessionId || state.commandBusy || state.running) return;
     dialog.dataset.sessionId = state.sessionId;
     dialog.dataset.projectId = state.projectId || "";
     input.value = initialTitle ?? state.sessionTitle ?? "";
   }
+  // An untitled session shows its default name only as a hint, so saving untouched never stores it as a name.
+  input.placeholder = t("session.untitled");
   elements.renameStatus.textContent = "";
   closeComposerPicker();
   if (!dialog.open) dialog.showModal();

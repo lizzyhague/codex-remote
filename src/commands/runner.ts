@@ -1,3 +1,4 @@
+import { localText, type DisplayText, type LocalText, type LocalTextParam } from "../shared/local-text.ts";
 import type { AppServerMessageListener, JsonObject } from "../app-server/client.ts";
 import type { AppServerTransport } from "../app-server/turn-session.ts";
 import type { ThreadRevertResponse } from "../generated/v2/ThreadRevertResponse.ts";
@@ -20,8 +21,8 @@ import type { PendingTurnSettings } from "../app-server/turn-settings.ts";
 
 export type CommandOption = {
   id: string;
-  label: string;
-  description: string;
+  label: DisplayText;
+  description: DisplayText;
   /** The currently active option; the frontend uses this flag for highlighting instead of inspecting labels. */
   selected?: boolean;
   disabled?: boolean;
@@ -30,19 +31,19 @@ export type CommandOption = {
 };
 
 export type CommandOptions = {
-  title: string;
+  title: DisplayText;
   items: CommandOption[];
 };
 
 export type CommandMessage = {
   kind: "message";
-  title: string;
+  title: DisplayText;
   lines: CommandMessageLine[];
   sessionName?: string;
   fullAccessEnabled?: boolean;
 };
 
-export type CommandMessageLine = string | {
+export type CommandMessageLine = DisplayText | {
   kind: "timestamp";
   before: string;
   timestamp: number;
@@ -50,7 +51,7 @@ export type CommandMessageLine = string | {
 };
 
 const THREAD_HISTORY_PAGE_SIZE = 100;
-const NEXT_TURN_LINE = "当前这一轮不受影响，下一条消息开始生效。";
+const NEXT_TURN_LINE = localText("command.nextTurn");
 export type RewindOutcome = "reverted" | "already_reverted" | "stale";
 
 /**
@@ -93,22 +94,23 @@ export class CommandRunner {
       const selectedModel = pending?.model?.id ?? this.#runtime.model;
       const selectedEffort = pending?.model ? pending.model.effort : this.#runtime.reasoningEffort;
       return {
-        title: "选择模型",
+        title: localText("composer.chooseModel"),
         items: models.map((model) => ({
           id: model.id,
           label: model.displayName,
           selected: model.id === selectedModel,
           description: model.description ||
-            `默认思考强度：${model.defaultReasoningEffort || "自动"}`,
+            localText("command.defaultEffort", { effort: effortLabel(model.defaultReasoningEffort) }),
           items: model.supportedReasoningEfforts.map((effort) => ({
             id: effort.reasoningEffort,
             label: effort.reasoningEffort,
             selected: model.id === selectedModel &&
               effort.reasoningEffort === selectedEffort,
-            description: [
-              effort.description,
-              effort.reasoningEffort === model.defaultReasoningEffort ? "模型默认" : "",
-            ].filter(Boolean).join(" · "),
+            description: effort.reasoningEffort !== model.defaultReasoningEffort
+              ? effort.description
+              : effort.description
+              ? localText("command.effortWithDefault", { description: effort.description })
+              : localText("command.modelDefault"),
           })),
         })),
       };
@@ -118,7 +120,7 @@ export class CommandRunner {
       const profiles = await this.#listPermissionProfiles();
       const selectedProfile = pending?.permissions ?? this.#runtime.activePermissionProfile?.id;
       return {
-        title: "选择权限",
+        title: localText("command.choosePermission"),
         items: profiles.map((profile) => ({
           id: profile.id,
           label: permissionLabel(profile.id),
@@ -130,7 +132,7 @@ export class CommandRunner {
       };
     }
 
-    throw new PublicError(`/${command} 没有二级菜单。`);
+    throw new PublicError(localText("error.commandNoSubmenu", { command }));
   }
 
   async setModel(modelId: string, effort?: string | null): Promise<CommandMessage> {
@@ -143,7 +145,7 @@ export class CommandRunner {
     this.#runtime.reasoningEffort = selectedEffort;
     return {
       kind: "message",
-      title: "模型已切换",
+      title: localText("command.modelSwitched"),
       lines: modelLines(model.displayName, selectedEffort),
     };
   }
@@ -158,7 +160,7 @@ export class CommandRunner {
       model: { id: model.id, effort: selectedEffort },
       message: {
         kind: "message",
-        title: "模型将在下一轮生效",
+        title: localText("command.modelNextTurn"),
         lines: [...modelLines(model.displayName, selectedEffort), NEXT_TURN_LINE],
       },
     };
@@ -175,7 +177,7 @@ export class CommandRunner {
     }
     return {
       kind: "message",
-      title: "权限已更新",
+      title: localText("command.permissionsUpdated"),
       lines: [permissionLabel(profile.id), profile.description || permissionDescription(profile.id)],
       fullAccessEnabled: this.#fullAccessEnabled,
     };
@@ -195,7 +197,7 @@ export class CommandRunner {
       fullAccess: isFullAccessProfile(profile.id),
       message: {
         kind: "message",
-        title: "权限将在下一轮生效",
+        title: localText("command.permissionsNextTurn"),
         lines: [
           permissionLabel(profile.id),
           profile.description || permissionDescription(profile.id),
@@ -213,7 +215,7 @@ export class CommandRunner {
     if (this.#fullAccessEnabled) {
       const profile = pickRestrictedProfile(await this.#listPermissionProfiles());
       if (!profile) {
-        throw new PublicError("当前 Codex 没有提供可用的受限权限，无法关闭 Full access。");
+        throw new PublicError(localText("error.noRestrictedPermission"));
       }
       const settingsRevision = this.#settingsRevision;
       await this.#updateSettings(permissionSettings(profile.id));
@@ -224,14 +226,14 @@ export class CommandRunner {
       if (this.#fullAccessEnabled) {
         return {
           kind: "message",
-          title: "Full access 没有关闭",
-          lines: ["Codex 报告当前会话仍在不受沙箱限制地运行。"],
+          title: localText("command.fullAccessStillOn"),
+          lines: [localText("command.fullAccessStillOnDetail")],
           fullAccessEnabled: true,
         };
       }
       return {
         kind: "message",
-        title: "Full access 已关闭",
+        title: localText("command.fullAccessOff"),
         lines: [
           permissionLabel(profile.id),
           profile.description || permissionDescription(profile.id),
@@ -244,7 +246,7 @@ export class CommandRunner {
       candidate.allowed && isFullAccessProfile(candidate.id)
     );
     if (!profile) {
-      throw new PublicError("当前 Codex 没有提供可用的 Full access 权限。");
+      throw new PublicError(localText("error.noFullAccess"));
     }
     const settingsRevision = this.#settingsRevision;
     await this.#updateSettings(permissionSettings(profile.id));
@@ -254,7 +256,7 @@ export class CommandRunner {
     }
     return {
       kind: "message",
-      title: "Full access 已打开",
+      title: localText("command.fullAccessOn"),
       lines: [profile.description || permissionDescription(profile.id)],
       fullAccessEnabled: this.#fullAccessEnabled,
     };
@@ -263,10 +265,10 @@ export class CommandRunner {
   async rename(name: string): Promise<CommandMessage> {
     const trimmed = name.trim();
     if (!trimmed) {
-      throw new PublicError("请在 /rename 后面写一个会话名称。");
+      throw new PublicError(localText("error.renameNeedsName"));
     }
     if (trimmed.length > 160 || trimmed.includes("\n")) {
-      throw new PublicError("会话名称请控制在 160 个字以内，并且不要换行。");
+      throw new PublicError(localText("error.sessionNameTooLong"));
     }
     await this.#transport.request("thread/name/set", {
       threadId: this.#threadId,
@@ -274,7 +276,7 @@ export class CommandRunner {
     });
     return {
       kind: "message",
-      title: "会话已重命名",
+      title: localText("command.renamed"),
       lines: [trimmed],
       sessionName: trimmed,
     };
@@ -292,7 +294,7 @@ export class CommandRunner {
    */
   async rewind(targetTurnId: string): Promise<RewindOutcome> {
     if (this.#runtime.historyMode !== "paginated") {
-      throw new PublicError("这个会话使用旧版历史格式，新版 Codex 不支持回退。");
+      throw new PublicError(localText("error.rewindLegacyHistory"));
     }
 
     let cursor: string | null = null;
@@ -344,13 +346,13 @@ export class CommandRunner {
   async #resolveModel(modelId: string, effort?: string | null) {
     const model = (await listModels(this.#transport)).find((candidate) => candidate.id === modelId);
     if (!model) {
-      throw new PublicError("这个模型不在当前 Codex 返回的可用列表中。");
+      throw new PublicError(localText("error.modelUnavailable"));
     }
     if (
       effort &&
       !model.supportedReasoningEfforts.some((option) => option.reasoningEffort === effort)
     ) {
-      throw new PublicError("这个模型不支持所选思考强度。");
+      throw new PublicError(localText("error.effortUnsupported"));
     }
     return { model, effort: effort || model.defaultReasoningEffort || null };
   }
@@ -359,7 +361,7 @@ export class CommandRunner {
     const profile = (await this.#listPermissionProfiles())
       .find((candidate) => candidate.id === profileId);
     if (!profile || !profile.allowed) {
-      throw new PublicError("这个权限选项当前不可用。");
+      throw new PublicError(localText("error.permissionUnavailable"));
     }
     return profile;
   }
@@ -400,8 +402,16 @@ export class CommandRunner {
   }
 }
 
-function modelLines(displayName: string, effort: string | null): string[] {
-  return [`模型：${displayName}`, `思考强度：${effort || "自动"}`];
+function modelLines(displayName: string, effort: string | null): LocalText[] {
+  return [
+    localText("command.modelLine", { model: displayName }),
+    localText("command.effortLine", { effort: effortLabel(effort) }),
+  ];
+}
+
+/** A reasoning effort name from Codex, or "auto" in the reader's language when none is set. */
+function effortLabel(effort: string | null | undefined): LocalTextParam {
+  return effort || localText("command.effortAuto");
 }
 
 function turnIds(turns: unknown[]): string[] {

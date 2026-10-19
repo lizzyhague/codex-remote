@@ -55,6 +55,23 @@
     });
   }
 
+  // Text the backend sent: final text (often from Codex), or { key, params } shown in this page's language.
+  // A parameter may itself be { key, params }. Anything else gives the fallback.
+  function localize(value, fallback) {
+    if (typeof value === "string") return value;
+    if (!value || typeof value !== "object" || typeof value.key !== "string") return fallback == null ? "" : fallback;
+    var params;
+    if (value.params && typeof value.params === "object") {
+      params = {};
+      for (var name in value.params) {
+        if (!Object.prototype.hasOwnProperty.call(value.params, name)) continue;
+        var param = value.params[name];
+        params[name] = param && typeof param === "object" ? localize(param) : param;
+      }
+    }
+    return t(value.key, params);
+  }
+
   function apply(scope) {
     var target = scope || document;
     if (!target.querySelectorAll) return;
@@ -119,6 +136,7 @@
       update();
     },
     t: t,
+    localize: localize,
     apply: apply,
   };
 }());

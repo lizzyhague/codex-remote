@@ -1,3 +1,4 @@
+import { englishText, localText } from "../shared/local-text.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -107,7 +108,7 @@ test("macOS reports the missing required field instead of guessing a value", () 
   const withoutHeader = intelVmStat.split("\n").slice(1).join("\n");
   const noPageSize = parseDarwinAvailableBytes(withoutHeader, eightGiB);
   assert.equal(noPageSize.ok, false);
-  assert.match(noPageSize.ok ? "" : noPageSize.missing, /页大小/u);
+  assert.match(noPageSize.ok ? "" : noPageSize.missing, /page size/u);
 
   assert.equal(parseDarwinAvailableBytes(appleSiliconVmStat, 0).ok, false);
 });
@@ -158,32 +159,34 @@ test("unsupported platforms fall back to os.freemem() and report the reason", as
 });
 
 test("blocking message for a normal reading includes value, source, and configurable environment variable", () => {
-  const message = memoryLowMessage(
-    "暂时不能新建会话。",
+  const message = englishText(memoryLowMessage(
+    localText("memory.cannotCreateSession"),
     { availableBytes: 512 * 1_048_576, platform: "linux", source: "linux-meminfo" },
     1_024 * 1_048_576,
-  );
-  assert.match(message, /当前可用 512 MiB/u);
-  assert.match(message, /门槛 1024 MiB/u);
+  ));
+  assert.match(message, /A new session can't be started right now/u);
+  assert.match(message, /Available: 512 MiB/u);
+  assert.match(message, /threshold: 1024 MiB/u);
   assert.match(message, /MemAvailable/u);
   assert.match(message, /CODEX_REMOTE_MIN_AVAILABLE_MEMORY_MIB/u);
 });
 
 test("degraded notice explains allowance, failure point, disabled threshold, and configuration location", () => {
-  const message = memoryDegradedMessage(
+  const message = englishText(memoryDegradedMessage(
     {
       availableBytes: 216 * 1_048_576,
       platform: "darwin",
       source: "os-freemem",
-      degradedReason: "vm_stat 输出缺少 Pages occupied by compressor（压缩器占用页）",
+      degradedReason: "vm_stat output is missing Pages occupied by compressor",
     },
     1_024 * 1_048_576,
-  );
-  assert.match(message, /已经放行/u);
+  ));
+  assert.match(message, /allowed through/u);
   assert.match(message, /compressor/u);
   assert.match(message, /os\.freemem\(\)/u);
   assert.match(message, /216 MiB/u);
-  assert.match(message, /1024 MiB 的门槛暂时不生效/u);
-  assert.match(message, /没有启动 Worker 前的内存保护/u);
+  assert.match(message, /1024 MiB threshold is suspended/u);
+  assert.match(message, /without the memory guard/u);
+  assert.match(message, /On macOS, os\.freemem\(\) counts only completely free pages/u);
   assert.match(message, /system-resources\.ts/u);
 });

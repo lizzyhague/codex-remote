@@ -22,7 +22,7 @@ test("metrics isolates threads and uses latest call rather than cumulative token
   assert.equal(b.context, null);
   assert.equal(a.windows[0]?.remainingPercent, 75);
   assert.equal(a.windows[0]?.resetsAt, 1800000000);
-  assert.equal(a.windows[0]?.label, "Codex（5 小时）");
+  assert.deepEqual(a.windows[0]?.label, { key: "metrics.hours", params: { count: 5 } });
   assert.equal(source.calls, 1);
   await store.read("a", source.api);
   assert.equal(source.calls, 2);

@@ -262,7 +262,11 @@ test("closing the server cancels an upload whose downstream never responds", asy
   const response = await withTimeout(uploaded, "浏览器上传响应");
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), {
-    error: { code: "service_stopping", message: "服务正在停止，请稍后重试。" },
+    error: {
+      code: "service_stopping",
+      message: "The service is stopping; try again later.",
+      text: { key: "error.serviceStopping" },
+    },
   });
 });
 

@@ -1,5 +1,9 @@
 /** Interface text from i18n.js; looked up on each call so a language switch applies to the next render. */
 const t = (key, params) => globalThis.codexRemoteI18n ? globalThis.codexRemoteI18n.t(key, params) : key;
+/** Command titles and confirmations come from the backend as { key, params }. */
+const localize = (value) => globalThis.codexRemoteI18n
+  ? globalThis.codexRemoteI18n.localize(value)
+  : typeof value === "string" ? value : "";
 
 export class SlashCommandMenu {
   constructor(options) {
@@ -140,7 +144,7 @@ export class SlashCommandMenu {
       return button;
     }) : [];
     const buttons = commands.map((command) => {
-      const button = commandButton(`/${command.name}`, command.description);
+      const button = commandButton(`/${command.name}`, localize(command.description));
       button.addEventListener("click", () => void this._chooseCommand(command));
       fragment.append(button);
       return button;
@@ -254,8 +258,6 @@ function commandButton(label, description) {
 }
 
 function confirmCommand(command) {
-  const message = typeof command.confirmation === "string" && command.confirmation
-    ? command.confirmation
-    : t("slash.confirm", { name: command.name });
+  const message = localize(command.confirmation) || t("slash.confirm", { name: command.name });
   return window.confirm(message);
 }
