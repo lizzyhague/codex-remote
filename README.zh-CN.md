@@ -1,5 +1,7 @@
 # Codex Remote
 
+[English](README.md) | 中文
+
 Codex Remote 是一个面向单用户、自托管场景的 PWA，用手机或电脑控制远程 Linux 或 macOS
 主机上的 Codex CLI。消息在浏览器本地编辑，完整发送后才经过网络，因此不会受到
 SSH 逐键输入延迟的影响。
@@ -26,6 +28,7 @@ SSH 逐键输入延迟的影响。
 - 长会话分页加载，完成消息渲染安全的 Markdown 子集；
 - 在登录后查看项目根目录内的 Markdown 和图片，不提供源码查看、下载或目录浏览；
 - 提供压缩、重命名、回退等斜杠命令；模型和权限由输入框旁的下拉承担，用量在顶部常驻信息条；
+- 界面提供中文和英文，默认跟随浏览器，选择保存在浏览器里；
 - 可安装为 PWA；联网时普通刷新即可加载新版外壳。
 
 当前未实现：Diff 展示、多人账户、任意路径访问、把 App Server 直接暴露到网络、
@@ -117,13 +120,13 @@ curl http://127.0.0.1:3000/healthz
 `3000` 是本地开发默认值。正式部署应显式设置回环端口；HTTPS 入口端口由
 Tailscale Serve 或其它反向代理单独选择，两者不要求使用相同数字。
 
-然后选择一种 HTTPS 入口，说明都在 [`docs/deployment.md`](docs/deployment.md)：
+然后选择一种 HTTPS 入口，说明都在 [`docs/deployment.zh-CN.md`](docs/deployment.zh-CN.md)：
 
 - Tailscale Serve（第 4a 节）：访问设备需要加入 tailnet，默认推荐；
 - 公网 HTTPS（第 4b 节）：普通浏览器可直接访问，但需要承担额外的公网攻击面。
 
-Linux / macOS 常驻运行、更新和日志见 [运维说明](docs/operations.md)；多主机见
-`docs/deployment.md` 第 5 节。
+Linux / macOS 常驻运行、更新和日志见 [运维说明](docs/operations.zh-CN.md)；多主机见
+`docs/deployment.zh-CN.md` 第 6 节。
 
 ## 权限默认值
 
@@ -176,7 +179,9 @@ Codex 仍负责保存原生会话和完整历史。为了支持后台执行，Co
 cookie，令牌本身不写入浏览器存储。cookie 不依赖内存会话表，服务重启后仍然有效；
 更换服务端令牌会立即让所有旧 cookie 失效。
 
-更完整的信任边界见 [架构说明](docs/architecture.md) 和 [安全策略](SECURITY.md)。
+外观、界面语言和显示时区只保存在浏览器里，不发送到服务器。
+
+更完整的信任边界见 [架构说明](docs/architecture.zh-CN.md) 和 [安全策略](SECURITY.zh-CN.md)。
 
 ## 开发与检查
 
@@ -199,7 +204,7 @@ experimental 初始化和只读协议查询，不创建 thread，也不调用模
 `npm run smoke:server` 会启动临时网页后端并读取真实项目/会话目录，同样不在普通单测中运行。
 
 `src/generated/` 是生成器的完整输出，不手工裁剪或编辑。升级步骤、`--write` 用法和差异审查清单
-见[运维说明](docs/operations.md#codex-cli-与-app-server-协议升级)。类型检查和 fake transport
+见[运维说明](docs/operations.zh-CN.md#codex-cli-与-app-server-协议升级)。类型检查和 fake transport
 单测不能替代真实 App Server 协议检查。
 
 ## 许可证与商标

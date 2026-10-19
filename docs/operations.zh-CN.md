@@ -1,5 +1,7 @@
 # 运维说明
 
+[English](operations.md) | 中文
+
 下面的 `3000` 都要换成环境文件里实际的 `CODEX_REMOTE_PORT`。
 
 ## 更新
@@ -89,7 +91,7 @@ macOS：看运行用户日志目录下的 `codex-remote.log` 和 `codex-remote.e
 
 目录 App Server 结束时网页后端会主动退出，由 `Restart=on-failure` 拉起。启动阶段（目录
 App Server 初始化和启动时的回收站清理）两分钟内没能开始监听，也会以失败退出，日志里是
-“启动超过 120 秒仍未就绪”，未完成的永久删除留到下次启动续做。启动期间或运行中收到
+“Startup was not ready after 120 seconds”，未完成的永久删除留到下次启动续做。启动期间或运行中收到
 `SIGINT`/`SIGTERM` 属于计划内停止，即使目录 App Server 同时被信号结束，退出码也保持 0。单个会话
 Worker 异常退出只会把那个任务标成 `failed`，不影响 HTTP 服务和其它 Worker。服务反复
 重启时先看日志里的 App Server / Worker 错误，别只盯着网页入口。
@@ -155,10 +157,13 @@ Worker 缓存名。任何前端或后端改动都要重启才生效。
 自动删除，已打开的旧页面在接下来两次发布内仍能取到资源。部署时不要手工清空这个目录。
 浏览器的离线缓存同样只保留当前离线页和上一套离线页的资源。
 
+界面文字集中在 `public/strings.js`，每个编号并排写中文和英文。后端发给页面的文字也使用同一份
+文件里的编号；有测试检查前后端用到的每个编号都在文件里。
+
 ## Origin 与反向代理
 
 默认只接受与 `Host` 或 `X-Forwarded-Host` 同源的请求。保留 Host 的 Tailscale Serve、
-Caddy、Nginx 都不用额外配置。只有日志里出现"拒绝了来源不匹配的 WebSocket 升级请求"
+Caddy、Nginx 都不用额外配置。只有日志里出现“Rejected a WebSocket upgrade from a mismatched origin”
 时，才把完整 Origin 加进 `CODEX_REMOTE_ALLOWED_ORIGINS`，逗号分隔，不要用通配符。
 
 ## 排错

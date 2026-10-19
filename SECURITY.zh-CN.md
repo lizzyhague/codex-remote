@@ -1,5 +1,7 @@
 # 安全策略
 
+[English](SECURITY.md) | 中文
+
 ## 报告漏洞
 
 请优先使用 GitHub 仓库的 **Report a vulnerability** 私密报告入口，不要在公开 Issue
