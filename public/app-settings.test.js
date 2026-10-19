@@ -47,7 +47,7 @@ test("the collapse action is a labelled left-chevron icon", () => {
 });
 
 test("application settings keeps timezone controls and does not copy companion-only chrome", () => {
-  assert.match(appDialog, /<h2 id="app-settings-title">应用设置<\/h2>/u);
+  assert.match(appDialog, /<h2 id="app-settings-title"[^>]*>应用设置<\/h2>/u);
   assert.ok(appDialog.indexOf("外观") < appDialog.indexOf("新会话默认值"));
   assert.match(appDialog, />跟随设备</u);
   assert.match(appDialog, />城市</u);
@@ -62,7 +62,7 @@ test("application settings keeps timezone controls and does not copy companion-o
   assert.doesNotMatch(appDialog, /给伴的话/u);
   assert.doesNotMatch(appDialog, /role="tablist"/u);
   for (const city of DISPLAY_TIME_ZONES) {
-    assert.match(appDialog, new RegExp(`<option value="${city.id}">${city.label}</option>`));
+    assert.match(appDialog, new RegExp(`<option value="${city.id}" data-i18n="[^"]+">${city.label}</option>`));
   }
 });
 
@@ -82,7 +82,7 @@ test("developer instructions sit in the app-settings dialog with companion field
   );
   assert.match(
     appDialog,
-    /<label for="developer-instructions-input">附加 Developer 指令<\/label><button /u,
+    /<label for="developer-instructions-input"[^>]*>附加 Developer 指令<\/label><button /u,
   );
   assert.match(
     appDialog,
@@ -94,7 +94,7 @@ test("developer instructions sit in the app-settings dialog with companion field
   );
   const start = appDialog.indexOf('<div id="info-developer-instructions"');
   const info = appDialog.slice(start, appDialog.indexOf("</div>", start));
-  const paragraphs = [...info.matchAll(/<p>(.*?)<\/p>/gsu)]
+  const paragraphs = [...info.matchAll(/<p[^>]*>(.*?)<\/p>/gsu)]
     .map((match) => match[1].replace(/<[^>]+>/gu, ""));
   assert.deepEqual(paragraphs, [
     "这段内容由 Codex Remote 后端保存。连到同一后端的设备共用这一份；不同后端之间不会同步。",

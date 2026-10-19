@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#141616">
     <meta name="color-scheme" content="dark light">
-    <meta name="description" content="通过私人网络使用远程主机上的 Codex">
+    <meta name="description" content="Use Codex on a remote host over a private network.">
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="icon" href="/icon-192.png" type="image/png" sizes="192x192">
     <script src="/theme.js"></script>
@@ -29,7 +29,7 @@
     </section>
 
     <div id="app-view" class="app-view" data-sidebar-collapsed="false" data-mobile-sidebar-open="false" hidden>
-      <aside id="session-sidebar" class="session-sidebar" aria-label="会话导航">
+      <aside id="session-sidebar" class="session-sidebar" aria-label="会话导航" data-i18n-aria-label="sidebar.navigation">
         <div class="sidebar-heading">
           <span class="sidebar-brand">
             <svg class="sidebar-brand-icon" viewBox="0 0 512 512" aria-hidden="true"><rect x="132" y="149" width="248" height="46" rx="23" fill="currentColor"/><rect x="132" y="233" width="154" height="46" rx="23" fill="currentColor"/><rect x="132" y="317" width="248" height="46" rx="23" fill="currentColor"/><circle cx="344" cy="256" r="27" fill="currentColor"/></svg>
@@ -44,6 +44,8 @@
               title="应用设置"
               aria-haspopup="dialog"
               aria-controls="app-settings-dialog"
+              data-i18n-aria-label="settings.title"
+              data-i18n-title="settings.title"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -51,7 +53,7 @@
                 <circle cx="12" cy="12" r="3"/>
               </svg>
             </button>
-            <button id="collapse-sidebar-button" class="quiet small icon-button" type="button" aria-label="收起会话列表" title="收起会话列表">
+            <button id="collapse-sidebar-button" class="quiet small icon-button" type="button" aria-label="收起会话列表" title="收起会话列表" data-i18n-aria-label="sidebar.collapse" data-i18n-title="sidebar.collapse">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
             </button>
           </div>
@@ -60,33 +62,33 @@
         <div class="project-controls">
           <div class="project-row">
             <label>
-              <span class="visually-hidden">项目</span>
-              <select id="project-select" aria-label="项目"></select>
+              <span class="visually-hidden" data-i18n="sidebar.project">项目</span>
+              <select id="project-select" aria-label="项目" data-i18n-aria-label="sidebar.project"></select>
               <svg class="directory-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" transform="rotate(-90 12 12)"/></svg>
             </label>
-            <button id="new-session-button" class="quiet small icon-button create-icon-button" type="button" aria-label="新会话" title="新会话">
+            <button id="new-session-button" class="quiet small icon-button create-icon-button" type="button" aria-label="新会话" title="新会话" data-i18n-aria-label="sidebar.newSession" data-i18n-title="sidebar.newSession">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 17.5A3.5 3.5 0 0 1 3 14V7a3 3 0 0 1 3-3h9a3 3 0 0 1 3 3v3"/><path d="m5 17.5-1 3.5 4-2h3m7-5v6m-3-3h6"/></svg>
             </button>
           </div>
         </div>
 
         <label class="session-search">
-          <span class="visually-hidden">搜索会话</span>
-          <input id="session-search-input" type="search" maxlength="256" placeholder="搜索会话">
+          <span class="visually-hidden" data-i18n="sidebar.search">搜索会话</span>
+          <input id="session-search-input" type="search" maxlength="256" placeholder="搜索会话" data-i18n-placeholder="sidebar.search">
         </label>
 
         <div class="session-list-heading">
-          <button id="session-view-back-button" class="quiet small icon-button" type="button" aria-label="返回最近会话" title="返回最近会话" hidden>
+          <button id="session-view-back-button" class="quiet small icon-button" type="button" aria-label="返回最近会话" title="返回最近会话" data-i18n-aria-label="sidebar.backToRecent" data-i18n-title="sidebar.backToRecent" hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
           </button>
           <strong id="session-view-title">最近会话</strong>
-          <button id="archived-sessions-button" class="quiet small icon-button" type="button" aria-label="已归档" title="已归档">
+          <button id="archived-sessions-button" class="quiet small icon-button" type="button" aria-label="已归档" title="已归档" data-i18n-aria-label="sidebar.archived" data-i18n-title="sidebar.archived">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
           </button>
-          <button id="trash-sessions-button" class="quiet small icon-button" type="button" aria-label="回收站" title="回收站">
+          <button id="trash-sessions-button" class="quiet small icon-button" type="button" aria-label="回收站" title="回收站" data-i18n-aria-label="sidebar.trash" data-i18n-title="sidebar.trash">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
           </button>
-          <button id="select-sessions-button" class="quiet small icon-button" type="button" aria-label="选择" title="选择">
+          <button id="select-sessions-button" class="quiet small icon-button" type="button" aria-label="选择" title="选择" data-i18n-aria-label="sidebar.select">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="m9 12 2 2 4-4"/></svg>
           </button>
         </div>
@@ -94,16 +96,16 @@
         <div id="selection-heading" class="selection-heading" hidden></div>
 
         <div id="session-list" class="session-list" role="list" aria-live="polite"></div>
-        <button id="load-more-sessions-button" class="quiet load-more-sessions" type="button" hidden>加载更多</button>
+        <button id="load-more-sessions-button" class="quiet load-more-sessions" type="button" hidden data-i18n="sidebar.loadMore">加载更多</button>
 
       </aside>
 
-      <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭会话列表" tabindex="-1"></button>
+      <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭会话列表" tabindex="-1" data-i18n-aria-label="sidebar.close"></button>
 
       <section id="conversation-shell" class="conversation-shell">
         <header class="app-header">
           <div class="conversation-heading">
-            <button id="open-sidebar-button" class="quiet sidebar-open-button" type="button" aria-label="打开会话列表">☰</button>
+            <button id="open-sidebar-button" class="quiet sidebar-open-button" type="button" aria-label="打开会话列表" data-i18n-aria-label="sidebar.open">☰</button>
             <div>
               <div class="conversation-title-row">
                 <strong id="current-session-title">Codex Remote</strong>
@@ -131,6 +133,7 @@
           id="approval-list"
           class="approval-list"
           aria-label="所有会话的待处理请求"
+          data-i18n-aria-label="approvals.list"
           aria-live="assertive"
         ></aside>
 
@@ -138,7 +141,7 @@
           <span id="notice-text"></span>
           <span class="notice-actions">
             <button id="notice-action-button" class="quiet small" type="button" hidden></button>
-            <button id="notice-close-button" class="quiet small" type="button" aria-label="关闭提示">关闭</button>
+            <button id="notice-close-button" class="quiet small" type="button" aria-label="关闭提示" data-i18n-aria-label="notice.close" data-i18n="common.close">关闭</button>
           </span>
         </div>
 
@@ -154,23 +157,24 @@
               maxlength="524288"
               placeholder="先选择或新建会话"
               aria-label="消息"
+              data-i18n-aria-label="composer.message"
               disabled
             ></textarea>
             <div class="composer-actions">
-              <div class="composer-action-scroll" aria-label="快捷操作">
-                <button id="command-menu-button" class="quiet composer-shortcut" type="button" aria-label="更多操作" title="更多操作" aria-haspopup="listbox" aria-controls="slash-menu" aria-expanded="false" disabled>+</button>
+              <div class="composer-action-scroll" aria-label="快捷操作" data-i18n-aria-label="composer.actions">
+                <button id="command-menu-button" class="quiet composer-shortcut" type="button" aria-label="更多操作" title="更多操作" data-i18n-aria-label="composer.moreActions" data-i18n-title="composer.moreActions" aria-haspopup="listbox" aria-controls="slash-menu" aria-expanded="false" disabled>+</button>
                 <button id="model-picker-button" class="quiet composer-select-button" type="button" aria-haspopup="listbox" aria-controls="composer-picker-menu" aria-expanded="false" disabled>
-                  <span class="composer-control-name">模型</span>
+                  <span class="composer-control-name" data-i18n="composer.model">模型</span>
                   <span id="model-picker-label" class="composer-control-value">默认</span>
                   <svg class="composer-control-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>
                 </button>
                 <button id="permission-picker-button" class="quiet composer-select-button" type="button" aria-haspopup="listbox" aria-controls="composer-picker-menu" aria-expanded="false" disabled>
-                  <span class="composer-control-name">权限</span>
+                  <span class="composer-control-name" data-i18n="composer.permissions">权限</span>
                   <span id="permission-picker-label" class="composer-control-value">默认</span>
                   <svg class="composer-control-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>
                 </button>
               </div>
-              <span class="composer-hint">电脑可按 Ctrl / ⌘ + Enter 发送</span>
+              <span class="composer-hint" data-i18n="composer.sendHint">电脑可按 Ctrl / ⌘ + Enter 发送</span>
               <button id="task-button" class="primary task-button" type="submit" data-action="send" aria-label="发送" title="发送" disabled>
                 <svg class="task-send-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M8 3 4 7M8 3l4 4"/></svg>
                 <span class="task-stop-icon" aria-hidden="true"></span>
@@ -184,23 +188,23 @@
     <dialog id="app-settings-dialog" class="application-settings-dialog" aria-labelledby="app-settings-title">
       <form id="app-settings-form" method="dialog" class="application-settings-card">
         <div class="application-settings-heading">
-          <h2 id="app-settings-title">应用设置</h2>
-          <button id="app-settings-close-button" class="quiet small" type="button" aria-label="关闭">关闭</button>
+          <h2 id="app-settings-title" data-i18n="settings.title">应用设置</h2>
+          <button id="app-settings-close-button" class="quiet small" type="button" aria-label="关闭" data-i18n-aria-label="common.close" data-i18n="common.close">关闭</button>
         </div>
         <div class="application-settings-body">
           <section id="theme-setting" class="application-settings-section theme-setting">
             <div class="theme-text">
-              <h3 id="theme-label" class="application-settings-title">外观</h3>
-              <p class="field-help">只影响当前浏览器。</p>
+              <h3 id="theme-label" class="application-settings-title" data-i18n="settings.theme">外观</h3>
+              <p class="field-help" data-i18n="settings.browserOnly">只影响当前浏览器。</p>
             </div>
             <div id="theme-options" class="theme-options" role="group" aria-labelledby="theme-label">
-              <button type="button" data-theme-choice="system" aria-pressed="false" aria-label="跟随系统" title="跟随系统">
+              <button type="button" data-theme-choice="system" aria-pressed="false" aria-label="跟随系统" title="跟随系统" data-i18n-aria-label="settings.themeSystem" data-i18n-title="settings.themeSystem">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/></svg>
               </button>
-              <button type="button" data-theme-choice="light" aria-pressed="false" aria-label="浅色" title="浅色">
+              <button type="button" data-theme-choice="light" aria-pressed="false" aria-label="浅色" title="浅色" data-i18n-aria-label="settings.themeLight" data-i18n-title="settings.themeLight">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="5.6"/><path d="M12 2.2v1.3M12 20.5v1.3M2.2 12h1.3M20.5 12h1.3M5.1 5.1l.9.9M18 18l.9.9M5.1 18.9l.9-.9M18 6l.9-.9"/></svg>
               </button>
-              <button type="button" data-theme-choice="dark" aria-pressed="false" aria-label="深色" title="深色">
+              <button type="button" data-theme-choice="dark" aria-pressed="false" aria-label="深色" title="深色" data-i18n-aria-label="settings.themeDark" data-i18n-title="settings.themeDark">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.7a10 10 0 1 0 9.5 14 8 8 0 0 1-9.5-14z"/></svg>
               </button>
             </div>
@@ -220,30 +224,30 @@
           </section>
           <section class="application-settings-section">
             <div class="application-settings-section-head">
-              <h3 class="application-settings-title">新会话默认值<button id="model-defaults-info-button" type="button" class="field-info" popovertarget="info-model-defaults" aria-label="关于新会话默认值的说明">i</button></h3>
+              <h3 class="application-settings-title"><span data-i18n="settings.modelDefaults">新会话默认值</span><button id="model-defaults-info-button" type="button" class="field-info" popovertarget="info-model-defaults" aria-label="关于新会话默认值的说明" data-i18n-aria-label="settings.modelDefaultsAbout">i</button></h3>
             </div>
             <div id="info-model-defaults" class="field-info-popover" popover>
-              <p>默认模型、思考强度和权限由 Codex Remote 后端保存，连到同一后端的设备共用。</p>
-              <p>它们只在新建会话时使用。打开旧会话不会改变原来的选择，会话里临时切换也不会写回这里。</p>
-              <p>「跟随 Codex 默认」不会固定当前默认值；以后 Codex 的默认值变化时，新会话会跟着变化。</p>
-              <p>权限与 Codex 桌面端一致：完全访问不受沙箱限制，也不再询问批准；其他权限遇到越界或敏感操作时会询问。默认权限不可用时，这次新会话改用 Codex 默认权限并给出提示。</p>
-              <p>设置窗口打开时读取一次后端内容；要查看其他设备后来保存的内容，请关闭后重新打开。</p>
+              <p data-i18n="settings.modelDefaultsShared">默认模型、思考强度和权限由 Codex Remote 后端保存，连到同一后端的设备共用。</p>
+              <p data-i18n="settings.modelDefaultsNewOnly">它们只在新建会话时使用。打开旧会话不会改变原来的选择，会话里临时切换也不会写回这里。</p>
+              <p data-i18n="settings.modelDefaultsFollow">「跟随 Codex 默认」不会固定当前默认值；以后 Codex 的默认值变化时，新会话会跟着变化。</p>
+              <p data-i18n="settings.modelDefaultsPermissions">权限与 Codex 桌面端一致：完全访问不受沙箱限制，也不再询问批准；其他权限遇到越界或敏感操作时会询问。默认权限不可用时，这次新会话改用 Codex 默认权限并给出提示。</p>
+              <p data-i18n="settings.readOnOpen">设置窗口打开时读取一次后端内容；要查看其他设备后来保存的内容，请关闭后重新打开。</p>
             </div>
             <label class="application-settings-row" for="default-model-select">
-              <span>默认模型</span>
+              <span data-i18n="settings.defaultModel">默认模型</span>
               <select id="default-model-select" disabled>
                 <option value="">正在加载……</option>
               </select>
             </label>
             <label class="application-settings-row" for="default-reasoning-effort-select">
-              <span>默认思考强度</span>
+              <span data-i18n="settings.defaultReasoningEffort">默认思考强度</span>
               <select id="default-reasoning-effort-select" disabled>
                 <option value="">跟随 Codex 默认</option>
               </select>
             </label>
             <p id="model-defaults-status" class="field-help" aria-live="polite">正在读取可用模型……</p>
             <label class="application-settings-row" for="default-permissions-select">
-              <span>默认权限</span>
+              <span data-i18n="settings.defaultPermissions">默认权限</span>
               <select id="default-permissions-select" disabled>
                 <option value="">正在加载……</option>
               </select>
@@ -252,49 +256,50 @@
           </section>
           <section class="application-settings-section">
             <div class="application-settings-section-head">
-              <h3 class="application-settings-title"><label for="developer-instructions-input">附加 Developer 指令</label><button id="developer-instructions-info-button" type="button" class="field-info" popovertarget="info-developer-instructions" aria-label="关于附加 Developer 指令的说明">i</button></h3>
+              <h3 class="application-settings-title"><label for="developer-instructions-input" data-i18n="settings.developerInstructions">附加 Developer 指令</label><button id="developer-instructions-info-button" type="button" class="field-info" popovertarget="info-developer-instructions" aria-label="关于附加 Developer 指令的说明" data-i18n-aria-label="settings.developerInstructionsAbout">i</button></h3>
             </div>
             <div id="info-developer-instructions" class="field-info-popover" popover>
-              <p>这段内容由 Codex Remote 后端保存。连到同一后端的设备共用这一份；不同后端之间不会同步。</p>
-              <p>设置窗口打开时读取一次后端内容；要查看其他设备后来保存的内容，请关闭后重新打开。</p>
-              <p>新建或重新载入会话时，会通过 Codex App Server 的 developerInstructions 注入。</p>
-              <p>Developer 指令的优先级高于用户消息。</p>
-              <p>它不会替换 Codex 自带的基础指令，也不能用来控制完整的系统提示词。</p>
-              <p>留空时只使用 Codex Remote 内置的 Developer 指令。改动不会影响已经在运行的任务。</p>
+              <p data-i18n="settings.developerInstructionsShared">这段内容由 Codex Remote 后端保存。连到同一后端的设备共用这一份；不同后端之间不会同步。</p>
+              <p data-i18n="settings.readOnOpen">设置窗口打开时读取一次后端内容；要查看其他设备后来保存的内容，请关闭后重新打开。</p>
+              <p data-i18n="settings.developerInstructionsInjection">新建或重新载入会话时，会通过 Codex App Server 的 developerInstructions 注入。</p>
+              <p data-i18n="settings.developerInstructionsPriority">Developer 指令的优先级高于用户消息。</p>
+              <p data-i18n="settings.developerInstructionsScope">它不会替换 Codex 自带的基础指令，也不能用来控制完整的系统提示词。</p>
+              <p data-i18n="settings.developerInstructionsEmpty">留空时只使用 Codex Remote 内置的 Developer 指令。改动不会影响已经在运行的任务。</p>
             </div>
             <textarea
               id="developer-instructions-input"
               rows="5"
               maxlength="131072"
               placeholder="输入希望 Codex 始终遵循的附加指令……"
+              data-i18n-placeholder="settings.developerInstructionsPlaceholder"
             ></textarea>
-            <p class="field-help">用于补充 Codex 的协作方式；在新建或重新载入会话时生效。</p>
+            <p class="field-help" data-i18n="settings.developerInstructionsHelp">用于补充 Codex 的协作方式；在新建或重新载入会话时生效。</p>
           </section>
           <section class="application-settings-section">
-            <h3 class="application-settings-title">显示时区</h3>
+            <h3 class="application-settings-title" data-i18n="settings.displayTimezone">显示时区</h3>
             <label class="application-settings-row">
-              <span>跟随设备</span>
+              <span data-i18n="settings.followDevice">跟随设备</span>
               <input id="follow-device-timezone-input" type="checkbox">
             </label>
             <label class="application-settings-row">
-              <span>城市</span>
+              <span data-i18n="settings.city">城市</span>
               <select id="display-timezone-city-select">
-                <option value="Asia/Shanghai">上海</option>
-                <option value="Asia/Tokyo">东京</option>
-                <option value="Europe/London">伦敦</option>
-                <option value="Europe/Paris">巴黎</option>
-                <option value="America/New_York">纽约</option>
-                <option value="America/Los_Angeles">洛杉矶</option>
+                <option value="Asia/Shanghai" data-i18n="city.shanghai">上海</option>
+                <option value="Asia/Tokyo" data-i18n="city.tokyo">东京</option>
+                <option value="Europe/London" data-i18n="city.london">伦敦</option>
+                <option value="Europe/Paris" data-i18n="city.paris">巴黎</option>
+                <option value="America/New_York" data-i18n="city.newYork">纽约</option>
+                <option value="America/Los_Angeles" data-i18n="city.losAngeles">洛杉矶</option>
               </select>
             </label>
-            <p class="field-help">仅影响这台设备上的时间显示，自动考虑夏令时。</p>
+            <p class="field-help" data-i18n="settings.displayTimezoneHelp">仅影响这台设备上的时间显示，自动考虑夏令时。</p>
           </section>
         </div>
         <div class="application-settings-footer">
           <p id="app-settings-status" class="application-settings-status" aria-live="polite"></p>
           <div class="application-settings-actions">
-            <button id="app-settings-cancel-button" class="quiet" type="button">取消</button>
-            <button id="app-settings-save-button" class="primary" type="submit">保存</button>
+            <button id="app-settings-cancel-button" class="quiet" type="button" data-i18n="common.cancel">取消</button>
+            <button id="app-settings-save-button" class="primary" type="submit" data-i18n="common.save">保存</button>
           </div>
         </div>
       </form>
@@ -305,7 +310,7 @@
         <h2 id="app-alert-title">提示</h2>
         <p id="app-alert-message"></p>
         <div class="rename-actions">
-          <button class="primary" type="submit" autofocus>知道了</button>
+          <button class="primary" type="submit" autofocus data-i18n="common.gotIt">知道了</button>
         </div>
       </form>
     </dialog>
@@ -319,7 +324,7 @@
         <h2 id="confirm-dialog-title">确认</h2>
         <div id="confirm-dialog-message" class="confirm-dialog-copy"></div>
         <div class="alert-actions">
-          <button id="confirm-dialog-cancel-button" class="quiet" type="button">取消</button>
+          <button id="confirm-dialog-cancel-button" class="quiet" type="button" data-i18n="common.cancel">取消</button>
           <button id="confirm-dialog-accept-button" class="primary" type="submit" value="confirm">
             确定
           </button>
@@ -328,13 +333,13 @@
     </dialog>
     <dialog id="rename-dialog" aria-labelledby="rename-heading">
       <form id="rename-form">
-        <h2 id="rename-heading">重命名</h2>
-        <label for="rename-input">会话名称</label>
+        <h2 id="rename-heading" data-i18n="rename.title">重命名</h2>
+        <label for="rename-input" data-i18n="rename.label">会话名称</label>
         <input id="rename-input" type="text" maxlength="160" required autocomplete="off">
         <p id="rename-status" role="status"></p>
         <div class="rename-actions">
-          <button id="rename-cancel" type="button">取消</button>
-          <button id="rename-save" class="primary" type="submit">保存</button>
+          <button id="rename-cancel" type="button" data-i18n="common.cancel">取消</button>
+          <button id="rename-save" class="primary" type="submit" data-i18n="common.save">保存</button>
         </div>
       </form>
     </dialog>
