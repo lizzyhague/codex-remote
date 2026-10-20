@@ -1120,7 +1120,6 @@ button.icon-button svg {
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-1);
 }
 
 .conversation-heading {
