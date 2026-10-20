@@ -9,7 +9,6 @@ import {
   deviceTimeZone,
   formatDisplayTime,
   loadDisplayTimezonePreference,
-  normalizeDisplayTimezonePreference,
   resolveDisplayTimeZone,
   saveDisplayTimezonePreference,
 } from "./display-timezone.js";
@@ -74,12 +73,10 @@ function harness({ stored = SHANGHAI } = {}) {
     deviceTimeZone,
     formatDisplayTime,
     resolveDisplayTimeZone,
-    normalizeDisplayTimezonePreference,
     loadDisplayTimezonePreference: () => loadDisplayTimezonePreference(localStorage),
     saveDisplayTimezonePreference: (input) => saveDisplayTimezonePreference(input, localStorage),
     state: {
       displayTimezone: loadDisplayTimezonePreference(localStorage),
-      displayTimezoneDraft: null,
       developerInstructions: "",
       defaultModel: null,
       defaultReasoningEffort: null,
@@ -144,9 +141,9 @@ function harness({ stored = SHANGHAI } = {}) {
       await tick();
       assert.equal(dialog.open, true);
     },
-    pickCity(city) {
-      elements.displayTimezoneCitySelect.value = city;
-      elements.displayTimezoneCitySelect.listeners.change();
+    pickTimezone(value) {
+      elements.displayTimezoneSelect.value = value;
+      elements.displayTimezoneSelect.listeners.change();
     },
     otherTabSaves(prefs) {
       storage.set(DISPLAY_TIMEZONE_KEY, JSON.stringify(prefs));
@@ -168,42 +165,37 @@ const closePaths = {
 };
 
 for (const [label, close] of Object.entries(closePaths)) {
-  test(`a timezone change previews immediately but ${label} rolls it back unsaved`, async () => {
+  test(`a timezone change applies and persists immediately, and ${label} keeps it`, async () => {
     const h = harness();
     await h.open();
     assert.match(h.shown, /20:00/u);
 
-    h.pickCity("Asia/Tokyo");
-    assert.match(h.shown, /21:00/u, "page times preview the draft");
-    assert.match(h.lastRendered, /21:00/u, "visible lists are redrawn with the preview");
-    assert.deepEqual(h.stored(), SHANGHAI, "the preview is not written to local storage");
+    h.pickTimezone("Asia/Tokyo");
+    assert.match(h.shown, /21:00/u);
+    assert.match(h.lastRendered, /21:00/u, "visible lists are redrawn with the new zone");
+    assert.deepEqual(h.stored(), { followDevice: false, cityTimeZone: "Asia/Tokyo" });
 
     close(h);
     assert.equal(h.elements.appSettingsDialog.open, false);
-    assert.equal(h.context.state.displayTimezoneDraft, null);
-    assert.match(h.shown, /20:00/u);
-    assert.match(h.lastRendered, /20:00/u, "visible lists are redrawn with the saved zone");
-    assert.deepEqual(h.stored(), SHANGHAI);
+    assert.match(h.shown, /21:00/u);
+    assert.deepEqual(h.stored(), { followDevice: false, cityTimeZone: "Asia/Tokyo" });
 
     await h.open();
-    assert.equal(h.elements.displayTimezoneCitySelect.value, "Asia/Shanghai");
-    assert.equal(h.elements.followDeviceTimezoneInput.checked, false);
+    assert.equal(h.elements.displayTimezoneSelect.value, "Asia/Tokyo");
   });
 }
 
-test("save commits the timezone draft together with the backend settings", async () => {
+test("save sends backend settings without touching the timezone", async () => {
   const h = harness();
   await h.open();
-  h.pickCity("America/New_York");
   h.elements.developerInstructionsInput.value = "be brief";
   h.respond({ developerInstructions: "be brief" });
   h.elements.appSettingsForm.listeners.submit({ preventDefault() {} });
   await tick();
 
   assert.equal(h.elements.appSettingsDialog.open, false);
-  assert.deepEqual(h.stored(), { followDevice: false, cityTimeZone: "America/New_York" });
-  assert.match(h.shown, /07:00/u, "closing after save does not roll back the committed zone");
-  assert.equal(h.context.state.displayTimezoneDraft, null);
+  assert.equal(h.requests.at(-1).developerInstructions, "be brief");
+  assert.deepEqual(h.stored(), SHANGHAI);
 });
 
 test("an unavailable saved model and effort stay visible", async () => {
@@ -355,65 +347,41 @@ test("an unavailable saved permission stays visible and a failed list keeps it o
   assert.equal(failed.requests.at(-1).defaultPermissions, ":danger-full-access");
 });
 
-test("a failed save keeps the dialog and draft; cancelling afterwards still rolls back", async () => {
+test("a failed save keeps the dialog and its backend draft", async () => {
   const h = harness();
   await h.open();
-  h.pickCity("Asia/Tokyo");
+  h.elements.developerInstructionsInput.value = "还要继续改";
   h.respond(new Error("写入失败。"));
   h.elements.appSettingsForm.listeners.submit({ preventDefault() {} });
-  assert.equal(h.elements.followDeviceTimezoneInput.disabled, true, "timezone is locked while saving");
-  assert.equal(h.elements.displayTimezoneCitySelect.disabled, true);
+  assert.equal(h.elements.developerInstructionsInput.disabled, true);
   await tick();
 
   assert.equal(h.elements.appSettingsDialog.open, true);
   assert.equal(h.elements.appSettingsStatus.textContent, "写入失败。");
-  assert.equal(h.elements.followDeviceTimezoneInput.disabled, false);
-  assert.equal(h.elements.displayTimezoneCitySelect.disabled, false);
-  assert.equal(h.elements.displayTimezoneCitySelect.value, "Asia/Tokyo");
-  assert.deepEqual(h.stored(), SHANGHAI);
-  assert.match(h.shown, /21:00/u);
-
-  h.elements.appSettingsCancelButton.listeners.click();
-  assert.deepEqual(h.stored(), SHANGHAI);
-  assert.match(h.shown, /20:00/u);
+  assert.equal(h.elements.developerInstructionsInput.value, "还要继续改");
+  assert.equal(h.elements.developerInstructionsInput.disabled, false);
 });
 
-test("follow-device is part of the same draft and keeps the previous city", async () => {
+test("following the device keeps the previous city for switching back", async () => {
   const h = harness({ stored: { followDevice: false, cityTimeZone: "Asia/Tokyo" } });
   await h.open();
-  h.elements.followDeviceTimezoneInput.checked = true;
-  h.elements.followDeviceTimezoneInput.listeners.change();
-  assert.equal(h.elements.displayTimezoneCitySelect.disabled, true);
-  assert.equal(h.elements.displayTimezoneCitySelect.value, "Asia/Tokyo");
-  assert.deepEqual(h.stored(), { followDevice: false, cityTimeZone: "Asia/Tokyo" });
+  assert.equal(h.elements.displayTimezoneSelect.value, "Asia/Tokyo");
 
-  h.elements.appSettingsCloseButton.listeners.click();
-  assert.equal(h.elements.followDeviceTimezoneInput.checked, false);
-  assert.equal(h.elements.displayTimezoneCitySelect.disabled, false);
+  h.pickTimezone("device");
+  assert.equal(h.elements.displayTimezoneSelect.value, "device");
+  assert.deepEqual(h.stored(), { followDevice: true, cityTimeZone: "Asia/Tokyo" });
+  assert.equal(h.shown, formatDisplayTime(STAMP * 1_000, deviceTimeZone()));
 });
 
-test("another tab's saved zone refreshes the page unless a draft is being previewed", async () => {
+test("another tab's saved zone refreshes the page and the open select", async () => {
   const h = harness();
   h.otherTabSaves({ followDevice: false, cityTimeZone: "Asia/Tokyo" });
   assert.match(h.shown, /21:00/u);
   assert.match(h.lastRendered, /21:00/u);
-  assert.equal(h.elements.displayTimezoneCitySelect.value, "Asia/Tokyo");
+  assert.equal(h.elements.displayTimezoneSelect.value, "Asia/Tokyo");
 
   await h.open();
-  h.pickCity("America/New_York");
   h.otherTabSaves({ followDevice: false, cityTimeZone: "Europe/London" });
-  assert.match(h.shown, /07:00/u, "the open draft stays on screen");
-  assert.equal(h.elements.displayTimezoneCitySelect.value, "America/New_York");
-
-  h.elements.appSettingsCancelButton.listeners.click();
-  assert.equal(h.elements.displayTimezoneCitySelect.value, "Europe/London");
-  assert.match(h.shown, /12:00/u, "cancel falls back to the latest saved zone, not the stale snapshot");
-});
-
-test("picking the saved zone again leaves no draft behind", async () => {
-  const h = harness();
-  await h.open();
-  h.pickCity("Asia/Tokyo");
-  h.pickCity("Asia/Shanghai");
-  assert.equal(h.context.state.displayTimezoneDraft, null);
+  assert.match(h.shown, /12:00/u);
+  assert.equal(h.elements.displayTimezoneSelect.value, "Europe/London");
 });

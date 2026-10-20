@@ -119,11 +119,6 @@ window.codexRemoteStrings = {
   },
   "settings.displayTimezone": { zh: "显示时区", en: "Display time zone" },
   "settings.followDevice": { zh: "跟随设备", en: "Follow device" },
-  "settings.city": { zh: "城市", en: "City" },
-  "settings.displayTimezoneHelp": {
-    zh: "仅影响这台设备上的时间显示，自动考虑夏令时。",
-    en: "Only affects how times are shown on this device; daylight saving time is handled automatically.",
-  },
 
   "city.shanghai": { zh: "上海", en: "Shanghai" },
   "city.tokyo": { zh: "东京", en: "Tokyo" },

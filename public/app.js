@@ -7,7 +7,6 @@ import {
   deviceTimeZone,
   formatDisplayTime,
   loadDisplayTimezonePreference,
-  normalizeDisplayTimezonePreference,
   resolveDisplayTimeZone,
   saveDisplayTimezonePreference,
 } from "./display-timezone.js";
@@ -133,8 +132,7 @@ const elements = {
   modelDefaultsStatus: byId("model-defaults-status"),
   developerInstructionsInput: byId("developer-instructions-input"),
   developerInstructionsInfoButton: byId("developer-instructions-info-button"),
-  followDeviceTimezoneInput: byId("follow-device-timezone-input"),
-  displayTimezoneCitySelect: byId("display-timezone-city-select"),
+  displayTimezoneSelect: byId("display-timezone-select"),
   sidebarBackdrop: byId("sidebar-backdrop"),
   projectSelect: byId("project-select"),
   newSessionButton: byId("new-session-button"),
@@ -220,9 +218,8 @@ const state = {
   pickerGeneration: 0,
   sessionSearchTimer: null,
   sidebarCollapsed: stateGet(SIDEBAR_COLLAPSED_KEY) === "1",
-  /** Saved display time zone; unsaved changes in the settings dialog are previewed only in the draft. */
+  /** Display time zone saved in this browser; the settings select writes it on change. */
   displayTimezone: loadDisplayTimezonePreference(),
-  displayTimezoneDraft: null,
   developerInstructions: "",
   defaultModel: null,
   defaultReasoningEffort: null,
@@ -374,11 +371,9 @@ elements.appSettingsDialog.addEventListener("cancel", (event) => {
 });
 elements.appSettingsDialog.addEventListener("close", () => {
   closeFieldInfoPopovers();
-  discardDisplayTimezoneDraft();
   setAppSettingsStatus("");
 });
-elements.followDeviceTimezoneInput.addEventListener("change", previewDisplayTimezonePreference);
-elements.displayTimezoneCitySelect.addEventListener("change", previewDisplayTimezonePreference);
+elements.displayTimezoneSelect.addEventListener("change", selectDisplayTimezone);
 elements.defaultModelSelect.addEventListener("change", () => {
   const nextModel = elements.defaultModelSelect.value || null;
   const selected = state.settingsModels.find((model) => model.id === nextModel);
@@ -3687,14 +3682,13 @@ function formatDate(value) {
   const milliseconds = value < 1_000_000_000_000 ? value * 1_000 : value;
   return formatDisplayTime(
     milliseconds,
-    resolveDisplayTimeZone(displayedTimezone(), deviceTimeZone()),
+    resolveDisplayTimeZone(state.displayTimezone, deviceTimeZone()),
   );
 }
 
 async function openAppSettings() {
   if (state.appSettingsBusy) return;
   const generation = ++state.appSettingsLoadGeneration;
-  discardDisplayTimezoneDraft();
   renderThemeChoice();
   renderLanguageChoice();
   syncAppSettingsForm();
@@ -3750,11 +3744,8 @@ function closeFieldInfoPopovers() {
 }
 
 function syncAppSettingsForm() {
-  const prefs = displayedTimezone();
-  elements.followDeviceTimezoneInput.checked = prefs.followDevice;
-  elements.followDeviceTimezoneInput.disabled = state.appSettingsBusy;
-  elements.displayTimezoneCitySelect.value = prefs.cityTimeZone;
-  elements.displayTimezoneCitySelect.disabled = prefs.followDevice || state.appSettingsBusy;
+  const prefs = state.displayTimezone;
+  elements.displayTimezoneSelect.value = prefs.followDevice ? "device" : prefs.cityTimeZone;
 }
 
 async function loadBackendSettings(generation) {
@@ -3967,7 +3958,6 @@ async function saveAppSettings() {
       : null;
     state.defaultPermissionsDraft = state.defaultPermissions;
     elements.developerInstructionsInput.value = value;
-    commitDisplayTimezoneDraft();
     elements.appSettingsDialog.close();
   } catch (error) {
     setAppSettingsStatus(errorMessage(error), "error");
@@ -3996,44 +3986,20 @@ function updateAppSettingsControls() {
   renderPermissionDefaults();
 }
 
-function displayedTimezone() {
-  return state.displayTimezoneDraft ?? state.displayTimezone;
-}
-
-/** Time-zone changes in the dialog are previews only; “Save” writes them to local storage, while cancel, close, or Escape discards them. */
-function previewDisplayTimezonePreference() {
-  const next = normalizeDisplayTimezonePreference({
-    followDevice: elements.followDeviceTimezoneInput.checked,
-    cityTimeZone: elements.displayTimezoneCitySelect.value,
-  });
-  const saved = state.displayTimezone;
-  state.displayTimezoneDraft = next.followDevice === saved.followDevice &&
-      next.cityTimeZone === saved.cityTimeZone
-    ? null
-    : next;
+/** Like appearance and language, the time zone applies and persists on change instead of waiting for Save.
+ * Choosing "follow device" keeps the last city so switching back restores it. */
+function selectDisplayTimezone() {
+  const value = elements.displayTimezoneSelect.value;
+  state.displayTimezone = saveDisplayTimezonePreference(value === "device"
+    ? { followDevice: true, cityTimeZone: state.displayTimezone.cityTimeZone }
+    : { followDevice: false, cityTimeZone: value });
   syncAppSettingsForm();
   refreshDisplayedTimes();
 }
 
-function commitDisplayTimezoneDraft() {
-  if (state.displayTimezoneDraft === null) return;
-  state.displayTimezone = saveDisplayTimezonePreference(state.displayTimezoneDraft);
-  state.displayTimezoneDraft = null;
-  syncAppSettingsForm();
-  refreshDisplayedTimes();
-}
-
-function discardDisplayTimezoneDraft() {
-  if (state.displayTimezoneDraft === null) return;
-  state.displayTimezoneDraft = null;
-  syncAppSettingsForm();
-  refreshDisplayedTimes();
-}
-
-/** Another tab saved the time zone: update the saved value while preserving this page's unsaved preview. */
+/** Another tab saved the time zone. */
 function applyStoredDisplayTimezone() {
   state.displayTimezone = loadDisplayTimezonePreference();
-  if (state.displayTimezoneDraft !== null) return;
   syncAppSettingsForm();
   refreshDisplayedTimes();
 }

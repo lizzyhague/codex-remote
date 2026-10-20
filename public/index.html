@@ -222,6 +222,21 @@
               <button type="button" data-language-choice="en" lang="en" aria-pressed="false" aria-label="English" title="English">EN</button>
             </div>
           </section>
+          <section id="timezone-setting" class="application-settings-section theme-setting">
+            <div class="theme-text">
+              <label id="timezone-label" class="application-settings-title" for="display-timezone-select" data-i18n="settings.displayTimezone">显示时区</label>
+              <p class="field-help" data-i18n="settings.browserOnly">只影响当前浏览器。</p>
+            </div>
+            <select id="display-timezone-select" class="timezone-select">
+              <option value="device" data-i18n="settings.followDevice">跟随设备</option>
+              <option value="Asia/Shanghai" data-i18n="city.shanghai">上海</option>
+              <option value="Asia/Tokyo" data-i18n="city.tokyo">东京</option>
+              <option value="Europe/London" data-i18n="city.london">伦敦</option>
+              <option value="Europe/Paris" data-i18n="city.paris">巴黎</option>
+              <option value="America/New_York" data-i18n="city.newYork">纽约</option>
+              <option value="America/Los_Angeles" data-i18n="city.losAngeles">洛杉矶</option>
+            </select>
+          </section>
           <section class="application-settings-section">
             <div class="application-settings-section-head">
               <h3 class="application-settings-title"><span data-i18n="settings.modelDefaults">新会话默认值</span><button id="model-defaults-info-button" type="button" class="field-info" popovertarget="info-model-defaults" aria-label="关于新会话默认值的说明" data-i18n-aria-label="settings.modelDefaultsAbout">i</button></h3>
@@ -274,25 +289,6 @@
               data-i18n-placeholder="settings.developerInstructionsPlaceholder"
             ></textarea>
             <p class="field-help" data-i18n="settings.developerInstructionsHelp">用于补充 Codex 的协作方式；在新建或重新载入会话时生效。</p>
-          </section>
-          <section class="application-settings-section">
-            <h3 class="application-settings-title" data-i18n="settings.displayTimezone">显示时区</h3>
-            <label class="application-settings-row">
-              <span data-i18n="settings.followDevice">跟随设备</span>
-              <input id="follow-device-timezone-input" type="checkbox">
-            </label>
-            <label class="application-settings-row">
-              <span data-i18n="settings.city">城市</span>
-              <select id="display-timezone-city-select">
-                <option value="Asia/Shanghai" data-i18n="city.shanghai">上海</option>
-                <option value="Asia/Tokyo" data-i18n="city.tokyo">东京</option>
-                <option value="Europe/London" data-i18n="city.london">伦敦</option>
-                <option value="Europe/Paris" data-i18n="city.paris">巴黎</option>
-                <option value="America/New_York" data-i18n="city.newYork">纽约</option>
-                <option value="America/Los_Angeles" data-i18n="city.losAngeles">洛杉矶</option>
-              </select>
-            </label>
-            <p class="field-help" data-i18n="settings.displayTimezoneHelp">仅影响这台设备上的时间显示，自动考虑夏令时。</p>
           </section>
         </div>
         <div class="application-settings-footer">

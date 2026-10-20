@@ -47,12 +47,15 @@ test("the collapse action is a labelled left-chevron icon", () => {
   assert.doesNotMatch(app, /collapseSidebarButton\.textContent/u);
 });
 
-test("application settings keeps timezone controls and does not copy companion-only chrome", () => {
+test("application settings puts the timezone third and does not copy companion-only chrome", () => {
   assert.match(appDialog, /<h2 id="app-settings-title"[^>]*>应用设置<\/h2>/u);
-  assert.ok(appDialog.indexOf("外观") < appDialog.indexOf("新会话默认值"));
-  assert.match(appDialog, />跟随设备</u);
-  assert.match(appDialog, />城市</u);
-  assert.match(appDialog, /仅影响这台设备上的时间显示，自动考虑夏令时。/u);
+  assert.ok(appDialog.indexOf("外观") < appDialog.indexOf(">语言<"));
+  assert.ok(appDialog.indexOf(">语言<") < appDialog.indexOf("显示时区"));
+  assert.ok(appDialog.indexOf("显示时区") < appDialog.indexOf("新会话默认值"));
+  assert.match(appDialog, /<section id="timezone-setting" class="application-settings-section theme-setting">/u);
+  assert.match(appDialog, /<label id="timezone-label"[^>]*for="display-timezone-select"/u);
+  assert.match(appDialog, /<select id="display-timezone-select" class="timezone-select">\s*<option value="device"[^>]*>跟随设备<\/option>/u);
+  assert.match(styles, /\.application-settings-title \{[^}]*color:\s*var\(--text\);[^}]*font-size:\s*0\.95rem;/su);
   assert.doesNotMatch(appDialog, /照面/u);
   assert.match(appDialog, /id="theme-options"[^>]*role="group"/u);
   for (const choice of ["system", "light", "dark"]) {
@@ -203,16 +206,16 @@ test("save disables controls, closes on success, and leaves errors in the dialog
   assert.ok(save.indexOf("elements.appSettingsDialog.close()") < save.indexOf("} catch"));
 });
 
-test("follow-device disables the city select and keeps the previous city", () => {
-  assert.match(app, /displayTimezoneCitySelect\.disabled = prefs\.followDevice/u);
-  assert.match(app, /followDevice: elements\.followDeviceTimezoneInput\.checked/u);
-  assert.match(app, /cityTimeZone: elements\.displayTimezoneCitySelect\.value/u);
+test("the timezone applies on change and the default selects share one width", () => {
+  assert.match(app, /displayTimezoneSelect\.addEventListener\("change", selectDisplayTimezone\)/u);
+  assert.doesNotMatch(app, /displayTimezoneDraft/u);
+  assert.match(styles, /\.application-settings-row select \{[^}]*width:\s*14rem;/su);
   assert.match(styles, /\.application-settings-row select:disabled\s*\{[^}]*opacity:\s*0\.45;/su);
 });
 
 test("page times use the local display preference instead of the host clock", () => {
   assert.match(app, /from "\.\/display-timezone\.js"/u);
-  assert.match(app, /resolveDisplayTimeZone\(displayedTimezone\(\), deviceTimeZone\(\)\)/u);
+  assert.match(app, /resolveDisplayTimeZone\(state\.displayTimezone, deviceTimeZone\(\)\)/u);
   assert.match(app, /refreshDisplayedTimes\(\)/u);
   assert.match(app, /loadDisplayTimezonePreference\(\)/u);
   assert.match(app, /value < 1_000_000_000_000 \? value \* 1_000 : value/u);
