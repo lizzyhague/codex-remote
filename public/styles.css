@@ -11,27 +11,26 @@
   --brand-mark: var(--theme);
 
   /* Shared mixing ratios */
-  --mix-tint: 3%;
+  --mix-tint: 0%;
   --mix-surface-sunken: 65%;
   --mix-surface-page: 100%;
-  --mix-surface-1: 96%;
+  --mix-surface-1: 97%;
   --mix-surface-2: 94%;
   --mix-surface-3: 88%;
-  --mix-border: 84%;
-  --mix-border-strong: 72%;
-  --mix-text: 2%;
-  --mix-text-mid: 20%;
+  --mix-border: 85%;
+  --mix-border-strong: 60%;
+  --mix-text: 0%;
+  --mix-text-mid: 15%;
   --mix-text-muted: 30%;
-  --mix-theme-bright: 70%;
   --mix-theme-wash: 14%;
-  --mix-bubble-user: 90%;
+  --mix-bubble-user: 95%;
   --mix-danger-wash: 10%;
   --mix-warning-wash: 10%;
   --mix-success-wash: 10%;
   --mix-info-wash: 10%;
   --mix-danger: 50%;
   --mix-success: 50%;
-  --mix-bubble-ai: 6%;
+  --mix-bubble-ai: 8%;
   --mix-permission: 8%;
   --mix-copy-success: 10%;
   --mix-divider-accent: 70%;
@@ -46,31 +45,34 @@
   --border: color-mix(in srgb, var(--tint) var(--mix-border), white);
   --border-strong: color-mix(in srgb, var(--tint) var(--mix-border-strong), white);
   --divider: var(--border);
+  --settings-fill: var(--surface-sunken);
   --divider-accent: color-mix(in srgb, var(--theme) var(--mix-divider-accent), var(--border));
   --text: color-mix(in srgb, var(--tint) var(--mix-text), white);
   --text-mid: color-mix(in srgb, var(--tint) var(--mix-text-mid), white);
   --text-muted: color-mix(in srgb, var(--tint) var(--mix-text-muted), white);
-  --theme-bright: color-mix(in srgb, var(--theme) var(--mix-theme-bright), var(--text));
-  --theme-wash: color-mix(in srgb, var(--theme) var(--mix-theme-wash), var(--surface-2));
+  --theme-wash: color-mix(in srgb, var(--theme) var(--mix-theme-wash), var(--surface-sunken));
   --bubble-user: color-mix(in srgb, var(--tint) var(--mix-bubble-user), white);
-  --hover: rgb(255 255 255 / 4%);
-  --scrim: rgb(0 0 0 / 55%);
+  --hover: var(--surface-2);
+  --scrim: color-mix(in srgb, var(--surface-page) 50%, transparent);
   --danger: color-mix(in srgb, #ff0000 var(--mix-danger), var(--text));
-  --danger-wash: color-mix(in srgb, var(--danger) var(--mix-danger-wash), var(--surface-2));
+  --danger-wash: color-mix(in srgb, var(--danger) var(--mix-danger-wash), var(--surface-sunken));
   --warning: #fcd34d;
-  --warning-wash: color-mix(in srgb, var(--warning) var(--mix-warning-wash), var(--surface-2));
+  --warning-wash: color-mix(in srgb, var(--warning) var(--mix-warning-wash), var(--surface-sunken));
   --success: color-mix(in srgb, #00ff00 var(--mix-success), var(--text));
-  --success-wash: color-mix(in srgb, var(--success) var(--mix-success-wash), var(--surface-2));
+  --success-wash: color-mix(in srgb, var(--success) var(--mix-success-wash), var(--surface-sunken));
   --info: #facc15;
-  --info-wash: color-mix(in srgb, var(--info) var(--mix-info-wash), var(--surface-2));
+  --info-wash: color-mix(in srgb, var(--info) var(--mix-info-wash), var(--surface-sunken));
+  --shadow-sm-offset: 0 2px;
+  --shadow-md-offset: 0 12px;
+  --shadow-lg-offset: 0 24px;
   --shadow-sm: 8px rgb(0 0 0 / 45%);
   --shadow-md: 44px rgb(0 0 0 / 42%);
   --shadow-lg: 90px rgb(0 0 0 / 52%);
 
   /* Change only these values when switching palettes; keep the rules unchanged. */
-  --bubble-ai: color-mix(in srgb, var(--theme) var(--mix-bubble-ai), var(--surface-2));
-  --permission-fill: color-mix(in srgb, var(--theme) var(--mix-permission), var(--surface-2));
-  --copy-success-fill: color-mix(in srgb, var(--theme) var(--mix-copy-success), var(--surface-2));
+  --bubble-ai: color-mix(in srgb, var(--theme) var(--mix-bubble-ai), var(--surface-sunken));
+  --permission-fill: var(--bubble-ai);
+  --copy-success-fill: var(--bubble-ai);
   --stop-fill: var(--danger-wash);
   --stop-border: var(--danger);
   --danger-border: #7f1d1d;
@@ -87,24 +89,24 @@
   color-scheme: light;
 
   --neutral: #fbf9f4;
-  --theme: color-mix(in srgb, color-mix(in srgb, var(--neutral) var(--mix-text), var(--ink)) 40%, #a7f3d0);
+  --theme: color-mix(in srgb, color-mix(in srgb, var(--neutral) var(--mix-text), var(--ink)) 30%, #a7f3d0);
   --theme-ink: #102019;
-  --ink: #1c1c1e;
+  --ink: #000000;
 
   --mix-tint: 0%;
-  --mix-border: 87%;
-  --mix-border-strong: 78%;
-  --mix-text: 6%;
-  --mix-text-mid: 26%;
-  --mix-text-muted: 42%;
+  --mix-border: 85%;
+  --mix-border-strong: 60%;
+  --mix-text: 0%;
+  --mix-text-mid: 15%;
+  --mix-text-muted: 30%;
   --mix-danger: 80%;
   --mix-success: 60%;
   --mix-warning: 85%;
   --mix-info: 85%;
-  --mix-bubble-ai: 10%;
+  --mix-bubble-ai: 8%;
   --mix-permission: 14%;
   --mix-copy-success: 16%;
-  --mix-bubble-user: 93%;
+  --mix-bubble-user: 95%;
 
   /* Mirror of dark mode: recessed surfaces mix toward white, raised surfaces toward black. */
   --surface-sunken: color-mix(in srgb, var(--tint) var(--mix-surface-sunken), white);
@@ -116,11 +118,10 @@
   --text: color-mix(in srgb, var(--tint) var(--mix-text), var(--ink));
   --text-mid: color-mix(in srgb, var(--tint) var(--mix-text-mid), var(--ink));
   --text-muted: color-mix(in srgb, var(--tint) var(--mix-text-muted), var(--ink));
-  --theme-bright: var(--theme);
   --brand-mark: var(--theme);
   --bubble-user: color-mix(in srgb, var(--tint) var(--mix-bubble-user), black);
-  --hover: rgb(0 0 0 / 4%);
-  --scrim: color-mix(in srgb, var(--surface-page) 40%, transparent);
+  --hover: var(--surface-2);
+  --scrim: color-mix(in srgb, var(--surface-page) 50%, transparent);
   --warning: color-mix(in srgb, #fcd34d var(--mix-warning), var(--text));
   --info: color-mix(in srgb, #facc15 var(--mix-info), var(--text));
   --shadow-sm: 8px rgb(0 0 0 / 8%);
@@ -227,8 +228,8 @@ button.small {
   padding: 2rem;
   border: 1px solid var(--border);
   border-radius: 18px;
-  background: var(--surface-2);
-  box-shadow: 0 24px var(--shadow-lg);
+  background: var(--surface-sunken);
+  box-shadow: var(--shadow-lg-offset) var(--shadow-lg);
 }
 
 .login-card h1 {
@@ -250,7 +251,7 @@ button.small {
 .login-card input {
   width: auto;
   padding: 0.75rem;
-  background: var(--surface-sunken);
+  background: var(--surface-1);
   color: var(--text);
 }
 
@@ -479,8 +480,8 @@ button.icon-button svg {
 .project-controls select:focus,
 .session-search input:focus {
   outline: 0;
-  border-color: var(--theme-bright);
-  box-shadow: inset 0 0 0 0.5px var(--theme-bright);
+  border-color: var(--theme);
+  box-shadow: inset 0 0 0 0.5px var(--theme);
 }
 
 .session-search {
@@ -663,7 +664,7 @@ button.icon-button svg {
   max-height: min(860px, calc(100dvh - 1.5rem));
   padding: 0;
   color: var(--text);
-  background: var(--surface-2);
+  background: var(--settings-fill);
   border: 1px solid var(--border);
   border-radius: 14px;
   overflow: hidden;
@@ -923,12 +924,12 @@ button.icon-button svg {
   padding: 0.75rem 0.85rem;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--surface-3);
+  background: var(--surface-sunken);
   color: var(--text-muted);
   font-size: 0.78rem;
   line-height: 1.55;
   overflow-y: auto;
-  box-shadow: 0 18px var(--shadow-md);
+  box-shadow: var(--shadow-md-offset) var(--shadow-md);
 }
 
 .field-info-popover:not(:popover-open) {
@@ -997,7 +998,7 @@ button.icon-button svg {
   width: min(440px, calc(100vw - 2rem));
   padding: 1.25rem;
   color: var(--text);
-  background: var(--surface-2);
+  background: var(--surface-1);
   border: 1px solid var(--border);
   border-radius: 14px;
 }
@@ -1021,7 +1022,7 @@ button.icon-button svg {
   width: min(430px, calc(100vw - 1.5rem));
   padding: 0;
   color: var(--text);
-  background: var(--surface-2);
+  background: var(--surface-1);
   border: 1px solid var(--border);
   border-radius: 14px;
 }
@@ -1385,7 +1386,7 @@ button.icon-button svg {
   border-radius: 6px;
   /* The button overlays the first code line, so its background must be opaque; shadow separates it from the text. */
   background: var(--surface-3);
-  box-shadow: 0 2px var(--shadow-sm);
+  box-shadow: var(--shadow-sm-offset) var(--shadow-sm);
   color: var(--text-mid);
 }
 
@@ -1768,7 +1769,7 @@ button.icon-button svg {
 select:focus,
 input:focus,
 button:focus-visible {
-  outline: 2px solid var(--theme-bright);
+  outline: 2px solid var(--theme);
   outline-offset: 2px;
 }
 
@@ -1830,7 +1831,7 @@ button:focus-visible {
   opacity: 1;
   border-color: var(--theme);
   background: var(--theme-wash);
-  color: var(--theme-bright);
+  color: var(--theme);
 }
 
 .task-send-icon {
@@ -2038,7 +2039,7 @@ button:focus-visible {
   border: 1px solid var(--border-strong);
   border-radius: 14px;
   background: var(--surface-3);
-  box-shadow: 0 -18px var(--shadow-md);
+  box-shadow: 0 -12px var(--shadow-md);
 }
 
 .slash-heading {
@@ -2238,7 +2239,7 @@ button:focus-visible {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface-3);
-  box-shadow: 0 -18px var(--shadow-md);
+  box-shadow: 0 -12px var(--shadow-md);
 }
 
 .composer-picker-heading {
@@ -2333,7 +2334,7 @@ button:focus-visible {
 }
 
 .composer-action-scroll { flex: 1 1 auto; overflow-x: auto; scrollbar-width: none; }
-#rename-dialog { width: min(440px, calc(100vw - 2rem)); padding: 1.25rem; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 14px; }
+#rename-dialog { width: min(440px, calc(100vw - 2rem)); padding: 1.25rem; color: var(--text); background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; }
 #rename-dialog::backdrop { background: var(--scrim); }
 #rename-heading { margin-top: 0; font-size: 1.1rem; }
 #rename-input { width: 100%; margin-top: 0.5rem; }
@@ -2358,7 +2359,7 @@ html.pull-refresh-enabled {
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface-3);
-  box-shadow: 0 6px var(--shadow-md);
+  box-shadow: var(--shadow-md-offset) var(--shadow-md);
   font-size: 0.82rem;
   pointer-events: none;
 }

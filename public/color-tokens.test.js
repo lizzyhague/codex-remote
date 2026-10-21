@@ -13,7 +13,7 @@ test("visible colors are declared in the color module", () => {
   const moduleEnd = styles.indexOf("}", lightStart);
   assert.match(
     styles.slice(lightStart, moduleEnd),
-    /--theme:\s*color-mix\(in srgb, color-mix\(in srgb, var\(--neutral\) var\(--mix-text\), var\(--ink\)\) 40%, #a7f3d0\);/u,
+    /--theme:\s*color-mix\(in srgb, color-mix\(in srgb, var\(--neutral\) var\(--mix-text\), var\(--ink\)\) 30%, #a7f3d0\);/u,
   );
   const rules = styles.slice(moduleEnd + 1).replaceAll(/\/\*[\s\S]*?\*\//gu, "");
   assert.doesNotMatch(rules, /#[\da-f]{3,8}\b|(?:rgb|rgba|hsl|hsla)\(/iu);
