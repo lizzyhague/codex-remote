@@ -117,9 +117,10 @@ const elements = {
   appSettingsDialog: byId("app-settings-dialog"),
   appSettingsForm: byId("app-settings-form"),
   appSettingsCloseButton: byId("app-settings-close-button"),
-  appSettingsCancelButton: byId("app-settings-cancel-button"),
-  appSettingsSaveButton: byId("app-settings-save-button"),
-  appSettingsStatus: byId("app-settings-status"),
+  modelDefaultsSaveButton: byId("model-defaults-save-button"),
+  modelDefaultsSaveStatus: byId("model-defaults-save-status"),
+  developerInstructionsSaveButton: byId("developer-instructions-save-button"),
+  developerInstructionsSaveStatus: byId("developer-instructions-save-status"),
   themeSetting: byId("theme-setting"),
   themeOptions: byId("theme-options"),
   languageSetting: byId("language-setting"),
@@ -235,6 +236,7 @@ const state = {
   settingsPermissionsState: "idle",
   settingsPermissionsError: "",
   appSettingsLoadGeneration: 0,
+  appSettingsLoadState: "idle",
   appSettingsBusy: false,
   mobileSidebarOpen: false,
   running: false,
@@ -347,7 +349,6 @@ elements.appSettingsButton.addEventListener("click", () => {
   void openAppSettings();
 });
 elements.appSettingsCloseButton.addEventListener("click", closeAppSettings);
-elements.appSettingsCancelButton.addEventListener("click", closeAppSettings);
 elements.themeOptions.addEventListener("click", (event) => {
   const button = event.target.closest("[data-theme-choice]");
   if (!button || !window.codexRemoteTheme) return;
@@ -364,14 +365,15 @@ window.addEventListener("codex-remote-languagechange", () => {
 });
 elements.appSettingsForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  void saveAppSettings();
 });
+elements.modelDefaultsSaveButton.addEventListener("click", () => void saveAppSettings("defaults"));
+elements.developerInstructionsSaveButton.addEventListener("click", () => void saveAppSettings("instructions"));
 elements.appSettingsDialog.addEventListener("cancel", (event) => {
   if (state.appSettingsBusy) event.preventDefault();
 });
 elements.appSettingsDialog.addEventListener("close", () => {
   closeFieldInfoPopovers();
-  setAppSettingsStatus("");
+  setAllAppSettingsStatuses("");
 });
 elements.displayTimezoneSelect.addEventListener("change", selectDisplayTimezone);
 elements.defaultModelSelect.addEventListener("change", () => {
@@ -3692,7 +3694,8 @@ async function openAppSettings() {
   renderThemeChoice();
   renderLanguageChoice();
   syncAppSettingsForm();
-  setAppSettingsStatus("");
+  state.appSettingsLoadState = "loading";
+  setAllAppSettingsStatuses("");
   state.settingsModelsState = "loading";
   state.settingsModelsError = "";
   state.modelDefaultsMessage = "";
@@ -3700,6 +3703,7 @@ async function openAppSettings() {
   state.settingsPermissionsError = "";
   renderModelDefaults();
   renderPermissionDefaults();
+  updateAppSettingsControls();
   const settings = loadBackendSettings(generation);
   const models = loadSettingsModels(generation);
   const permissions = loadSettingsPermissions(generation);
@@ -3767,11 +3771,14 @@ async function loadBackendSettings(generation) {
     elements.developerInstructionsInput.value = value;
     renderModelDefaults();
     renderPermissionDefaults();
-    setAppSettingsStatus("");
+    state.appSettingsLoadState = "ready";
+    setAllAppSettingsStatuses("");
   } catch (error) {
     if (generation !== state.appSettingsLoadGeneration) return;
-    setAppSettingsStatus(errorMessage(error), "error");
+    state.appSettingsLoadState = "error";
+    setAllAppSettingsStatuses(errorMessage(error), "error");
   }
+  updateAppSettingsControls();
 }
 
 async function loadSettingsModels(generation) {
@@ -3852,9 +3859,9 @@ function renderModelDefaults() {
   }
   replaceSelectOptions(elements.defaultReasoningEffortSelect, effortOptions, effort ?? "");
 
-  elements.defaultModelSelect.disabled = state.appSettingsBusy || !ready;
+  elements.defaultModelSelect.disabled = state.appSettingsBusy || state.appSettingsLoadState !== "ready" || !ready;
   elements.defaultReasoningEffortSelect.disabled = state.appSettingsBusy ||
-    !ready || model === null || !selectedModel;
+    state.appSettingsLoadState !== "ready" || !ready || model === null || !selectedModel;
   elements.modelDefaultsStatus.textContent = state.modelDefaultsMessage
     ? t(state.modelDefaultsMessage)
     : state.settingsModelsState === "loading"
@@ -3912,7 +3919,8 @@ function renderPermissionDefaults() {
     })));
   }
   replaceSelectOptions(elements.defaultPermissionsSelect, options, selected ?? "");
-  elements.defaultPermissionsSelect.disabled = state.appSettingsBusy || !ready;
+  elements.defaultPermissionsSelect.disabled = state.appSettingsBusy ||
+    state.appSettingsLoadState !== "ready" || !ready;
   elements.defaultPermissionsStatus.textContent = state.settingsPermissionsState === "loading"
     ? t("settings.loadingPermissions")
     : state.settingsPermissionsState === "error"
@@ -3933,54 +3941,85 @@ function replaceSelectOptions(select, options, selectedValue) {
   select.value = selectedValue;
 }
 
-async function saveAppSettings() {
-  if (state.appSettingsBusy) return;
+async function saveAppSettings(section) {
+  if (state.appSettingsBusy || state.appSettingsLoadState !== "ready") return;
+  const defaultsChanged = state.defaultModelDraft !== state.defaultModel ||
+    state.defaultReasoningEffortDraft !== state.defaultReasoningEffort ||
+    state.defaultPermissionsDraft !== state.defaultPermissions;
+  const instructionsChanged = elements.developerInstructionsInput.value !== state.developerInstructions;
+  if ((section === "defaults" && !defaultsChanged) ||
+    (section === "instructions" && !instructionsChanged)) {
+    setAppSettingsStatus(section, "");
+    return;
+  }
+  if (section !== "defaults" && section !== "instructions") return;
   state.appSettingsBusy = true;
-  setAppSettingsStatus(t("settings.saving"));
+  setAppSettingsStatus(section, t("settings.saving"));
   updateAppSettingsControls();
   try {
-    const data = await request("settings.update", {
-      developerInstructions: elements.developerInstructionsInput.value,
-      defaultModel: state.defaultModelDraft,
-      defaultReasoningEffort: state.defaultReasoningEffortDraft,
-      defaultPermissions: state.defaultPermissionsDraft,
-    });
-    const value = typeof data?.developerInstructions === "string" ? data.developerInstructions : "";
-    state.developerInstructions = value;
-    state.defaultModel = typeof data?.defaultModel === "string" ? data.defaultModel : null;
-    state.defaultReasoningEffort = typeof data?.defaultReasoningEffort === "string"
-      ? data.defaultReasoningEffort
-      : null;
-    state.defaultModelDraft = state.defaultModel;
-    state.defaultReasoningEffortDraft = state.defaultReasoningEffort;
-    state.defaultPermissions = typeof data?.defaultPermissions === "string"
-      ? data.defaultPermissions
-      : null;
-    state.defaultPermissionsDraft = state.defaultPermissions;
-    elements.developerInstructionsInput.value = value;
-    elements.appSettingsDialog.close();
+    const payload = section === "defaults"
+      ? {
+        defaultModel: state.defaultModelDraft,
+        defaultReasoningEffort: state.defaultReasoningEffortDraft,
+        defaultPermissions: state.defaultPermissionsDraft,
+      }
+      : { developerInstructions: elements.developerInstructionsInput.value };
+    const data = await request("settings.update", payload);
+    if (section === "defaults") {
+      state.defaultModel = typeof data?.defaultModel === "string" ? data.defaultModel : null;
+      state.defaultReasoningEffort = typeof data?.defaultReasoningEffort === "string"
+        ? data.defaultReasoningEffort
+        : null;
+      state.defaultPermissions = typeof data?.defaultPermissions === "string"
+        ? data.defaultPermissions
+        : null;
+      state.defaultModelDraft = state.defaultModel;
+      state.defaultReasoningEffortDraft = state.defaultReasoningEffort;
+      state.defaultPermissionsDraft = state.defaultPermissions;
+      renderModelDefaults();
+      renderPermissionDefaults();
+    } else {
+      const value = typeof data?.developerInstructions === "string" ? data.developerInstructions : "";
+      state.developerInstructions = value;
+      elements.developerInstructionsInput.value = value;
+    }
+    setAppSettingsStatus(section, "");
   } catch (error) {
-    setAppSettingsStatus(errorMessage(error), "error");
+    setAppSettingsStatus(section, errorMessage(error), "error");
   } finally {
     state.appSettingsBusy = false;
     updateAppSettingsControls();
   }
 }
 
-function setAppSettingsStatus(text, kind = "") {
-  elements.appSettingsStatus.textContent = text;
-  if (kind) elements.appSettingsStatus.dataset.kind = kind;
-  else delete elements.appSettingsStatus.dataset.kind;
+function appSettingsStatusElement(section) {
+  return section === "defaults"
+    ? elements.modelDefaultsSaveStatus
+    : elements.developerInstructionsSaveStatus;
+}
+
+function setAppSettingsStatus(section, text, kind = "") {
+  const status = appSettingsStatusElement(section);
+  status.textContent = text;
+  if (kind) status.dataset.kind = kind;
+  else delete status.dataset.kind;
+}
+
+function setAllAppSettingsStatuses(text, kind = "") {
+  for (const section of ["defaults", "instructions"]) {
+    setAppSettingsStatus(section, text, kind);
+  }
 }
 
 function updateAppSettingsControls() {
   const disabled = state.appSettingsBusy;
-  elements.developerInstructionsInput.disabled = disabled;
+  const serverReady = state.appSettingsLoadState === "ready";
+  elements.developerInstructionsInput.disabled = disabled || !serverReady;
   elements.developerInstructionsInfoButton.disabled = disabled;
   elements.modelDefaultsInfoButton.disabled = disabled;
-  elements.appSettingsCancelButton.disabled = disabled;
   elements.appSettingsCloseButton.disabled = disabled;
-  elements.appSettingsSaveButton.disabled = disabled;
+  elements.modelDefaultsSaveButton.disabled = disabled || !serverReady;
+  elements.developerInstructionsSaveButton.disabled = disabled || !serverReady;
   syncAppSettingsForm();
   renderModelDefaults();
   renderPermissionDefaults();

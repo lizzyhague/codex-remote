@@ -127,18 +127,18 @@ test("new-session model defaults explain their backend scope and lifecycle", () 
   assert.match(appDialog, /id="default-permissions-status"[^>]*aria-live="polite"/u);
 });
 
-test("the save row sits outside the scrolling area and the dialog body is the only scroller", () => {
-  assert.match(
-    styles,
-    /\.application-settings-card\s*\{[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto;/su,
-  );
-  assert.match(styles, /\.application-settings-body\s*\{[^}]*overflow-y:\s*auto;/su);
-  assert.match(styles, /\.application-settings-dialog\s*\{[^}]*overflow:\s*hidden;/su);
-  assert.match(styles, /\.application-settings-dialog\[open\]\s*\{\s*display:\s*flex;/su);
-  assert.ok(appDialog.indexOf('class="application-settings-body"') <
-    appDialog.indexOf('class="application-settings-footer"'));
-  assert.ok(appDialog.indexOf('id="app-settings-save-button"') >
-    appDialog.indexOf('class="application-settings-footer"'));
+test("the whole settings dialog scrolls and server-backed sections save independently", () => {
+  assert.match(styles, /\.application-settings-dialog\s*\{[^}]*overflow-y:\s*auto;/su);
+  assert.match(styles, /\.application-settings-dialog\[open\]\s*\{\s*display:\s*block;/su);
+  assert.doesNotMatch(styles, /\.application-settings-body\s*\{[^}]*overflow-y:/su);
+  assert.doesNotMatch(appDialog, /application-settings-footer/u);
+  assert.doesNotMatch(appDialog, /id="app-settings-cancel-button"|id="app-settings-save-button"/u);
+  for (const id of ["model-defaults", "developer-instructions"]) {
+    assert.match(appDialog, new RegExp(`id="${id}-save-button"[^>]*class="[^"]*icon-button`, "u"));
+    assert.match(appDialog, new RegExp(`id="${id}-save-status"[^>]*aria-live="polite"`, "u"));
+  }
+  assert.match(app, /modelDefaultsSaveButton\.addEventListener\("click", \(\) => void saveAppSettings\("defaults"\)\)/u);
+  assert.match(app, /developerInstructionsSaveButton\.addEventListener\("click", \(\) => void saveAppSettings\("instructions"\)\)/u);
   assert.match(styles, /@media \(max-width: 640px\)\s*\{[^}]*\.application-settings-dialog\s*\{[^}]*max-height:\s*calc\(100dvh - 0\.75rem\);/su);
 });
 
@@ -161,7 +161,7 @@ test("ⓘ is declarative, does not wrap the textarea, and hides when closed", ()
 test("opening reloads backend settings and models without accepting pushed changes", () => {
   assert.match(app, /request\("settings\.get"\)/u);
   assert.match(app, /request\("settings\.models"\)/u);
-  assert.match(app, /request\("settings\.update", \{\s*developerInstructions:[\s\S]*defaultModel:[\s\S]*defaultReasoningEffort:/u);
+  assert.match(app, /request\("settings\.update", payload\)/u);
   assert.match(app, /async function openAppSettings\(\)/u);
   assert.doesNotMatch(app, /function applySettingsUpdated\(/u);
   assert.doesNotMatch(app, /case "settings\.updated":/u);
@@ -177,7 +177,7 @@ test("opening reloads backend settings and models without accepting pushed chang
   assert.match(open, /if \(!elements\.appSettingsDialog\.open\) elements\.appSettingsDialog\.showModal\(\)/u);
   const load = app.slice(
     app.indexOf("async function loadBackendSettings("),
-    app.indexOf("async function saveAppSettings()"),
+    app.indexOf("async function saveAppSettings("),
   );
   assert.match(load, /request\("settings\.models"\)/u);
   assert.ok(load.indexOf("elements.developerInstructionsInput.value = value") < load.indexOf("} catch"));
@@ -190,20 +190,17 @@ test("model and effort controls preserve unavailable settings and move effort wi
   assert.match(app, /model === null \|\| !selectedModel/u);
 });
 
-test("save disables controls, closes on success, and leaves errors in the dialog", () => {
-  assert.match(app, /setAppSettingsStatus\(t\("settings\.saving"\)\)/u);
+test("section saves disable controls, stay open on success, and keep local errors", () => {
+  assert.match(app, /setAppSettingsStatus\(section, t\("settings\.saving"\)\)/u);
   assert.match(app, /updateAppSettingsControls\(\)/u);
-  assert.match(app, /elements\.appSettingsDialog\.close\(\)/u);
-  assert.match(app, /setAppSettingsStatus\(errorMessage\(error\), "error"\)/u);
+  assert.match(app, /setAppSettingsStatus\(section, errorMessage\(error\), "error"\)/u);
   assert.match(app, /if \(state\.appSettingsBusy\) event\.preventDefault\(\)/u);
-  assert.match(appDialog, /id="app-settings-status"[^>]*aria-live="polite"/u);
-  assert.match(appDialog, />取消</u);
-  assert.match(appDialog, />保存</u);
-  const save = app.slice(app.indexOf("async function saveAppSettings()"), app.indexOf("function setAppSettingsStatus("));
+  assert.match(appDialog, /id="model-defaults-save-status"[^>]*aria-live="polite"/u);
+  assert.match(appDialog, /id="developer-instructions-save-status"[^>]*aria-live="polite"/u);
+  const save = app.slice(app.indexOf("async function saveAppSettings("), app.indexOf("function appSettingsStatusElement("));
   assert.match(save, /state\.appSettingsBusy = true/u);
-  assert.match(save, /elements\.appSettingsDialog\.close\(\)/u);
-  assert.match(save, /catch \(error\) \{\s*setAppSettingsStatus\(errorMessage\(error\), "error"\);/su);
-  assert.ok(save.indexOf("elements.appSettingsDialog.close()") < save.indexOf("} catch"));
+  assert.doesNotMatch(save, /elements\.appSettingsDialog\.close\(\)/u);
+  assert.match(save, /catch \(error\) \{\s*setAppSettingsStatus\(section, errorMessage\(error\), "error"\);/su);
 });
 
 test("the timezone applies on change and the default selects share one width", () => {

@@ -669,12 +669,12 @@ button.icon-button svg {
   background: var(--settings-fill);
   border: 1px solid var(--border);
   border-radius: 14px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .application-settings-dialog[open] {
-  display: flex;
-  flex-direction: column;
+  display: block;
 }
 
 .application-settings-dialog::backdrop {
@@ -682,14 +682,9 @@ button.icon-button svg {
 }
 
 .application-settings-card {
-  min-height: 0;
-  flex: 1;
   width: 100%;
   margin: 0;
   padding: 0;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  overflow: hidden;
 }
 
 .application-settings-heading {
@@ -710,8 +705,6 @@ button.icon-button svg {
   align-content: start;
   gap: 0.9rem;
   padding: 0 1.05rem 1.05rem;
-  overflow-x: hidden;
-  overflow-y: auto;
   anchor-name: --application-settings-body;
 }
 
@@ -800,6 +793,10 @@ button.icon-button svg {
   align-items: center;
   justify-content: space-between;
   gap: 0.55rem;
+}
+
+.application-settings-save-button {
+  flex: none;
 }
 
 .application-settings-title {
@@ -942,21 +939,6 @@ button.icon-button svg {
   margin: 0;
 }
 
-.application-settings-footer {
-  display: grid;
-  gap: 0.6rem;
-  padding: 0.8rem 1.05rem 1.05rem;
-  border-top: 1px solid var(--border);
-  background: var(--surface-3);
-}
-
-.application-settings-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.55rem;
-}
-
 .application-settings-status {
   margin: 0;
   min-height: 0;
@@ -991,9 +973,6 @@ button.icon-button svg {
     padding: 0.7rem;
   }
 
-  .application-settings-footer {
-    padding: 0.7rem 0.85rem 0.85rem;
-  }
 }
 
 .app-alert-dialog {
@@ -1867,7 +1846,7 @@ button:focus-visible {
   .session-list,
   .timeline,
   .composer textarea,
-  .application-settings-body,
+  .application-settings-dialog,
   .scrollbar-measure {
     scrollbar-width: thin;
     scrollbar-color: transparent transparent;
@@ -1877,7 +1856,7 @@ button:focus-visible {
   .timeline:hover,
   .composer textarea:hover,
   .composer textarea:focus,
-  .application-settings-body:hover {
+  .application-settings-dialog:hover {
     scrollbar-color: var(--border-strong) transparent;
   }
 
@@ -1891,7 +1870,7 @@ button:focus-visible {
   .session-list::-webkit-scrollbar,
   .timeline::-webkit-scrollbar,
   .composer textarea::-webkit-scrollbar,
-  .application-settings-body::-webkit-scrollbar,
+  .application-settings-dialog::-webkit-scrollbar,
   .scrollbar-measure::-webkit-scrollbar,
   .slash-menu::-webkit-scrollbar,
   .composer-picker-menu::-webkit-scrollbar {
@@ -1901,7 +1880,7 @@ button:focus-visible {
   .session-list::-webkit-scrollbar-track,
   .timeline::-webkit-scrollbar-track,
   .composer textarea::-webkit-scrollbar-track,
-  .application-settings-body::-webkit-scrollbar-track,
+  .application-settings-dialog::-webkit-scrollbar-track,
   .scrollbar-measure::-webkit-scrollbar-track,
   .slash-menu::-webkit-scrollbar-track,
   .composer-picker-menu::-webkit-scrollbar-track {
@@ -1911,7 +1890,7 @@ button:focus-visible {
   .session-list::-webkit-scrollbar-thumb,
   .timeline::-webkit-scrollbar-thumb,
   .composer textarea::-webkit-scrollbar-thumb,
-  .application-settings-body::-webkit-scrollbar-thumb,
+  .application-settings-dialog::-webkit-scrollbar-thumb,
   .scrollbar-measure::-webkit-scrollbar-thumb,
   .slash-menu::-webkit-scrollbar-thumb,
   .composer-picker-menu::-webkit-scrollbar-thumb {
@@ -1925,7 +1904,7 @@ button:focus-visible {
   .timeline:hover::-webkit-scrollbar-thumb,
   .composer textarea:hover::-webkit-scrollbar-thumb,
   .composer textarea:focus::-webkit-scrollbar-thumb,
-  .application-settings-body:hover::-webkit-scrollbar-thumb,
+  .application-settings-dialog:hover::-webkit-scrollbar-thumb,
   .slash-menu::-webkit-scrollbar-thumb,
   .composer-picker-menu::-webkit-scrollbar-thumb {
     background-color: var(--border-strong);

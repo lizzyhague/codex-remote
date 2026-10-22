@@ -92,6 +92,7 @@ function harness({ stored = SHANGHAI } = {}) {
       settingsPermissionsState: "idle",
       settingsPermissionsError: "",
       appSettingsLoadGeneration: 0,
+      appSettingsLoadState: "idle",
       appSettingsBusy: false,
     },
     elements,
@@ -149,11 +150,16 @@ function harness({ stored = SHANGHAI } = {}) {
       storage.set(DISPLAY_TIMEZONE_KEY, JSON.stringify(prefs));
       windowListeners.storage({ key: DISPLAY_TIMEZONE_KEY });
     },
+    save(section) {
+      const button = section === "defaults"
+        ? elements.modelDefaultsSaveButton
+        : elements.developerInstructionsSaveButton;
+      button.listeners.click();
+    },
   };
 }
 
 const closePaths = {
-  "the cancel button": (h) => h.elements.appSettingsCancelButton.listeners.click(),
   "the close button": (h) => h.elements.appSettingsCloseButton.listeners.click(),
   // Escape makes the dialog dispatch an unprevented cancel, then close and dispatch close.
   Escape: (h) => {
@@ -185,17 +191,49 @@ for (const [label, close] of Object.entries(closePaths)) {
   });
 }
 
-test("save sends backend settings without touching the timezone", async () => {
+test("the developer-instructions section saves alone without touching the timezone", async () => {
   const h = harness();
   await h.open();
   h.elements.developerInstructionsInput.value = "be brief";
   h.respond({ developerInstructions: "be brief" });
-  h.elements.appSettingsForm.listeners.submit({ preventDefault() {} });
+  h.save("instructions");
   await tick();
 
-  assert.equal(h.elements.appSettingsDialog.open, false);
+  assert.equal(h.elements.appSettingsDialog.open, true);
+  assert.deepEqual(Object.keys(h.requests.at(-1)).sort(), ["developerInstructions", "type"]);
   assert.equal(h.requests.at(-1).developerInstructions, "be brief");
   assert.deepEqual(h.stored(), SHANGHAI);
+});
+
+test("saving either section preserves the other section's unsaved draft", async () => {
+  const h = harness();
+  await h.open({ permissions: PERMISSION_OPTIONS });
+  h.elements.defaultPermissionsSelect.value = ":danger-full-access";
+  h.elements.defaultPermissionsSelect.listeners.change();
+  h.elements.developerInstructionsInput.value = "新指令";
+  h.respond({
+    developerInstructions: "新指令",
+    defaultModel: null,
+    defaultReasoningEffort: null,
+    defaultPermissions: null,
+  });
+  h.save("instructions");
+  await tick();
+
+  assert.equal(h.context.state.defaultPermissionsDraft, ":danger-full-access");
+
+  h.elements.developerInstructionsInput.value = "还没保存的第二版";
+  h.respond({
+    developerInstructions: "新指令",
+    defaultModel: null,
+    defaultReasoningEffort: null,
+    defaultPermissions: ":danger-full-access",
+  });
+  h.save("defaults");
+  await tick();
+
+  assert.equal(h.elements.developerInstructionsInput.value, "还没保存的第二版");
+  assert.equal(h.elements.appSettingsDialog.open, true);
 });
 
 test("an unavailable saved model and effort stay visible", async () => {
@@ -257,7 +295,7 @@ test("changing models resets an unsupported effort to that model's default", asy
   assert.equal(h.elements.defaultReasoningEffortSelect.children[0].textContent, "跟随 Codex 默认");
 });
 
-test("a failed model list does not clear saved defaults when other settings are saved", async () => {
+test("a failed model list does not make an instructions save submit defaults", async () => {
   const h = harness();
   const settings = {
     developerInstructions: "旧指令",
@@ -267,15 +305,12 @@ test("a failed model list does not clear saved defaults when other settings are 
   await h.open({ models: new Error("列表失败"), settings });
   h.elements.developerInstructionsInput.value = "新指令";
   h.respond({ ...settings, developerInstructions: "新指令" });
-  h.elements.appSettingsForm.listeners.submit({ preventDefault() {} });
+  h.save("instructions");
   await tick();
 
   assert.deepEqual(h.requests.at(-1), {
     type: "settings.update",
     developerInstructions: "新指令",
-    defaultModel: "gpt-saved",
-    defaultReasoningEffort: "high",
-    defaultPermissions: null,
   });
 });
 
@@ -305,14 +340,14 @@ test("default permissions list allowed profiles and save the chosen one", async 
     defaultReasoningEffort: null,
     defaultPermissions: ":danger-full-access",
   });
-  h.elements.appSettingsForm.listeners.submit({ preventDefault() {} });
+  h.save("defaults");
   await tick();
 
   assert.equal(h.requests.at(-1).defaultPermissions, ":danger-full-access");
   assert.equal(h.context.state.defaultPermissions, ":danger-full-access");
 });
 
-test("an unavailable saved permission stays visible and a failed list keeps it on save", async () => {
+test("an unavailable saved permission stays visible and a failed list is not submitted by another section", async () => {
   const unavailable = harness();
   await unavailable.open({
     permissions: PERMISSION_OPTIONS,
@@ -342,9 +377,12 @@ test("an unavailable saved permission stays visible and a failed list keeps it o
   assert.match(failed.elements.defaultPermissionsStatus.textContent, /权限列表失败/u);
   failed.elements.developerInstructionsInput.value = "新指令";
   failed.respond({ ...settings, developerInstructions: "新指令" });
-  failed.elements.appSettingsForm.listeners.submit({ preventDefault() {} });
+  failed.save("instructions");
   await tick();
-  assert.equal(failed.requests.at(-1).defaultPermissions, ":danger-full-access");
+  assert.deepEqual(failed.requests.at(-1), {
+    type: "settings.update",
+    developerInstructions: "新指令",
+  });
 });
 
 test("a failed save keeps the dialog and its backend draft", async () => {
@@ -352,12 +390,12 @@ test("a failed save keeps the dialog and its backend draft", async () => {
   await h.open();
   h.elements.developerInstructionsInput.value = "还要继续改";
   h.respond(new Error("写入失败。"));
-  h.elements.appSettingsForm.listeners.submit({ preventDefault() {} });
+  h.save("instructions");
   assert.equal(h.elements.developerInstructionsInput.disabled, true);
   await tick();
 
   assert.equal(h.elements.appSettingsDialog.open, true);
-  assert.equal(h.elements.appSettingsStatus.textContent, "写入失败。");
+  assert.equal(h.elements.developerInstructionsSaveStatus.textContent, "写入失败。");
   assert.equal(h.elements.developerInstructionsInput.value, "还要继续改");
   assert.equal(h.elements.developerInstructionsInput.disabled, false);
 });
