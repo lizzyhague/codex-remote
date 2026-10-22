@@ -1747,8 +1747,15 @@ button.icon-button svg {
   color: var(--text-muted);
 }
 
-select:focus,
-input:focus,
+/* Text-entry fields and selects use the same inset focus border as the composer shell.
+   Keep specificity low so controls with a deliberately different focus color can override it. */
+:where(input[type="text"], input[type="password"], input[type="search"], input[type="time"], textarea:not(.composer textarea), select):focus {
+  outline: 0;
+  border-color: var(--border-strong);
+  box-shadow: inset 0 0 0 0.5px var(--border-strong);
+}
+
+input:is([type="checkbox"], [type="radio"], [type="range"], [type="file"]):focus,
 button:focus-visible {
   outline: 2px solid var(--theme);
   outline-offset: 2px;
