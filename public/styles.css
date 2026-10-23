@@ -1676,8 +1676,8 @@ button.icon-button svg {
 }
 
 .composer-shell:focus-within {
-  border-color: var(--border-strong);
-  box-shadow: inset 0 0 0 0.5px var(--border-strong);
+  border-color: var(--theme);
+  box-shadow: inset 0 0 0 0.5px var(--theme);
 }
 
 .composer textarea {
@@ -1751,8 +1751,8 @@ button.icon-button svg {
    Keep specificity low so controls with a deliberately different focus color can override it. */
 :where(input[type="text"], input[type="password"], input[type="search"], input[type="time"], textarea:not(.composer textarea), select):focus {
   outline: 0;
-  border-color: var(--border-strong);
-  box-shadow: inset 0 0 0 0.5px var(--border-strong);
+  border-color: var(--theme);
+  box-shadow: inset 0 0 0 0.5px var(--theme);
 }
 
 input:is([type="checkbox"], [type="radio"], [type="range"], [type="file"]):focus,
