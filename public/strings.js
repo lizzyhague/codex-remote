@@ -314,6 +314,9 @@ window.codexRemoteStrings = {
     en: "Retrying the kept message failed: {message} The original pending record was not deleted.",
   },
 
+  "attachment.dropHere": { zh: "松开上传", en: "Drop to upload" },
+  "attachment.noFolders": { zh: "不支持文件夹。", en: "Folders are not supported." },
+  "attachment.noWebContent": { zh: "不支持链接或网页内容。", en: "Links and web content are not supported." },
   "attachment.untitled": { zh: "未命名文件", en: "Untitled file" },
   "attachment.limit": {
     zh: "一条消息最多附加 {count} 个文件。",

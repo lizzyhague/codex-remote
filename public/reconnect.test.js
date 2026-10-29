@@ -431,10 +431,13 @@ test("navigation and send controls stay disabled until restoration and uploads f
   };
   context.state.sessionView = "active";
   context.state.authenticated = true;
+  let dragClears = 0;
+  context.clearAttachmentDrag = () => { dragClears += 1; };
   vm.runInContext(section("function updateControls(", "function setNavigationBusy("), context);
   context.updateControls();
   assert.equal(context.elements.taskButton.disabled, true);
   assert.equal(sessionButton.disabled, true);
+  assert.equal(dragClears, 1);
   context.state.pendingAttachments.push({ status: "queued" });
   context.state.connectionReady = true;
   context.updateControls();

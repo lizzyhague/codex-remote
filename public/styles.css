@@ -1668,6 +1668,24 @@ button.icon-button svg {
   gap: 0.5rem;
 }
 
+.composer.file-drag-over .composer-shell {
+  border-color: var(--theme);
+  box-shadow: inset 0 0 0 2px var(--theme);
+}
+
+.composer.file-drag-over::after {
+  content: attr(data-drop-label);
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: var(--surface-sunken);
+  color: var(--text);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
 .composer-shell {
   min-width: 0;
   border: 1px solid var(--border);

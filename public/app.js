@@ -462,6 +462,96 @@ elements.attachmentInput.addEventListener("change", () => {
   void uploadFiles(files);
 });
 
+function canAddAttachments() {
+  return !elements.commandMenuButton.disabled;
+}
+
+function clearAttachmentDrag() {
+  elements.composer.classList.remove("file-drag-over");
+  elements.composer.removeAttribute("data-drop-label");
+}
+
+function isFileDrag(event) {
+  return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+}
+
+for (const name of ["dragenter", "dragover"]) {
+  elements.composer.addEventListener(name, (event) => {
+    if (!isFileDrag(event) || !canAddAttachments()) {
+      clearAttachmentDrag();
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    elements.composer.classList.add("file-drag-over");
+    elements.composer.setAttribute("data-drop-label", t("attachment.dropHere"));
+  });
+}
+elements.composer.addEventListener("dragleave", (event) => {
+  if (!elements.composer.contains(event.relatedTarget)) clearAttachmentDrag();
+});
+elements.composer.addEventListener("drop", (event) => {
+  event.preventDefault();
+  clearAttachmentDrag();
+  if (!canAddAttachments()) return;
+  const transfer = event.dataTransfer;
+  const files = [];
+  let folders = false;
+  let unsupported = false;
+  // Entry access is synchronous: browsers protect the drag data after this event.
+  if (transfer?.items?.length) {
+    for (const item of transfer.items) {
+      if (item.kind !== "file") {
+        unsupported = true;
+        continue;
+      }
+      if (item.webkitGetAsEntry?.()?.isDirectory) {
+        folders = true;
+        continue;
+      }
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
+  } else {
+    files.push(...(transfer?.files ?? []));
+    unsupported = files.length === 0;
+  }
+  const notices = [];
+  if (folders) notices.push(t("attachment.noFolders"));
+  if (unsupported && files.length === 0 && !folders) notices.push(t("attachment.noWebContent"));
+  void uploadFiles(files, notices);
+});
+
+// A drop anywhere else must never navigate away from the conversation.
+document.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  if (!canAddAttachments()) clearAttachmentDrag();
+});
+document.addEventListener("drop", (event) => {
+  event.preventDefault();
+  clearAttachmentDrag();
+});
+document.addEventListener("dragend", clearAttachmentDrag);
+document.addEventListener("dragleave", (event) => {
+  if (!event.relatedTarget) clearAttachmentDrag();
+});
+window.addEventListener("blur", clearAttachmentDrag);
+
+elements.messageInput.addEventListener("paste", (event) => {
+  const files = Array.from(event.clipboardData?.files ?? []);
+  if (!files.length || !canAddAttachments()) return;
+  event.preventDefault();
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  void uploadFiles(files.map((file, index) => {
+    if (!/^image\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(file.name) || !file.type.startsWith("image/")) return file;
+    const extension = file.name.split(".").pop().toLowerCase();
+    const suffix = files.length > 1 ? `-${index + 1}` : "";
+    return new File([file], `screenshot-${stamp}${suffix}.${extension}`, { type: file.type, lastModified: file.lastModified });
+  }));
+});
+
 elements.messageInput.addEventListener("input", () => {
   persistCurrentComposerDraft();
   resizeComposer();
@@ -1755,17 +1845,16 @@ async function sendMessage() {
   }
 }
 
-async function uploadFiles(files) {
+async function uploadFiles(files, notices = []) {
   // The connection may still be restoring when the system file picker returns; retain the files first and decide when to upload afterward.
-  if (!state.sessionId || !state.projectId || files.length === 0) return;
-  const available = MAX_MESSAGE_ATTACHMENTS - state.pendingAttachments.length;
-  if (available <= 0) {
-    showNotice(t("attachment.limit", { count: MAX_MESSAGE_ATTACHMENTS }), TEMPORARY_WARNING);
-    return;
+  if (!state.sessionId || !state.projectId) return;
+  const available = Math.max(0, MAX_MESSAGE_ATTACHMENTS - state.pendingAttachments.length);
+  if (files.length && available === 0) {
+    notices.push(t("attachment.limit", { count: MAX_MESSAGE_ATTACHMENTS }));
+  } else if (files.length > available) {
+    notices.push(t("attachment.limitPartial", { count: MAX_MESSAGE_ATTACHMENTS, available }));
   }
-  if (files.length > available) {
-    showNotice(t("attachment.limitPartial", { count: MAX_MESSAGE_ATTACHMENTS, available }), TEMPORARY_WARNING);
-  }
+  if (notices.length) showNotice(notices.join(" "), TEMPORARY_WARNING);
   await Promise.all(files.slice(0, available).map((file) => uploadFile(file)));
 }
 
@@ -3472,6 +3561,7 @@ function updateControls() {
   // Model and permissions may change while a response is in progress; the backend records them for the next turn.
   const pickersDisabled = !connected || !hasSession || state.commandBusy || navigationBusy;
   elements.commandMenuButton.disabled = controlsDisabled;
+  if (controlsDisabled) clearAttachmentDrag();
   elements.modelPickerButton.disabled = pickersDisabled;
   elements.permissionPickerButton.disabled = pickersDisabled;
   if (pickersDisabled) closeComposerPicker();
