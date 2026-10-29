@@ -22,7 +22,8 @@ Server directly nor submit an arbitrary working directory.
 - Keep new messages, approvals and user-input requests of the current session in sync across phone and computer;
 - Messages are persisted and confirmed by the backend, keep running after the page closes, and use
   `clientMessageId` to avoid duplicates when a send is retried after a disconnect;
-- Pick several screenshots or ordinary files on a phone or computer; they are uploaded to the host's shared
+- Pick several screenshots or ordinary files on a phone or computer, drag files onto the composer,
+  or paste files and screenshots into the message box; they are uploaded to the host's shared
   upload service first and sent along once the message is confirmed. The backend gives Codex the real
   attachment paths, and Codex reads them with its available tools as the user asks; the page never shows
   storage paths;
